@@ -4,7 +4,7 @@ People and household tools for the MCP server.
 from __future__ import annotations
 
 from app.mcp.dependencies import get_db
-from app.models import Account, Person, Property, Vehicle
+from app.models import Account, Person, Property, PropertyLiabilityLink, Vehicle
 from app.services.net_worth_service import calculate_net_worth, classify_account_amount
 from app.services.ownership_service import attribute_amount, get_owners
 from app.mcp.tools.investments import INVESTMENT_ACCOUNT_TYPES
@@ -72,11 +72,21 @@ def get_household_summary(
             .filter(Vehicle.user_id == user_id, Vehicle.is_active.is_(True))
             .all()
         )
+        property_liability_links = (
+            db.query(PropertyLiabilityLink)
+            .filter(PropertyLiabilityLink.user_id == user_id)
+            .all()
+        )
 
         # Cache owners per entity to avoid N*M queries.
         account_owners = {str(a.id): get_owners(db, "account", a.id) for a in accounts}
         property_owners = {str(p.id): get_owners(db, "property", p.id) for p in properties}
         vehicle_owners = {str(v.id): get_owners(db, "vehicle", v.id) for v in vehicles}
+        account_by_id = {str(a.id): a for a in accounts}
+        linked_account_ids = {str(link.account_id) for link in property_liability_links}
+        liability_links_by_property: dict[str, list[PropertyLiabilityLink]] = {}
+        for link in property_liability_links:
+            liability_links_by_property.setdefault(str(link.property_id), []).append(link)
 
         out: list[dict] = []
         for person in people:
@@ -88,6 +98,8 @@ def get_household_summary(
             vehicles_total = 0.0
 
             for a in accounts:
+                if str(a.id) in linked_account_ids:
+                    continue
                 owners = account_owners[str(a.id)]
                 if pid not in {o["person_id"] for o in owners}:
                     continue
@@ -106,7 +118,23 @@ def get_household_summary(
                 owners = property_owners[str(pr.id)]
                 if pid not in {o["person_id"] for o in owners}:
                     continue
-                properties_total += attribute_amount(float(pr.current_value or 0), owners, pid)
+                attributed_value = attribute_amount(float(pr.current_value or 0), owners, pid)
+                attributed_linked_debt = 0.0
+                for link in liability_links_by_property.get(str(pr.id), []):
+                    account = account_by_id.get(str(link.account_id))
+                    if not account:
+                        continue
+                    debt_owners = account_owners.get(str(account.id), [])
+                    if pid not in {o["person_id"] for o in debt_owners}:
+                        continue
+                    debt_balance = abs(float(account.functional_balance or account.starting_balance or 0))
+                    attributed_linked_debt += attribute_amount(debt_balance, debt_owners, pid)
+
+                property_equity = attributed_value - attributed_linked_debt
+                if property_equity >= 0:
+                    properties_total += property_equity
+                else:
+                    total_liabilities += abs(property_equity)
 
             for v in vehicles:
                 owners = vehicle_owners[str(v.id)]

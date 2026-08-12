@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, accountBalances, transactionLinks } from "@/lib/db/schema";
+import { accounts, transactions, categories, users, properties, vehicles, accountBalances, transactionLinks, propertyLiabilityLinks } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getCachedUserAccounts } from "@/lib/data/cached";
 import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
@@ -19,6 +19,10 @@ import {
   type NetWorthEntry,
   type NetWorthOverview,
 } from "@/lib/net-worth/calculation";
+import {
+  calculatePropertyEquity,
+  getLinkedLiabilityAccountIds,
+} from "@/lib/properties/equity";
 
 async function getUserCurrency(userId: string): Promise<string> {
   const result = await db
@@ -745,7 +749,7 @@ export async function getAssetsOverview(): Promise<NetWorthOverview> {
     return emptyNetWorthOverview();
   }
 
-  const [userAccounts, userProperties, userVehicles, currency, portfolio] = await Promise.all([
+  const [userAccounts, userProperties, userVehicles, userPropertyLiabilityLinks, currency, portfolio] = await Promise.all([
     db
       .select({
         id: accounts.id,
@@ -753,6 +757,7 @@ export async function getAssetsOverview(): Promise<NetWorthOverview> {
         accountType: accounts.accountType,
         institution: accounts.institution,
         functionalBalance: accounts.functionalBalance,
+        startingBalance: accounts.startingBalance,
         currency: accounts.currency,
       })
       .from(accounts)
@@ -781,29 +786,44 @@ export async function getAssetsOverview(): Promise<NetWorthOverview> {
       })
       .from(vehicles)
       .where(and(eq(vehicles.userId, session.user.id), eq(vehicles.isActive, true))),
+    db
+      .select({
+        propertyId: propertyLiabilityLinks.propertyId,
+        accountId: propertyLiabilityLinks.accountId,
+      })
+      .from(propertyLiabilityLinks)
+      .where(eq(propertyLiabilityLinks.userId, session.user.id)),
     getUserCurrency(session.user.id),
     getPortfolio().catch(() => null),
   ]);
 
+  const linkedLiabilityAccountIds = getLinkedLiabilityAccountIds(userPropertyLiabilityLinks);
   const entries: NetWorthEntry[] = [
-    ...userAccounts.map((account) => ({
-      id: account.id,
-      name: account.name,
-      institution: account.institution,
-      value: account.functionalBalance,
-      currency: account.currency || currency,
-      source: "account" as const,
-      accountType: account.accountType,
-    })),
+    ...userAccounts
+      .filter((account) => !linkedLiabilityAccountIds.has(account.id))
+      .map((account) => ({
+        id: account.id,
+        name: account.name,
+        institution: account.institution,
+        value: account.functionalBalance,
+        currency: account.currency || currency,
+        source: "account" as const,
+        accountType: account.accountType,
+      })),
     ...userProperties.map((property) => {
       const addressParts = property.address?.split(",").map((part) => part.trim()) || [];
       const location = addressParts.length > 1 ? addressParts.slice(-2).join(", ") : property.address;
+      const equity = calculatePropertyEquity(
+        property,
+        userAccounts,
+        userPropertyLiabilityLinks,
+      );
 
       return {
         id: property.id,
         name: property.name,
         institution: location || null,
-        value: property.currentValue,
+        value: equity.equity,
         currency: property.currency || currency,
         source: "property" as const,
       };

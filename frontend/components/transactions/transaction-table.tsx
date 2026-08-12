@@ -14,6 +14,7 @@ import type {
   TransactionWithRelations,
 } from "@/lib/actions/transactions";
 import type { CategoryDisplay, AccountForFilter } from "@/types";
+import type { Property } from "@/lib/db/schema";
 import { TransactionSheet } from "./transaction-sheet";
 import { transactionColumns } from "./columns";
 import { TransactionFilters } from "./transaction-filters";
@@ -35,6 +36,7 @@ interface TransactionTableProps {
   queryState: TransactionsQueryState;
   categories?: CategoryDisplay[];
   accounts?: AccountForFilter[];
+  properties?: Property[];
   onUpdateTransaction?: (id: string, updates: Partial<TransactionWithRelations>) => void;
   onDeleteTransaction?: (id: string) => void;
   onBulkUpdate?: (transactionIds: string[], categoryId: string | null) => void;
@@ -98,6 +100,7 @@ export function TransactionTable({
   queryState,
   categories = [],
   accounts = [],
+  properties = [],
   onUpdateTransaction,
   onDeleteTransaction,
   onBulkUpdate,
@@ -363,6 +366,7 @@ export function TransactionTable({
         onUpdateTransaction={handleUpdateTransaction}
         onDeleteTransaction={onDeleteTransaction}
         categories={categories}
+        properties={properties}
         canDelete={canDelete}
       />
     </>

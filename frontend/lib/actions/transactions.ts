@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { eq, and, desc, inArray, notInArray, sql, gte, lte, gt, asc, ne, or, ilike, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { transactions, accounts, categories, accountBalances, csvImports } from "@/lib/db/schema";
+import { transactions, accounts, categories, accountBalances, properties } from "@/lib/db/schema";
 import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
@@ -316,6 +316,64 @@ export async function updateTransactionCategory(
   }
 }
 
+export async function updateTransactionProperty(
+  transactionId: string,
+  propertyId: string | null
+): Promise<{ success: boolean; error?: string }> {
+  const userId = await requireAuth();
+
+  if (!userId) {
+    return { success: false, error: "Not authenticated" };
+  }
+
+  try {
+    const transaction = await db.query.transactions.findFirst({
+      where: and(
+        eq(transactions.id, transactionId),
+        eq(transactions.userId, userId)
+      ),
+    });
+
+    if (!transaction) {
+      return { success: false, error: "Transaction not found" };
+    }
+
+    if (propertyId) {
+      const property = await db.query.properties.findFirst({
+        where: and(
+          eq(properties.id, propertyId),
+          eq(properties.userId, userId),
+          eq(properties.isActive, true)
+        ),
+      });
+
+      if (!property) {
+        return { success: false, error: "Property not found" };
+      }
+    }
+
+    await db
+      .update(transactions)
+      .set({
+        propertyId,
+        updatedAt: new Date(),
+      })
+      .where(eq(transactions.id, transactionId));
+
+    revalidatePath("/transactions");
+    revalidatePath("/");
+    revalidatePath("/assets");
+    if (propertyId) {
+      revalidatePath(`/assets/properties/${propertyId}`);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to update transaction property:", error);
+    return { success: false, error: "Failed to update transaction property" };
+  }
+}
+
 import { getUserAccounts as _dashboardGetUserAccounts } from "@/lib/actions/dashboard";
 
 export async function getUserAccounts() {
@@ -358,6 +416,11 @@ export interface TransactionWithRelations {
     name: string;
     color: string | null;
     icon: string | null;
+  } | null;
+  propertyId: string | null;
+  property: {
+    id: string;
+    name: string;
   } | null;
   recurringTransactionId: string | null;
   recurringTransaction: {
@@ -446,6 +509,7 @@ interface TransactionRowWithRelations {
   currency: string | null;
   categoryId: string | null;
   categorySystemId: string | null;
+  propertyId: string | null;
   recurringTransactionId: string | null;
   bookedAt: Date;
   pending: boolean | null;
@@ -474,6 +538,10 @@ interface TransactionRowWithRelations {
     name: string;
     color: string | null;
     icon: string | null;
+  } | null;
+  property: {
+    id: string;
+    name: string;
   } | null;
   recurringTransaction: {
     id: string;
@@ -547,6 +615,13 @@ function mapTransactionRowsForUi(
               name: tx.categorySystem.name,
               color: tx.categorySystem.color,
               icon: tx.categorySystem.icon,
+            }
+          : null,
+        propertyId: tx.propertyId,
+        property: tx.property
+          ? {
+              id: tx.property.id,
+              name: tx.property.name,
             }
           : null,
         recurringTransactionId: tx.recurringTransactionId,
@@ -828,6 +903,12 @@ export async function getTransactionsPage(
         },
         category: true,
         categorySystem: true,
+        property: {
+          columns: {
+            id: true,
+            name: true,
+          },
+        },
         recurringTransaction: true,
         transactionLink: true,
         internalTransfer: {
@@ -910,6 +991,12 @@ export async function getTransactions(): Promise<TransactionWithRelations[]> {
         },
         category: true,
         categorySystem: true,
+        property: {
+          columns: {
+            id: true,
+            name: true,
+          },
+        },
         recurringTransaction: true,
         transactionLink: true,
         internalTransfer: {
@@ -988,6 +1075,12 @@ export async function getTransactionsForAccount(
         },
         category: true,
         categorySystem: true,
+        property: {
+          columns: {
+            id: true,
+            name: true,
+          },
+        },
         recurringTransaction: true,
         transactionLink: true,
         internalTransfer: {

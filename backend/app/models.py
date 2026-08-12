@@ -78,6 +78,7 @@ class Account(Base):
     csv_import_profiles = relationship("CsvImportProfile", back_populates="account", cascade="all, delete-orphan")
     balances = relationship("AccountBalance", back_populates="account")
     recurring_transactions = relationship("RecurringTransaction", back_populates="account")
+    property_liability_links = relationship("PropertyLiabilityLink", back_populates="account")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="account")
     planned_expenses = relationship("PlannedExpense", back_populates="account")
     cashflow_overrides = relationship("CashflowOverride", back_populates="account")
@@ -357,6 +358,7 @@ class Transaction(Base):
     )
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)  # User-overridden category
     category_system_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)  # AI-assigned category
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)
     booked_at = Column(DateTime, nullable=False, index=True)
     pending = Column(Boolean, default=False)
     categorization_instructions = Column(Text)  # User instructions for AI categorization
@@ -372,6 +374,7 @@ class Transaction(Base):
     account = relationship("Account", back_populates="transactions")
     category = relationship("Category", foreign_keys=[category_id], back_populates="transactions")
     category_system = relationship("Category", foreign_keys=[category_system_id], back_populates="system_transactions")
+    property = relationship("Property", back_populates="transactions")
     recurring_transaction = relationship("RecurringTransaction", back_populates="linked_transactions")
     transaction_link = relationship("TransactionLink", back_populates="transaction", uselist=False)
     planned_expense_links = relationship("PlannedExpenseTransactionLink", back_populates="transaction")
@@ -687,16 +690,65 @@ class Property(Base):
     address = Column(Text, nullable=True)
     current_value = Column(Numeric(15, 2), default=Decimal("0"))
     currency = Column(String(3), default="EUR")
+    is_rental = Column(Boolean, default=False, nullable=False)
+    valuation_date = Column(Date, nullable=True)
+    valuation_source = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     user = relationship("User", back_populates="properties")
+    linked_liabilities = relationship("PropertyLiabilityLink", back_populates="property")
+    valuations = relationship("PropertyValuation", back_populates="property")
+    transactions = relationship("Transaction", back_populates="property")
 
     # Indexes and constraints
     __table_args__ = (
         Index("idx_properties_user", "user_id"),
+    )
+
+
+class PropertyLiabilityLink(Base):
+    """Link a property to liability accounts secured against it."""
+    __tablename__ = "property_liability_links"
+
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), primary_key=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="property_liability_links")
+    property = relationship("Property", back_populates="linked_liabilities")
+    account = relationship("Account", back_populates="property_liability_links")
+
+    __table_args__ = (
+        Index("idx_property_liability_links_user", "user_id"),
+        Index("idx_property_liability_links_account", "account_id"),
+    )
+
+
+class PropertyValuation(Base):
+    """Historical valuation snapshots for a property."""
+    __tablename__ = "property_valuations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    valuation_date = Column(Date, nullable=False)
+    value = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), default="EUR", nullable=False)
+    source = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="property_valuations")
+    property = relationship("Property", back_populates="valuations")
+
+    __table_args__ = (
+        Index("idx_property_valuations_property_date", "property_id", "valuation_date"),
+        Index("idx_property_valuations_user", "user_id"),
     )
 
 
@@ -925,6 +977,8 @@ class User(Base):
     csv_imports = relationship("CsvImport", back_populates="user", cascade="all, delete-orphan")
     csv_import_profiles = relationship("CsvImportProfile", back_populates="user", cascade="all, delete-orphan")
     properties = relationship("Property", back_populates="user", cascade="all, delete-orphan")
+    property_liability_links = relationship("PropertyLiabilityLink", back_populates="user", cascade="all, delete-orphan")
+    property_valuations = relationship("PropertyValuation", back_populates="user", cascade="all, delete-orphan")
     vehicles = relationship("Vehicle", back_populates="user", cascade="all, delete-orphan")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")

@@ -190,6 +190,13 @@
 			"when": 1786838400000,
 			"tag": "0030_liability_account_details",
 			"breakpoints": true
+		},
+		{
+			"idx": 29,
+			"version": "7",
+			"when": 1786924800000,
+			"tag": "0031_property_equity_and_rental_tracking",
+			"breakpoints": true
 		}
 	]
 }

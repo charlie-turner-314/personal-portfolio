@@ -21,6 +21,7 @@ import type {
 } from "@/lib/actions/transactions";
 import type { CategoryDisplay, AccountForFilter } from "@/types";
 import type { TransactionsQueryState } from "@/lib/transactions/query-state";
+import type { Property } from "@/lib/db/schema";
 
 interface TransactionsClientProps {
   initialTransactions: TransactionWithRelations[];
@@ -29,6 +30,7 @@ interface TransactionsClientProps {
   initialQueryState: TransactionsQueryState;
   categories: CategoryDisplay[];
   accounts: AccountForFilter[];
+  properties: Property[];
   canImportCsv: boolean;
   canDelete?: boolean;
 }
@@ -40,6 +42,7 @@ export function TransactionsClient({
   initialQueryState,
   categories,
   accounts,
+  properties,
   canImportCsv,
   canDelete = true,
 }: TransactionsClientProps) {
@@ -292,6 +295,7 @@ export function TransactionsClient({
           queryState={initialQueryState}
           categories={categories}
           accounts={accounts}
+          properties={properties}
           onUpdateTransaction={handleUpdateTransaction}
           onDeleteTransaction={handleDeleteTransaction}
           onBulkUpdate={handleBulkUpdate}

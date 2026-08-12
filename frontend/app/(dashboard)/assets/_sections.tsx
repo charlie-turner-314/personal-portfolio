@@ -1,5 +1,9 @@
 import { getAccounts } from "@/lib/actions/accounts";
-import { getProperties } from "@/lib/actions/properties";
+import {
+  getProperties,
+  getPropertyLiabilityLinks,
+  getPropertyValuations,
+} from "@/lib/actions/properties";
 import { getVehicles } from "@/lib/actions/vehicles";
 import { getPeople, getOwnersForEntities } from "@/lib/people";
 import { avatarUrl } from "@/lib/people/avatars";
@@ -34,6 +38,11 @@ export async function AssetsSection() {
       getOwnersForEntities("property", properties.map((p) => p.id)),
       getOwnersForEntities("vehicle", vehicles.map((v) => v.id)),
     ]);
+  const propertyIds = properties.map((property) => property.id);
+  const [propertyLiabilityLinks, propertyValuations] = await Promise.all([
+    getPropertyLiabilityLinks(propertyIds),
+    getPropertyValuations(propertyIds),
+  ]);
 
   const people = peopleRows.map((p) => ({
     id: p.id,
@@ -52,6 +61,8 @@ export async function AssetsSection() {
       initialAccountOwnerIds={ownerIdsByEntity(accountOwnersMap)}
       initialPropertyOwnerIds={ownerIdsByEntity(propertyOwnersMap)}
       initialVehicleOwnerIds={ownerIdsByEntity(vehicleOwnersMap)}
+      initialPropertyLiabilityLinks={propertyLiabilityLinks}
+      initialPropertyValuations={propertyValuations}
     />
   );
 }

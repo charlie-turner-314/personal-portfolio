@@ -115,6 +115,7 @@ interface CategorySpendingTransactionRowWithRelations {
   currency: string | null;
   categoryId: string | null;
   categorySystemId: string | null;
+  propertyId: string | null;
   recurringTransactionId: string | null;
   internalTransferId: string | null;
   bookedAt: Date;
@@ -144,6 +145,10 @@ interface CategorySpendingTransactionRowWithRelations {
     name: string;
     color: string | null;
     icon: string | null;
+  } | null;
+  property: {
+    id: string;
+    name: string;
   } | null;
   recurringTransaction: {
     id: string;
@@ -340,6 +345,13 @@ function mapCategorySpendingTransactionRowsForUi(
               name: tx.categorySystem.name,
               color: tx.categorySystem.color,
               icon: tx.categorySystem.icon,
+            }
+          : null,
+        propertyId: tx.propertyId,
+        property: tx.property
+          ? {
+              id: tx.property.id,
+              name: tx.property.name,
             }
           : null,
         recurringTransactionId: tx.recurringTransactionId,
@@ -645,6 +657,12 @@ export async function getCategorySpendingTransactionsPage(
         },
         category: true,
         categorySystem: true,
+        property: {
+          columns: {
+            id: true,
+            name: true,
+          },
+        },
         recurringTransaction: true,
         transactionLink: true,
         internalTransfer: {

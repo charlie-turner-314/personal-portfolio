@@ -574,6 +574,7 @@ export const transactions = pgTable(
     internalTransferId: uuid("internal_transfer_id"), // FK to internal_transfers.id (enforced at DB level in migration 0017)
     categoryId: uuid("category_id").references(() => categories.id), // User-overridden category
     categorySystemId: uuid("category_system_id").references(() => categories.id), // AI-assigned category (never updated by user)
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
     bookedAt: timestamp("booked_at").notNull(),
     pending: boolean("pending").default(false),
     categorizationInstructions: text("categorization_instructions"), // User instructions for AI categorization
@@ -590,6 +591,7 @@ export const transactions = pgTable(
     index("idx_transactions_booked_at").on(table.bookedAt),
     index("idx_transactions_category").on(table.categoryId),
     index("idx_transactions_category_system").on(table.categorySystemId),
+    index("idx_transactions_property").on(table.propertyId),
     index("idx_transactions_recurring").on(table.recurringTransactionId),
     // Composite indexes for common query patterns
     index("idx_transactions_user_category_system").on(table.userId, table.categorySystemId),
@@ -686,11 +688,59 @@ export const properties = pgTable(
     address: text("address"),
     currentValue: decimal("current_value", { precision: 15, scale: 2 }).default("0"),
     currency: char("currency", { length: 3 }).default("EUR"),
+    isRental: boolean("is_rental").default(false).notNull(),
+    valuationDate: date("valuation_date"),
+    valuationSource: varchar("valuation_source", { length: 100 }),
+    notes: text("notes"),
     isActive: boolean("is_active").default(true),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },
   (table) => [index("idx_properties_user").on(table.userId)]
+);
+
+export const propertyLiabilityLinks = pgTable(
+  "property_liability_links",
+  {
+    propertyId: uuid("property_id")
+      .references(() => properties.id, { onDelete: "cascade" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.propertyId, t.accountId] }),
+    index("idx_property_liability_links_user").on(t.userId),
+    index("idx_property_liability_links_account").on(t.accountId),
+  ]
+);
+
+export const propertyValuations = pgTable(
+  "property_valuations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    propertyId: uuid("property_id")
+      .references(() => properties.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    valuationDate: date("valuation_date").notNull(),
+    value: decimal("value", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).default("EUR").notNull(),
+    source: varchar("source", { length: 100 }),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_property_valuations_property_date").on(t.propertyId, t.valuationDate),
+    index("idx_property_valuations_user").on(t.userId),
+  ]
 );
 
 export const vehicles = pgTable(
@@ -1008,6 +1058,8 @@ export const usersRelations = relations(users, ({ many }) => ({
   csvImports: many(csvImports),
   csvImportProfiles: many(csvImportProfiles),
   properties: many(properties),
+  propertyLiabilityLinks: many(propertyLiabilityLinks),
+  propertyValuations: many(propertyValuations),
   vehicles: many(vehicles),
   subscriptionSuggestions: many(subscriptionSuggestions),
   apiKeys: many(apiKeys),
@@ -1058,6 +1110,7 @@ export const accountsRelations = relations(accounts, ({ one, many }) => ({
   plannedExpenses: many(plannedExpenses),
   cashflowOverrides: many(cashflowOverrides),
   owners: many(accountOwners),
+  propertyLiabilityLinks: many(propertyLiabilityLinks),
 }));
 
 export const bankConnectionsRelations = relations(bankConnections, ({ one, many }) => ({
@@ -1186,6 +1239,10 @@ export const transactionsRelations = relations(transactions, ({ one, many }) => 
     references: [categories.id],
     relationName: "transactionCategorySystem",
   }),
+  property: one(properties, {
+    fields: [transactions.propertyId],
+    references: [properties.id],
+  }),
   recurringTransaction: one(recurringTransactions, {
     fields: [transactions.recurringTransactionId],
     references: [recurringTransactions.id],
@@ -1299,6 +1356,35 @@ export const propertiesRelations = relations(properties, ({ one, many }) => ({
     references: [users.id],
   }),
   owners: many(propertyOwners),
+  linkedLiabilities: many(propertyLiabilityLinks),
+  valuations: many(propertyValuations),
+  transactions: many(transactions),
+}));
+
+export const propertyLiabilityLinksRelations = relations(propertyLiabilityLinks, ({ one }) => ({
+  user: one(users, {
+    fields: [propertyLiabilityLinks.userId],
+    references: [users.id],
+  }),
+  property: one(properties, {
+    fields: [propertyLiabilityLinks.propertyId],
+    references: [properties.id],
+  }),
+  account: one(accounts, {
+    fields: [propertyLiabilityLinks.accountId],
+    references: [accounts.id],
+  }),
+}));
+
+export const propertyValuationsRelations = relations(propertyValuations, ({ one }) => ({
+  user: one(users, {
+    fields: [propertyValuations.userId],
+    references: [users.id],
+  }),
+  property: one(properties, {
+    fields: [propertyValuations.propertyId],
+    references: [properties.id],
+  }),
 }));
 
 export const vehiclesRelations = relations(vehicles, ({ one, many }) => ({
@@ -1475,6 +1561,10 @@ export type NewCsvImportProfile = typeof csvImportProfiles.$inferInsert;
 
 export type Property = typeof properties.$inferSelect;
 export type NewProperty = typeof properties.$inferInsert;
+export type PropertyLiabilityLink = typeof propertyLiabilityLinks.$inferSelect;
+export type NewPropertyLiabilityLink = typeof propertyLiabilityLinks.$inferInsert;
+export type PropertyValuation = typeof propertyValuations.$inferSelect;
+export type NewPropertyValuation = typeof propertyValuations.$inferInsert;
 
 export type Vehicle = typeof vehicles.$inferSelect;
 export type NewVehicle = typeof vehicles.$inferInsert;

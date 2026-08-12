@@ -12,7 +12,15 @@ from decimal import Decimal
 
 import pytest
 
-from app.models import Account, AccountOwner, Person, User
+from app.models import (
+    Account,
+    AccountOwner,
+    Person,
+    Property,
+    PropertyLiabilityLink,
+    PropertyOwner,
+    User,
+)
 from app.mcp.tools.accounts import list_accounts
 from app.mcp.tools.analytics import get_financial_summary
 from app.mcp.tools.people import get_household_summary, list_people
@@ -242,6 +250,45 @@ def test_household_summary_filter_by_person_ids(seeded_household):
     assert len(summary["people"]) == 1
     assert summary["people"][0]["person_id"] == self_id
     assert summary["people"][0]["total_liabilities"] == pytest.approx(1650.0)
+
+
+def test_household_summary_uses_property_equity_for_linked_mortgage(seeded_household, db_session):
+    user_id, self_id, partner_id, seeded_accounts = seeded_household
+    self_person = db_session.query(Person).filter(Person.id == self_id).one()
+    partner_person = db_session.query(Person).filter(Person.id == partner_id).one()
+    joint_loan = db_session.query(Account).filter(Account.id == seeded_accounts["joint_loan"]).one()
+
+    property_row = Property(
+        user_id=user_id,
+        name="Joint Home",
+        property_type="residential",
+        current_value=Decimal("900"),
+        currency="EUR",
+        is_active=True,
+    )
+    db_session.add(property_row)
+    db_session.flush()
+    db_session.add(PropertyOwner(property_id=property_row.id, person_id=self_person.id, share=None))
+    db_session.add(PropertyOwner(property_id=property_row.id, person_id=partner_person.id, share=None))
+    db_session.add(PropertyLiabilityLink(
+        property_id=property_row.id,
+        account_id=joint_loan.id,
+        user_id=user_id,
+    ))
+    db_session.commit()
+
+    summary = get_household_summary(user_id=user_id)
+    by_person = {p["person_id"]: p for p in summary["people"]}
+
+    # Property value is split 50/50, but the linked joint loan keeps its 25/75
+    # debt ownership and is no longer reported as a standalone liability.
+    assert by_person[self_id]["properties"] == pytest.approx(350.0)
+    assert by_person[self_id]["total_liabilities"] == pytest.approx(1550.0)
+    assert by_person[self_id]["net_worth"] == pytest.approx(-600.0)
+
+    assert by_person[partner_id]["properties"] == pytest.approx(150.0)
+    assert by_person[partner_id]["total_liabilities"] == pytest.approx(0.0)
+    assert by_person[partner_id]["net_worth"] == pytest.approx(850.0)
 
 
 def test_financial_summary_reports_account_net_worth_for_person(seeded_household):

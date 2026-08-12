@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useRegisterCommandPaletteCallbacks } from "@/components/command-palette-context";
@@ -25,8 +25,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -75,7 +78,17 @@ import { PROPERTY_TYPES, VEHICLE_TYPES } from "@/components/assets/types";
 import { AccountLogo } from "@/components/ui/account-logo";
 import { OwnersField, type OwnerValue } from "@/components/household/owners-field";
 import { OwnerBadges } from "@/components/household/owner-badges";
-import type { Account, Property, Vehicle } from "@/lib/db/schema";
+import {
+  calculatePropertyEquity,
+  getLiabilityMagnitude,
+} from "@/lib/properties/equity";
+import type {
+  Account,
+  Property,
+  PropertyLiabilityLink,
+  PropertyValuation,
+  Vehicle,
+} from "@/lib/db/schema";
 
 type Person = { id: string; name: string; kind: string; color?: string | null; avatarUrl?: string | null };
 
@@ -104,6 +117,8 @@ interface AssetManagementProps {
   initialAccountOwnerIds?: Record<string, string[]>;
   initialPropertyOwnerIds?: Record<string, string[]>;
   initialVehicleOwnerIds?: Record<string, string[]>;
+  initialPropertyLiabilityLinks?: PropertyLiabilityLink[];
+  initialPropertyValuations?: PropertyValuation[];
 }
 
 type AccountWithLogo = Account & {
@@ -122,6 +137,8 @@ export function AssetManagement({
   initialAccountOwnerIds,
   initialPropertyOwnerIds,
   initialVehicleOwnerIds,
+  initialPropertyLiabilityLinks = [],
+  initialPropertyValuations = [],
 }: AssetManagementProps) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
@@ -174,6 +191,11 @@ export function AssetManagement({
   const [editPropertyAddress, setEditPropertyAddress] = useState("");
   const [editPropertyValue, setEditPropertyValue] = useState("");
   const [editPropertyCurrency, setEditPropertyCurrency] = useState("");
+  const [editPropertyIsRental, setEditPropertyIsRental] = useState(false);
+  const [editPropertyValuationDate, setEditPropertyValuationDate] = useState("");
+  const [editPropertyValuationSource, setEditPropertyValuationSource] = useState("");
+  const [editPropertyNotes, setEditPropertyNotes] = useState("");
+  const [editPropertyLinkedLiabilityIds, setEditPropertyLinkedLiabilityIds] = useState<string[]>([]);
 
   // Vehicle edit form state
   const [editVehicleName, setEditVehicleName] = useState("");
@@ -207,6 +229,25 @@ export function AssetManagement({
   const handleRefresh = () => {
     router.refresh();
   };
+
+  const liabilityAccounts = useMemo(
+    () => initialAccounts.filter((account) => isLiabilityAccountType(account.accountType)),
+    [initialAccounts]
+  );
+  const propertyLinksByPropertyId = useMemo(() => {
+    const map: Record<string, PropertyLiabilityLink[]> = {};
+    for (const link of initialPropertyLiabilityLinks) {
+      map[link.propertyId] = [...(map[link.propertyId] || []), link];
+    }
+    return map;
+  }, [initialPropertyLiabilityLinks]);
+  const propertyValuationsByPropertyId = useMemo(() => {
+    const map: Record<string, PropertyValuation[]> = {};
+    for (const valuation of initialPropertyValuations) {
+      map[valuation.propertyId] = [...(map[valuation.propertyId] || []), valuation];
+    }
+    return map;
+  }, [initialPropertyValuations]);
 
   useEffect(() => {
     hasLogoApiKey().then(setLogoApiEnabled);
@@ -404,6 +445,13 @@ export function AssetManagement({
     setEditPropertyAddress(property.address || "");
     setEditPropertyValue(property.currentValue || "0");
     setEditPropertyCurrency(property.currency || "EUR");
+    setEditPropertyIsRental(property.isRental || false);
+    setEditPropertyValuationDate(property.valuationDate || "");
+    setEditPropertyValuationSource(property.valuationSource || "");
+    setEditPropertyNotes(property.notes || "");
+    setEditPropertyLinkedLiabilityIds(
+      (propertyLinksByPropertyId[property.id] || []).map((link) => link.accountId)
+    );
     // Fetch current owners for this property
     fetch(`/api/owners/property/${property.id}`)
       .then((r) => r.json())
@@ -427,6 +475,11 @@ export function AssetManagement({
         address: editPropertyAddress.trim() || undefined,
         currentValue: isNaN(value) ? 0 : value,
         currency: editPropertyCurrency,
+        isRental: editPropertyIsRental,
+        valuationDate: editPropertyValuationDate || null,
+        valuationSource: editPropertyValuationSource.trim() || null,
+        notes: editPropertyNotes.trim() || null,
+        linkedLiabilityAccountIds: editPropertyLinkedLiabilityIds,
       });
 
       if (result.success) {
@@ -589,6 +642,7 @@ export function AssetManagement({
           onAssetAdded={handleRefresh}
           open={isAddAssetDialogOpen}
           onOpenChange={setIsAddAssetDialogOpen}
+          liabilityAccounts={liabilityAccounts}
         />
       </div>
 
@@ -685,8 +739,12 @@ export function AssetManagement({
             </div>
           ) : (
             <div className="divide-y">
-              {initialProperties.map((property) => (
-                <div key={property.id} className="flex items-center justify-between py-4 first:pt-0 last:pb-0">
+              {initialProperties.map((property) => {
+                const links = propertyLinksByPropertyId[property.id] || [];
+                const equity = calculatePropertyEquity(property, initialAccounts, links);
+                const valuations = propertyValuationsByPropertyId[property.id] || [];
+                return (
+                <div key={property.id} className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded bg-muted">
                       <RiHome4Line className="h-5 w-5 text-muted-foreground" />
@@ -701,18 +759,37 @@ export function AssetManagement({
                           people={people}
                           ownerIds={initialPropertyOwnerIds?.[property.id] ?? []}
                         />
+                        {property.isRental && <Badge variant="outline">Rental</Badge>}
                       </div>
                       <p className="text-sm text-muted-foreground">
                         {getPropertyTypeLabel(property.propertyType)}
                         {property.address && ` • ${property.address}`}
                       </p>
+                      {valuations.length > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          Last valuation {valuations[0].valuationDate}
+                          {valuations[0].source ? ` • ${valuations[0].source}` : ""}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="text-right">
-                      <p className="font-medium">{formatCurrency(property.currentValue, property.currency)}</p>
-                      <p className="text-xs text-muted-foreground">{property.currency}</p>
+                      <p className="font-medium">{formatCurrency(equity.equity.toString(), property.currency)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Value {formatCurrency(equity.grossValue.toString(), property.currency)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Debt {formatCurrency(equity.linkedDebt.toString(), property.currency)}
+                      </p>
                     </div>
+                    <Button
+                      className="cursor-pointer"
+                      onClick={() => router.push(`/assets/properties/${property.id}`)}
+                    >
+                      <RiEyeLine className="h-5 w-5" />
+                      View
+                    </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="sm">
@@ -732,7 +809,8 @@ export function AssetManagement({
                     </DropdownMenu>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
@@ -1050,6 +1128,86 @@ export function AssetManagement({
                 <Label htmlFor="edit-property-value">Current Value</Label>
                 <Input id="edit-property-value" type="number" step="0.01" value={editPropertyValue} onChange={(e) => setEditPropertyValue(e.target.value)} />
               </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="edit-property-rental"
+                  checked={editPropertyIsRental}
+                  onCheckedChange={(checked) => setEditPropertyIsRental(checked === true)}
+                />
+                <Label htmlFor="edit-property-rental">Rental property</Label>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-property-valuation-date">Valuation Date</Label>
+                  <Input
+                    id="edit-property-valuation-date"
+                    type="date"
+                    value={editPropertyValuationDate}
+                    onChange={(e) => setEditPropertyValuationDate(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-property-valuation-source">Valuation Source</Label>
+                  <Input
+                    id="edit-property-valuation-source"
+                    placeholder="manual"
+                    value={editPropertyValuationSource}
+                    onChange={(e) => setEditPropertyValuationSource(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Linked Mortgage or Debt</Label>
+                {liabilityAccounts.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No liability accounts available.</p>
+                ) : (
+                  <div className="grid gap-2 rounded border p-3">
+                    {liabilityAccounts.map((account) => (
+                      <label key={account.id} className="flex items-center justify-between gap-3 text-sm">
+                        <span>
+                          {account.name}
+                          <span className="ml-2 text-muted-foreground">
+                            {formatCurrency(getLiabilityMagnitude(account).toString(), account.currency)}
+                          </span>
+                        </span>
+                        <Checkbox
+                          checked={editPropertyLinkedLiabilityIds.includes(account.id)}
+                          onCheckedChange={(checked) => {
+                            setEditPropertyLinkedLiabilityIds((current) => checked === true
+                              ? [...new Set([...current, account.id])]
+                              : current.filter((id) => id !== account.id)
+                            );
+                          }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-property-notes">Notes</Label>
+                <Textarea
+                  id="edit-property-notes"
+                  value={editPropertyNotes}
+                  onChange={(e) => setEditPropertyNotes(e.target.value)}
+                />
+              </div>
+              {editingProperty && (propertyValuationsByPropertyId[editingProperty.id] || []).length > 0 && (
+                <div className="space-y-2">
+                  <Label>Valuation History</Label>
+                  <div className="grid gap-2 rounded border p-3 text-sm">
+                    {(propertyValuationsByPropertyId[editingProperty.id] || []).slice(0, 4).map((valuation) => (
+                      <div key={valuation.id} className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">
+                          {valuation.valuationDate}
+                          {valuation.source ? ` • ${valuation.source}` : ""}
+                        </span>
+                        <span>{formatCurrency(valuation.value, valuation.currency)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="edit-property-currency">Currency</Label>
                 <Select value={editPropertyCurrency} onValueChange={(v) => v && setEditPropertyCurrency(v)}>
