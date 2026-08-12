@@ -312,6 +312,29 @@ export const categories = pgTable(
   ]
 );
 
+export const budgetLimits = pgTable(
+  "budget_limits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    categoryId: uuid("category_id")
+      .references(() => categories.id, { onDelete: "cascade" })
+      .notNull(),
+    month: date("month").notNull(),
+    plannedAmount: decimal("planned_amount", { precision: 15, scale: 2 }).notNull().default("0"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_budget_limits_user_month").on(table.userId, table.month),
+    index("idx_budget_limits_category").on(table.categoryId),
+    unique("budget_limits_user_month_category").on(table.userId, table.month, table.categoryId),
+  ]
+);
+
 export const csvImports = pgTable(
   "csv_imports",
   {
@@ -792,6 +815,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   authAccounts: many(authAccounts),
   accounts: many(accounts),
   categories: many(categories),
+  budgetLimits: many(budgetLimits),
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
   csvImports: many(csvImports),
@@ -873,6 +897,18 @@ export const categoriesRelations = relations(categories, ({ one, many }) => ({
   children: many(categories, { relationName: "categoryHierarchy" }),
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
+  budgetLimits: many(budgetLimits),
+}));
+
+export const budgetLimitsRelations = relations(budgetLimits, ({ one }) => ({
+  user: one(users, {
+    fields: [budgetLimits.userId],
+    references: [users.id],
+  }),
+  category: one(categories, {
+    fields: [budgetLimits.categoryId],
+    references: [categories.id],
+  }),
 }));
 
 export const transactionsRelations = relations(transactions, ({ one }) => ({
@@ -1128,6 +1164,9 @@ export type NewAccount = typeof accounts.$inferInsert;
 
 export type Category = typeof categories.$inferSelect;
 export type NewCategory = typeof categories.$inferInsert;
+
+export type BudgetLimit = typeof budgetLimits.$inferSelect;
+export type NewBudgetLimit = typeof budgetLimits.$inferInsert;
 
 export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;

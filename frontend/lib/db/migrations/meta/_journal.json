@@ -155,6 +155,13 @@
 			"when": 1784634000000,
 			"tag": "0025_reports_and_report_runs",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1786492800000,
+			"tag": "0026_budget_limits",
+			"breakpoints": true
 		}
 	]
 }

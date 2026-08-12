@@ -154,11 +154,35 @@ class Category(Base):
     system_transactions = relationship("Transaction", back_populates="category_system", foreign_keys="Transaction.category_system_id")
     categorization_rules = relationship("CategorizationRule", back_populates="category")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="suggested_category")
+    budget_limits = relationship("BudgetLimit", back_populates="category")
 
     # Indexes and constraints
     __table_args__ = (
         Index("idx_categories_user", "user_id"),
         UniqueConstraint("user_id", "name", "parent_id", name="categories_user_name_parent"),
+    )
+
+
+class BudgetLimit(Base):
+    """Monthly planned spend for a category."""
+    __tablename__ = "budget_limits"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="CASCADE"), nullable=False, index=True)
+    month = Column(Date, nullable=False)
+    planned_amount = Column(Numeric(15, 2), nullable=False, default=Decimal("0"))
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+    category = relationship("Category", back_populates="budget_limits")
+
+    __table_args__ = (
+        Index("idx_budget_limits_user_month", "user_id", "month"),
+        Index("idx_budget_limits_category", "category_id"),
+        UniqueConstraint("user_id", "month", "category_id", name="budget_limits_user_month_category"),
     )
 
 
