@@ -5,6 +5,10 @@ import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { budgetLimits, categories, users } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-helpers";
+import {
+  fetchBudgetInsights,
+  type BudgetCategoryInsight,
+} from "@/lib/spending/budget-insights";
 import { fetchCategoryActualAmounts } from "@/lib/spending/category-actuals";
 
 export interface BudgetLineInput {
@@ -24,6 +28,7 @@ export interface BudgetLine {
   varianceAmount: number;
   usedPct: number;
   notes: string | null;
+  insight: BudgetCategoryInsight | null;
 }
 
 export interface BudgetData {
@@ -220,6 +225,7 @@ export async function getBudgetData(
       varianceAmount: roundMoney(actualAmount - plannedAmount),
       usedPct,
       notes: budget?.notes ?? null,
+      insight: null,
     };
   });
 
@@ -251,12 +257,36 @@ export async function getBudgetData(
       ? Math.round((totals.actualAmount / totals.plannedAmount) * 100)
       : 0;
 
+  const overBudgetCategories = lines
+    .filter((line) => line.plannedAmount > 0 && line.actualAmount > line.plannedAmount)
+    .map((line) => ({
+      categoryId: line.categoryId,
+      categoryName: line.categoryName,
+      plannedAmount: line.plannedAmount,
+      actualAmount: line.actualAmount,
+      overspendAmount: line.varianceAmount,
+    }));
+
+  const insights = await fetchBudgetInsights(userId, {
+    monthKey,
+    startDate: start,
+    endDate: end,
+    accountIds,
+    categories: overBudgetCategories,
+  });
+  const insightsByCategory = new Map(
+    insights.map((insight) => [insight.categoryId, insight])
+  );
+
   return {
     monthKey,
     currency,
     accountIds,
     totals,
-    lines,
+    lines: lines.map((line) => ({
+      ...line,
+      insight: insightsByCategory.get(line.categoryId) ?? null,
+    })),
   };
 }
 

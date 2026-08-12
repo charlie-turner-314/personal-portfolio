@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { Fragment, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   RiArrowDownSLine,
@@ -9,6 +9,7 @@ import {
   RiArrowRightSLine,
   RiExternalLinkLine,
   RiFileCopyLine,
+  RiInformationLine,
   RiSaveLine,
 } from "@remixicon/react";
 import { toast } from "sonner";
@@ -54,6 +55,7 @@ type EditableLine = BudgetData["lines"][number] & {
   plannedInput: string;
   notesInput: string;
 };
+type BudgetInsight = NonNullable<BudgetData["lines"][number]["insight"]>;
 
 function formatCurrency(value: number, currency: string): string {
   return new Intl.NumberFormat(undefined, {
@@ -95,6 +97,138 @@ function amountToInput(value: number): string {
   }
 
   return String(Math.round(value * 100) / 100);
+}
+
+function driverLabel(driverType: BudgetInsight["driverType"]): string {
+  if (driverType === "one_off") {
+    return "One-off";
+  }
+
+  if (driverType === "recurring") {
+    return "Recurring";
+  }
+
+  return "Mixed";
+}
+
+function BudgetInsightContent({
+  insight,
+  currency,
+  onOpenTransactions,
+}: {
+  insight: BudgetInsight;
+  currency: string;
+  onOpenTransactions: () => void;
+}) {
+  return (
+    <div className="border-t bg-muted/20 p-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium">Why over budget</span>
+            <Badge variant="outline">{driverLabel(insight.driverType)}</Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">{insight.explanation}</p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`View ${insight.categoryName} transactions`}
+          onClick={onOpenTransactions}
+        >
+          <RiExternalLinkLine />
+        </Button>
+      </div>
+
+      <div className="grid gap-2 text-xs sm:grid-cols-3">
+        <div className="border bg-background p-2">
+          <p className="text-muted-foreground">Over</p>
+          <p className="mt-1 font-medium tabular-nums">
+            {formatCurrency(insight.overspendAmount, currency)}
+          </p>
+        </div>
+        <div className="border bg-background p-2">
+          <p className="text-muted-foreground">3M Avg</p>
+          <p className="mt-1 font-medium tabular-nums">
+            {insight.previousThreeMonthAverage === null
+              ? "No data"
+              : formatCurrency(insight.previousThreeMonthAverage, currency)}
+          </p>
+        </div>
+        <div className="border bg-background p-2">
+          <p className="text-muted-foreground">Last Year</p>
+          <p className="mt-1 font-medium tabular-nums">
+            {insight.sameMonthLastYearAmount === null
+              ? "No data"
+              : formatCurrency(insight.sameMonthLastYearAmount, currency)}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div>
+          <p className="mb-2 flex items-center gap-1 text-xs font-medium">
+            <RiInformationLine className="size-3 text-muted-foreground" />
+            Top merchants
+          </p>
+          {insight.topMerchants.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No merchants</p>
+          ) : (
+            <div className="space-y-1">
+              {insight.topMerchants.map((merchant) => (
+                <button
+                  type="button"
+                  key={merchant.name}
+                  className="flex w-full items-center justify-between gap-3 border bg-background px-2 py-1.5 text-left text-xs hover:bg-muted"
+                  onClick={onOpenTransactions}
+                >
+                  <span className="min-w-0 truncate">{merchant.name}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {formatCurrency(merchant.amount, currency)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <p className="mb-2 flex items-center gap-1 text-xs font-medium">
+            <RiInformationLine className="size-3 text-muted-foreground" />
+            Biggest transactions
+          </p>
+          {insight.topTransactions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No transactions</p>
+          ) : (
+            <div className="space-y-1">
+              {insight.topTransactions.map((transaction) => (
+                <button
+                  type="button"
+                  key={transaction.id}
+                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 border bg-background px-2 py-1.5 text-left text-xs hover:bg-muted"
+                  onClick={onOpenTransactions}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate">
+                      {transaction.merchant || transaction.description || "Transaction"}
+                    </span>
+                    <span className="block truncate text-muted-foreground">
+                      {transaction.bookedAt}
+                      {transaction.recurringName ? ` - ${transaction.recurringName}` : ""}
+                    </span>
+                  </span>
+                  <span className="shrink-0 tabular-nums">
+                    {formatCurrency(transaction.amount, currency)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function toEditableLines(data: BudgetData): EditableLine[] {
@@ -176,7 +310,7 @@ export function BudgetClient({ data, accounts }: BudgetClientProps) {
     params.set("to", monthEndDate(data.monthKey));
     params.set("analytics", "included");
     data.accountIds.forEach((accountId) => params.append("account", accountId));
-    router.push(`/category-spending?${params.toString()}`);
+    router.push(`/transactions?${params.toString()}`);
   };
 
   const updateLine = (
@@ -533,6 +667,18 @@ export function BudgetClient({ data, accounts }: BudgetClientProps) {
                           <RiArrowGoBackLine />
                         </Button>
                       </div>
+
+                      {line.insight && (
+                        <div className="mt-3">
+                          <BudgetInsightContent
+                            insight={line.insight}
+                            currency={data.currency}
+                            onOpenTransactions={() =>
+                              openCategoryTransactions(line.categoryId)
+                            }
+                          />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -561,87 +707,102 @@ export function BudgetClient({ data, accounts }: BudgetClientProps) {
                           : 0;
 
                       return (
-                        <TableRow key={line.categoryId}>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="size-2 shrink-0"
-                                style={{
-                                  backgroundColor: line.categoryColor || "#71717a",
-                                }}
+                        <Fragment key={line.categoryId}>
+                          <TableRow>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className="size-2 shrink-0"
+                                  style={{
+                                    backgroundColor: line.categoryColor || "#71717a",
+                                  }}
+                                />
+                                <span className="font-medium">{line.categoryName}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={line.plannedInput}
+                                onChange={(event) =>
+                                  updateLine(line.categoryId, {
+                                    plannedInput: event.target.value,
+                                  })
+                                }
+                                className="text-right tabular-nums"
+                                aria-label={`${line.categoryName} planned amount`}
                               />
-                              <span className="font-medium">{line.categoryName}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={line.plannedInput}
-                              onChange={(event) =>
-                                updateLine(line.categoryId, {
-                                  plannedInput: event.target.value,
-                                })
-                              }
-                              className="text-right tabular-nums"
-                              aria-label={`${line.categoryName} planned amount`}
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              className="ml-auto tabular-nums"
-                              onClick={() => openCategoryTransactions(line.categoryId)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="ml-auto tabular-nums"
+                                onClick={() => openCategoryTransactions(line.categoryId)}
+                              >
+                                {formatCurrency(line.actualAmount, data.currency)}
+                                <RiExternalLinkLine data-icon="inline-end" />
+                              </Button>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Progress
+                                  value={Math.min(usedPct, 100)}
+                                  className="min-w-20 flex-1"
+                                />
+                                <span className="w-10 text-right tabular-nums text-muted-foreground">
+                                  {usedPct}%
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell
+                              className={cn(
+                                "text-right tabular-nums",
+                                remainingAmount < 0 && "text-destructive"
+                              )}
                             >
-                              {formatCurrency(line.actualAmount, data.currency)}
-                              <RiExternalLinkLine data-icon="inline-end" />
-                            </Button>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <Progress
-                                value={Math.min(usedPct, 100)}
-                                className="min-w-20 flex-1"
+                              {formatCurrency(remainingAmount, data.currency)}
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                value={line.notesInput}
+                                onChange={(event) =>
+                                  updateLine(line.categoryId, {
+                                    notesInput: event.target.value,
+                                  })
+                                }
+                                placeholder="Optional"
+                                aria-label={`${line.categoryName} notes`}
                               />
-                              <span className="w-10 text-right tabular-nums text-muted-foreground">
-                                {usedPct}%
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell
-                            className={cn(
-                              "text-right tabular-nums",
-                              remainingAmount < 0 && "text-destructive"
-                            )}
-                          >
-                            {formatCurrency(remainingAmount, data.currency)}
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              value={line.notesInput}
-                              onChange={(event) =>
-                                updateLine(line.categoryId, {
-                                  notesInput: event.target.value,
-                                })
-                              }
-                              placeholder="Optional"
-                              aria-label={`${line.categoryName} notes`}
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon-sm"
-                              aria-label={`Reset ${line.categoryName} to actual amount`}
-                              onClick={() => resetLineToActual(line.categoryId)}
-                            >
-                              <RiArrowGoBackLine />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon-sm"
+                                aria-label={`Reset ${line.categoryName} to actual amount`}
+                                onClick={() => resetLineToActual(line.categoryId)}
+                              >
+                                <RiArrowGoBackLine />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                          {line.insight && (
+                            <TableRow>
+                              <TableCell colSpan={7} className="p-0">
+                                <BudgetInsightContent
+                                  insight={line.insight}
+                                  currency={data.currency}
+                                  onOpenTransactions={() =>
+                                    openCategoryTransactions(line.categoryId)
+                                  }
+                                />
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </TableBody>

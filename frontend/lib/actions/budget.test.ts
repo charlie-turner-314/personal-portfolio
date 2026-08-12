@@ -122,6 +122,7 @@ const mocks = vi.hoisted(() => {
     requireAuth: vi.fn(),
     revalidatePath: vi.fn(),
     fetchCategoryActualAmounts: vi.fn(),
+    fetchBudgetInsights: vi.fn(),
   };
 });
 
@@ -141,6 +142,10 @@ vi.mock("@/lib/spending/category-actuals", () => ({
   fetchCategoryActualAmounts: mocks.fetchCategoryActualAmounts,
 }));
 
+vi.mock("@/lib/spending/budget-insights", () => ({
+  fetchBudgetInsights: mocks.fetchBudgetInsights,
+}));
+
 import { copyPreviousMonthBudget, getBudgetData, saveBudgetLines } from "./budget";
 
 describe("budget actions", () => {
@@ -157,6 +162,7 @@ describe("budget actions", () => {
     mocks.requireAuth.mockReset();
     mocks.revalidatePath.mockReset();
     mocks.fetchCategoryActualAmounts.mockReset();
+    mocks.fetchBudgetInsights.mockReset();
   });
 
   describe("saveBudgetLines", () => {
@@ -251,6 +257,22 @@ describe("budget actions", () => {
       { id: "category-rent", amount: "750.10" },
       { id: "category-ignored", amount: "999.00" },
     ]);
+    mocks.fetchBudgetInsights.mockResolvedValue([
+      {
+        categoryId: "category-food",
+        categoryName: "Food",
+        plannedAmount: 200,
+        actualAmount: 250.25,
+        overspendAmount: 50.25,
+        previousMonthAmount: 100,
+        previousThreeMonthAverage: 150,
+        sameMonthLastYearAmount: null,
+        driverType: "one_off",
+        explanation: "Food is over budget.",
+        topMerchants: [],
+        topTransactions: [],
+      },
+    ]);
 
     const data = await getBudgetData("2026-04", {
       accountIds: [" account-1 ", "account-1", "account-2"],
@@ -261,6 +283,21 @@ describe("budget actions", () => {
       endDate: new Date(2026, 3, 30, 23, 59, 59, 999),
       accountIds: ["account-1", "account-2"],
       includeUncategorized: false,
+    });
+    expect(mocks.fetchBudgetInsights).toHaveBeenCalledWith("user-1", {
+      monthKey: "2026-04",
+      startDate: new Date(2026, 3, 1),
+      endDate: new Date(2026, 3, 30, 23, 59, 59, 999),
+      accountIds: ["account-1", "account-2"],
+      categories: [
+        {
+          categoryId: "category-food",
+          categoryName: "Food",
+          plannedAmount: 200,
+          actualAmount: 250.25,
+          overspendAmount: 50.25,
+        },
+      ],
     });
     expect(data).toEqual({
       monthKey: "2026-04",
@@ -286,6 +323,20 @@ describe("budget actions", () => {
           varianceAmount: 50.25,
           usedPct: 125,
           notes: "groceries",
+          insight: {
+            categoryId: "category-food",
+            categoryName: "Food",
+            plannedAmount: 200,
+            actualAmount: 250.25,
+            overspendAmount: 50.25,
+            previousMonthAmount: 100,
+            previousThreeMonthAverage: 150,
+            sameMonthLastYearAmount: null,
+            driverType: "one_off",
+            explanation: "Food is over budget.",
+            topMerchants: [],
+            topTransactions: [],
+          },
         },
         {
           categoryId: "category-rent",
@@ -298,6 +349,7 @@ describe("budget actions", () => {
           varianceAmount: -249.9,
           usedPct: 75,
           notes: null,
+          insight: null,
         },
         {
           categoryId: "category-travel",
@@ -310,6 +362,7 @@ describe("budget actions", () => {
           varianceAmount: 0,
           usedPct: 0,
           notes: null,
+          insight: null,
         },
       ],
     });
