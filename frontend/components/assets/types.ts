@@ -28,10 +28,25 @@ export interface AssetCategory {
   accounts: AssetAccount[];
 }
 
+export interface AssetLiability {
+  id: string;
+  name: string;
+  institution: string | null;
+  value: number;
+  currency: string;
+  initial: string;
+  source: "account" | "property" | "vehicle" | "portfolio";
+  accountType?: string | null;
+}
+
 export interface AssetsOverviewData {
   total: number;
+  grossAssets: number;
+  totalLiabilities: number;
+  netWorth: number;
   currency: string;
   categories: AssetCategory[];
+  liabilities: AssetLiability[];
 }
 
 export const PROPERTY_TYPES = [

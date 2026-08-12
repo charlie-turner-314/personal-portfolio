@@ -620,7 +620,7 @@ def get_financial_summary(
     person_ids: list[str] | None = None,
 ) -> dict:
     """
-    Get a financial summary with totals and account balances.
+    Get a financial summary with totals, account balances, and net worth.
 
     Args:
         from_date: Start date in ISO format YYYY-MM-DD (optional)
@@ -632,7 +632,8 @@ def get_financial_summary(
             share-weighted to that person's ownership fraction.
 
     Returns:
-        Summary with total income, total expenses, net, savings rate, and account balances
+        Summary with total income, expenses, net cashflow, savings rate,
+        account balances, gross assets, total liabilities, and net worth.
     """
     return analytics.get_financial_summary(get_mcp_user_id(user_id), from_date, to_date, person_ids)
 
@@ -974,7 +975,7 @@ def get_household_summary(
     user_id: str | None = None,
 ) -> dict:
     """
-    Per-person net worth breakdown across cash, investments, properties, vehicles.
+    Per-person net worth breakdown across assets and liabilities.
 
     Args:
         person_ids: Optional list of person UUIDs. When provided, only returns
@@ -983,7 +984,8 @@ def get_household_summary(
 
     Returns:
         Dict with a ``people`` list; each entry has person_id, name, cash,
-        investments, properties, vehicles, total (all share-attributed).
+        investments, properties, vehicles, gross_assets, total_liabilities,
+        net_worth, and total (all share-attributed).
     """
     return people_tools.get_household_summary(get_mcp_user_id(user_id), person_ids)
 

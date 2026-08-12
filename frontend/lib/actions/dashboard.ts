@@ -11,15 +11,14 @@ import {
   resolveIncomeExpenseGrouping,
   type IncomeExpenseGrouping,
 } from "@/lib/dashboard/income-expense-buckets";
-import {
-  type AssetCategoryKey,
-  ASSET_CATEGORY_LABELS,
-  ASSET_CATEGORY_COLORS,
-  ASSET_CATEGORY_ORDER,
-  getAssetCategory,
-} from "@/lib/assets/asset-category";
 import { getPortfolio } from "@/lib/api/investments";
 import { getUpcomingPlannedExpenses } from "@/lib/actions/planned-expenses";
+import {
+  calculateNetWorthOverview,
+  emptyNetWorthOverview,
+  type NetWorthEntry,
+  type NetWorthOverview,
+} from "@/lib/net-worth/calculation";
 
 async function getUserCurrency(userId: string): Promise<string> {
   const result = await db
@@ -739,49 +738,11 @@ export async function getSpendingByCategory(
 }
 
 
-interface AssetAccount {
-  id: string;
-  name: string;
-  institution: string | null;
-  value: number;
-  percentage: number;
-  currency: string;
-  initial: string;
-}
-
-interface AssetCategory {
-  key: AssetCategoryKey;
-  label: string;
-  color: string;
-  value: number;
-  percentage: number;
-  isActive: boolean;
-  accounts: AssetAccount[];
-}
-
-interface AssetsOverviewData {
-  total: number;
-  currency: string;
-  categories: AssetCategory[];
-}
-
-export async function getAssetsOverview(): Promise<AssetsOverviewData> {
+export async function getAssetsOverview(): Promise<NetWorthOverview> {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
-    return {
-      total: 0,
-      currency: "EUR",
-      categories: Object.keys(ASSET_CATEGORY_LABELS).map((key) => ({
-        key: key as AssetCategoryKey,
-        label: ASSET_CATEGORY_LABELS[key as AssetCategoryKey],
-        color: ASSET_CATEGORY_COLORS[key as AssetCategoryKey],
-        value: 0,
-        percentage: 0,
-        isActive: false,
-        accounts: [],
-      })),
-    };
+    return emptyNetWorthOverview();
   }
 
   const [userAccounts, userProperties, userVehicles, currency, portfolio] = await Promise.all([
@@ -824,148 +785,48 @@ export async function getAssetsOverview(): Promise<AssetsOverviewData> {
     getPortfolio().catch(() => null),
   ]);
 
-  // Group accounts by asset category
-  const categoryMap = new Map<AssetCategoryKey, AssetAccount[]>();
-  let total = 0;
-
-  // Process bank accounts
-  for (const account of userAccounts) {
-    const category = getAssetCategory(account.accountType);
-    const value = parseFloat(account.functionalBalance || "0");
-
-    // Only include positive balances in assets
-    if (value > 0) {
-      total += value;
-
-      if (!categoryMap.has(category)) {
-        categoryMap.set(category, []);
-      }
-
-      categoryMap.get(category)!.push({
-        id: account.id,
-        name: account.name,
-        institution: account.institution,
-        value,
-        percentage: 0, // Will calculate after totals
-        currency: account.currency || currency,
-        initial: account.name.charAt(0).toUpperCase(),
-      });
-    }
-  }
-
-  // Process properties
-  for (const property of userProperties) {
-    const value = parseFloat(property.currentValue || "0");
-
-    if (value > 0) {
-      total += value;
-
-      if (!categoryMap.has("property")) {
-        categoryMap.set("property", []);
-      }
-
-      // Extract city/state from address for display
-      const addressParts = property.address?.split(",").map(p => p.trim()) || [];
+  const entries: NetWorthEntry[] = [
+    ...userAccounts.map((account) => ({
+      id: account.id,
+      name: account.name,
+      institution: account.institution,
+      value: account.functionalBalance,
+      currency: account.currency || currency,
+      source: "account" as const,
+      accountType: account.accountType,
+    })),
+    ...userProperties.map((property) => {
+      const addressParts = property.address?.split(",").map((part) => part.trim()) || [];
       const location = addressParts.length > 1 ? addressParts.slice(-2).join(", ") : property.address;
 
-      categoryMap.get("property")!.push({
+      return {
         id: property.id,
         name: property.name,
-        institution: location || null, // Use location as "institution" for display
-        value,
-        percentage: 0,
+        institution: location || null,
+        value: property.currentValue,
         currency: property.currency || currency,
-        initial: property.name.charAt(0).toUpperCase(),
-      });
-    }
-  }
+        source: "property" as const,
+      };
+    }),
+    ...userVehicles.map((vehicle) => ({
+      id: vehicle.id,
+      name: vehicle.name,
+      institution: [vehicle.make, vehicle.model].filter(Boolean).join(" ") || null,
+      value: vehicle.currentValue,
+      currency: vehicle.currency || currency,
+      source: "vehicle" as const,
+    })),
+    ...(portfolio?.accounts || []).map((account) => ({
+      id: account.id,
+      name: account.name,
+      institution: account.type || null,
+      value: account.value,
+      currency: portfolio?.currency || currency,
+      source: "portfolio" as const,
+    })),
+  ];
 
-  // Process vehicles
-  for (const vehicle of userVehicles) {
-    const value = parseFloat(vehicle.currentValue || "0");
-
-    if (value > 0) {
-      total += value;
-
-      if (!categoryMap.has("vehicle")) {
-        categoryMap.set("vehicle", []);
-      }
-
-      // Build make/model string for display
-      const makeModel = [vehicle.make, vehicle.model].filter(Boolean).join(" ") || null;
-
-      categoryMap.get("vehicle")!.push({
-        id: vehicle.id,
-        name: vehicle.name,
-        institution: makeModel, // Use make/model as "institution" for display
-        value,
-        percentage: 0,
-        currency: vehicle.currency || currency,
-        initial: vehicle.name.charAt(0).toUpperCase(),
-      });
-    }
-  }
-
-  // Process investment accounts from portfolio
-  if (portfolio?.accounts?.length) {
-    for (const invAccount of portfolio.accounts) {
-      const value = typeof invAccount.value === "number"
-        ? invAccount.value
-        : parseFloat(String(invAccount.value) || "0");
-
-      if (value > 0) {
-        total += value;
-
-        if (!categoryMap.has("investment")) {
-          categoryMap.set("investment", []);
-        }
-
-        categoryMap.get("investment")!.push({
-          id: invAccount.id,
-          name: invAccount.name,
-          institution: invAccount.type || null,
-          value,
-          percentage: 0,
-          currency: portfolio.currency || currency,
-          initial: invAccount.name.charAt(0).toUpperCase(),
-        });
-      }
-    }
-  }
-
-  // Build categories with percentages
-  const categoryOrder = ASSET_CATEGORY_ORDER;
-
-  const categories: AssetCategory[] = categoryOrder.map((key) => {
-    const accountsInCategory = categoryMap.get(key) || [];
-    const categoryValue = accountsInCategory.reduce((sum, acc) => sum + acc.value, 0);
-    const categoryPercentage = total > 0 ? (categoryValue / total) * 100 : 0;
-
-    // Calculate account percentages relative to category total
-    const accountsWithPercentages = accountsInCategory.map((acc) => ({
-      ...acc,
-      percentage: categoryValue > 0 ? (acc.value / categoryValue) * 100 : 0,
-    }));
-
-    // Sort accounts by value descending
-    accountsWithPercentages.sort((a, b) => b.value - a.value);
-
-    return {
-      key,
-      label: ASSET_CATEGORY_LABELS[key],
-      color: ASSET_CATEGORY_COLORS[key],
-      value: categoryValue,
-      percentage: categoryPercentage,
-      isActive: categoryValue > 0,
-      accounts: accountsWithPercentages,
-    };
-  });
-
-  return {
-    total,
-    currency,
-    categories,
-  };
+  return calculateNetWorthOverview(entries, currency);
 }
 
 export interface SankeyData {
@@ -1117,19 +978,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
       incomeHistory: [],
       incomeExpense: [],
       spendingByCategory: { categories: [], total: 0 },
-      assetsOverview: {
-        total: 0,
-        currency: "EUR",
-        categories: Object.keys(ASSET_CATEGORY_LABELS).map((key) => ({
-          key: key as AssetCategoryKey,
-          label: ASSET_CATEGORY_LABELS[key as AssetCategoryKey],
-          color: ASSET_CATEGORY_COLORS[key as AssetCategoryKey],
-          value: 0,
-          percentage: 0,
-          isActive: false,
-          accounts: [],
-        })),
-      },
+      assetsOverview: emptyNetWorthOverview(),
       sankeyData: { nodes: [], links: [] },
       upcomingPlannedExpenses: {
         currency: "EUR",

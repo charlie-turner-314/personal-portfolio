@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from app.mcp.dependencies import get_db
 from app.models import Account, Person, Property, Vehicle
+from app.services.net_worth_service import calculate_net_worth, classify_account_amount
 from app.services.ownership_service import attribute_amount, get_owners
 from app.mcp.tools.investments import INVESTMENT_ACCOUNT_TYPES
 
@@ -36,7 +37,7 @@ def get_household_summary(
     user_id: str, person_ids: list[str] | None = None
 ) -> dict:
     """
-    Per-person net worth breakdown across cash, investments, properties, vehicles.
+    Per-person net worth breakdown across assets and liabilities.
 
     If ``person_ids`` is None, returns one entry per person in the household.
     Otherwise returns entries only for the specified people.
@@ -47,7 +48,8 @@ def get_household_summary(
 
     Returns:
         Dict with a ``people`` list; each entry has person_id, name, cash,
-        investments, properties, vehicles, total.
+        investments, properties, vehicles, gross_assets, total_liabilities,
+        net_worth, and total.
     """
     with get_db() as db:
         people = db.query(Person).filter(Person.user_id == user_id).all()
@@ -81,6 +83,7 @@ def get_household_summary(
             pid = str(person.id)
             cash = 0.0
             investments = 0.0
+            total_liabilities = 0.0
             properties_total = 0.0
             vehicles_total = 0.0
 
@@ -90,10 +93,14 @@ def get_household_summary(
                     continue
                 balance = float(a.functional_balance or 0)
                 amt = attribute_amount(balance, owners, pid)
+                classified = classify_account_amount(amt, a.account_type)
+                total_liabilities += classified.liability_amount
+                if classified.liability_amount:
+                    continue
                 if (a.account_type or "") in INVESTMENT_ACCOUNT_TYPES:
-                    investments += amt
+                    investments += classified.asset_amount
                 else:
-                    cash += amt
+                    cash += classified.asset_amount
 
             for pr in properties:
                 owners = property_owners[str(pr.id)]
@@ -107,6 +114,9 @@ def get_household_summary(
                     continue
                 vehicles_total += attribute_amount(float(v.current_value or 0), owners, pid)
 
+            gross_assets = cash + investments + properties_total + vehicles_total
+            net_worth = calculate_net_worth(gross_assets, total_liabilities)
+
             out.append({
                 "person_id": pid,
                 "name": person.name,
@@ -114,6 +124,9 @@ def get_household_summary(
                 "investments": round(investments, 2),
                 "properties": round(properties_total, 2),
                 "vehicles": round(vehicles_total, 2),
-                "total": round(cash + investments + properties_total + vehicles_total, 2),
+                "gross_assets": round(gross_assets, 2),
+                "total_liabilities": round(total_liabilities, 2),
+                "net_worth": round(net_worth, 2),
+                "total": round(net_worth, 2),
             })
         return {"people": out}

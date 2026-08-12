@@ -13,16 +13,33 @@ export function AssetsStackedBar({ categories, total }: AssetsStackedBarProps) {
   if (activeCategories.length === 0) {
     return (
       <div className="space-y-4">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+          <div className="text-sm font-medium">Gross asset allocation</div>
+          <div className="text-xs text-muted-foreground">
+            Positive asset balances only
+          </div>
+        </div>
         <div className="h-3 w-full rounded-sm bg-muted" />
-        <div className="text-sm text-muted-foreground">No assets tracked</div>
+        <div className="text-sm text-muted-foreground">
+          No positive assets tracked
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {/* Stacked Bar */}
-      <div className="flex h-3 w-full overflow-hidden rounded-sm">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+        <div className="text-sm font-medium">Gross asset allocation</div>
+        <div className="text-xs text-muted-foreground">
+          Positive asset balances only
+        </div>
+      </div>
+
+      <div
+        className="flex h-3 w-full overflow-hidden rounded-sm"
+        aria-label={`Gross asset allocation across ${total} in positive assets`}
+      >
         {activeCategories.map((category) => (
           <div
             key={category.key}
@@ -35,18 +52,17 @@ export function AssetsStackedBar({ categories, total }: AssetsStackedBarProps) {
         ))}
       </div>
 
-      {/* Legend */}
       <div className="flex flex-wrap gap-4">
         {activeCategories.map((category) => (
-          <div key={category.key} className="flex items-center gap-2">
+          <div key={category.key} className="flex min-w-0 items-center gap-2">
             <div
               className="h-3 w-3 rounded-sm"
               style={{ backgroundColor: category.color }}
             />
-            <span className="text-sm text-muted-foreground">
+            <span className="truncate text-sm text-muted-foreground">
               {category.label}
             </span>
-            <span className="text-sm font-medium">
+            <span className="shrink-0 text-sm font-medium">
               {category.percentage.toFixed(1)}%
             </span>
           </div>

@@ -2,17 +2,25 @@
 
 import { useState } from "react";
 import { RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { WeightBarVisualizer } from "./weight-bar-visualizer";
-import type { AssetCategory, AssetAccount, AssetCategoryKey } from "./types";
+import type { AssetCategory, AssetAccount, AssetCategoryKey, AssetLiability } from "./types";
 
 interface AssetsTableProps {
   categories: AssetCategory[];
   currency: string;
+  liabilities?: AssetLiability[];
 }
 
 // Asset categories that are bank accounts (navigable to account detail)
-const ACCOUNT_CATEGORY_KEYS: AssetCategoryKey[] = ["cash", "savings", "investment", "crypto"];
+const ACCOUNT_CATEGORY_KEYS: AssetCategoryKey[] = [
+  "cash",
+  "savings",
+  "investment",
+  "crypto",
+];
+const LIABILITY_COLOR = "var(--destructive)";
+type AccountRowData = AssetAccount | AssetLiability;
 
 function AccountRow({
   account,
@@ -20,12 +28,18 @@ function AccountRow({
   color,
   isLinkable = false,
   categoryKey,
+  showWeight = true,
+  displayMagnitude = false,
+  descriptor,
 }: {
-  account: AssetAccount;
+  account: AccountRowData;
   currency: string;
   color: string;
   isLinkable?: boolean;
   categoryKey?: AssetCategoryKey;
+  showWeight?: boolean;
+  displayMagnitude?: boolean;
+  descriptor?: string;
 }) {
   const handleClick = () => {
     if (!isLinkable) return;
@@ -35,18 +49,23 @@ function AccountRow({
       window.location.href = `/accounts/${account.id}`;
     }
   };
+  const displayedValue = displayMagnitude ? Math.abs(account.value) : account.value;
+  const percentage = "percentage" in account ? account.percentage : 0;
 
   return (
     <div
-      className={`flex items-center py-2 pl-8 pr-4 border-t border-border/50 ${isLinkable ? "hover:bg-muted/50 cursor-pointer transition-colors" : ""}`}
+      className={cn(
+        "grid grid-cols-[minmax(0,1fr)_6.5rem] gap-3 border-t border-border/50 py-2 pl-8 pr-4 sm:grid-cols-[minmax(0,1fr)_9rem_7rem]",
+        isLinkable && "cursor-pointer transition-colors hover:bg-muted/50"
+      )}
       onClick={handleClick}
     >
-      <div className="flex items-center gap-2 flex-1 min-w-0">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <div
           className="h-3 w-3 shrink-0 rounded-sm"
           style={{ backgroundColor: color }}
         />
-        <div className="truncate">
+        <div className="min-w-0 truncate">
           <span className="text-sm">{account.name}</span>
           {account.institution && (
             <span className="text-xs text-muted-foreground ml-2">
@@ -55,15 +74,21 @@ function AccountRow({
           )}
         </div>
       </div>
-      <div className="flex items-center gap-4 shrink-0">
-        <div className="flex items-center gap-2 w-36">
-          <WeightBarVisualizer percentage={account.percentage} color={color} />
-          <span className="text-sm text-muted-foreground w-12 text-right">
-            {account.percentage.toFixed(0)}%
-          </span>
-        </div>
-        <span className="text-sm font-medium w-24 text-right">
-          {formatCurrency(account.value, currency)}
+      <div className="hidden items-center justify-end gap-2 sm:flex">
+        {showWeight ? (
+          <>
+            <WeightBarVisualizer percentage={percentage} color={color} />
+            <span className="w-12 text-right text-sm text-muted-foreground">
+              {percentage.toFixed(0)}%
+            </span>
+          </>
+        ) : (
+          <span className="text-sm text-muted-foreground">{descriptor}</span>
+        )}
+      </div>
+      <div className="min-w-0 text-right">
+        <span className="whitespace-nowrap text-sm font-medium tabular-nums">
+          {formatCurrency(displayedValue, currency)}
         </span>
       </div>
     </div>
@@ -84,14 +109,18 @@ function CategoryRow({
 
   if (!category.isActive) {
     return (
-      <div className="flex items-center py-3 px-4 border-t">
-        <div className="flex items-center gap-2 flex-1">
+      <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-3 py-3 px-4 border-t sm:grid-cols-[minmax(0,1fr)_9rem_7rem]">
+        <div className="flex min-w-0 items-center gap-2">
           <div className="w-4 h-4" /> {/* Spacer for alignment */}
-          <span className="text-sm text-muted-foreground">{category.label}</span>
+          <span className="truncate text-sm text-muted-foreground">
+            {category.label}
+          </span>
         </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-muted-foreground w-36 text-center">-</span>
-          <span className="text-sm text-muted-foreground w-24 text-right">
+        <span className="hidden text-right text-sm text-muted-foreground sm:block">
+          -
+        </span>
+        <div className="min-w-0 text-right">
+          <span className="whitespace-nowrap text-sm text-muted-foreground tabular-nums">
             {formatCurrency(0, currency)}
           </span>
         </div>
@@ -102,10 +131,10 @@ function CategoryRow({
   return (
     <div>
       <div
-        className="flex items-center py-3 px-4 border-t cursor-pointer hover:bg-muted/50 transition-colors"
+        className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-3 py-3 px-4 border-t cursor-pointer hover:bg-muted/50 transition-colors sm:grid-cols-[minmax(0,1fr)_9rem_7rem]"
         onClick={() => hasAccounts && setIsOpen(!isOpen)}
       >
-        <div className="flex items-center gap-2 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
           {hasAccounts ? (
             isOpen ? (
               <RiArrowDownSLine className="h-4 w-4 text-muted-foreground" />
@@ -115,19 +144,19 @@ function CategoryRow({
           ) : (
             <div className="w-4 h-4" />
           )}
-          <span className="text-sm font-medium">{category.label}</span>
+          <span className="truncate text-sm font-medium">{category.label}</span>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 w-36">
-            <WeightBarVisualizer
-              percentage={category.percentage}
-              color={category.color}
-            />
-            <span className="text-sm text-muted-foreground w-12 text-right">
-              {category.percentage.toFixed(0)}%
-            </span>
-          </div>
-          <span className="text-sm font-medium w-24 text-right">
+        <div className="hidden items-center justify-end gap-2 sm:flex">
+          <WeightBarVisualizer
+            percentage={category.percentage}
+            color={category.color}
+          />
+          <span className="w-12 text-right text-sm text-muted-foreground">
+            {category.percentage.toFixed(0)}%
+          </span>
+        </div>
+        <div className="min-w-0 text-right">
+          <span className="whitespace-nowrap text-sm font-medium tabular-nums">
             {formatCurrency(category.value, currency)}
           </span>
         </div>
@@ -150,17 +179,51 @@ function CategoryRow({
   );
 }
 
-export function AssetsTable({ categories, currency }: AssetsTableProps) {
+function LiabilitiesSection({
+  liabilities,
+  currency,
+}: {
+  liabilities: AssetLiability[];
+  currency: string;
+}) {
+  if (liabilities.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="border-t bg-muted/30 px-4 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Liabilities
+      </div>
+      {liabilities.map((account) => (
+        <AccountRow
+          key={account.id}
+          account={account}
+          currency={currency}
+          color={LIABILITY_COLOR}
+          isLinkable={account.source === "account"}
+          showWeight={false}
+          displayMagnitude
+          descriptor="Balance owed"
+        />
+      ))}
+    </>
+  );
+}
+
+export function AssetsTable({
+  categories,
+  currency,
+  liabilities = [],
+}: AssetsTableProps) {
   return (
     <div className="rounded-md border">
-      {/* Header */}
-      <div className="flex items-center py-2 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-        <div className="flex-1">Name</div>
-        <div className="w-36 text-center">Weight</div>
-        <div className="w-24 text-right">Value</div>
+      <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-3 py-2 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider sm:grid-cols-[minmax(0,1fr)_9rem_7rem]">
+        <div>Name</div>
+        <div className="hidden text-right sm:block">Asset allocation</div>
+        <div className="text-right">Value</div>
       </div>
 
-      {/* Rows */}
       {categories.map((category, index) => (
         <CategoryRow
           key={category.key}
@@ -169,6 +232,7 @@ export function AssetsTable({ categories, currency }: AssetsTableProps) {
           defaultOpen={index === 0 && category.isActive}
         />
       ))}
+      <LiabilitiesSection liabilities={liabilities} currency={currency} />
     </div>
   );
 }
