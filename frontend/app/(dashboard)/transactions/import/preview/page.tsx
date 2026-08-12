@@ -29,6 +29,7 @@ function PreviewPageContent() {
   const [isImporting, setIsImporting] = useState(false);
   const [transactions, setTransactions] = useState<PreviewTransaction[]>([]);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [rowsNeedingAttention, setRowsNeedingAttention] = useState(0);
   const [balanceVerification, setBalanceVerification] = useState<BalanceVerification | null>(null);
 
   const loadData = useCallback(async () => {
@@ -57,6 +58,7 @@ function PreviewPageContent() {
       const result = await previewImportedTransactions(importId);
       if (result.success && result.transactions) {
         setTransactions(result.transactions);
+        setRowsNeedingAttention(result.rowsNeedingAttention ?? 0);
         // Select all non-duplicate transactions by default
         setSelectedIndices(
           result.transactions
@@ -90,6 +92,11 @@ function PreviewPageContent() {
     const skipped = transactions.filter((tx) => !selectedIndices.includes(tx.rowIndex));
     return { toImport, skipped };
   }, [transactions, selectedIndices]);
+
+  const duplicateCount = useMemo(
+    () => transactions.filter((tx) => tx.isDuplicate).length,
+    [transactions]
+  );
 
   const handleImport = async () => {
     if (!importId) return;
@@ -226,8 +233,30 @@ function PreviewPageContent() {
                 Daily balances from the CSV will be used to update the account balance history.
               </p>
             )}
+            {balanceVerification.canVerify &&
+              !balanceVerification.isVerified &&
+              balanceVerification.discrepancy !== null && (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                  This discrepancy may indicate missing transactions or a partial CSV range.
+                </p>
+              )}
           </div>
         )}
+
+        <div className="mb-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border bg-card px-4 py-3">
+            <p className="text-xs text-muted-foreground">To import</p>
+            <p className="font-mono text-lg font-semibold">{toImport.length}</p>
+          </div>
+          <div className="rounded-lg border bg-card px-4 py-3">
+            <p className="text-xs text-muted-foreground">Duplicates skipped</p>
+            <p className="font-mono text-lg font-semibold">{duplicateCount}</p>
+          </div>
+          <div className="rounded-lg border bg-card px-4 py-3">
+            <p className="text-xs text-muted-foreground">Needs attention</p>
+            <p className="font-mono text-lg font-semibold">{rowsNeedingAttention}</p>
+          </div>
+        </div>
 
         <Tabs defaultValue="to-import" className="flex min-h-0 flex-1 flex-col">
           {/* Tabs outside container */}
@@ -239,7 +268,7 @@ function PreviewPageContent() {
               </span>
             </TabsTrigger>
             <TabsTrigger value="skipped" className="gap-2" disabled={skipped.length === 0}>
-              Skipped
+              Duplicates skipped
               <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium">
                 {skipped.length}
               </span>

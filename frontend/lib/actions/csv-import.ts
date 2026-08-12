@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { csvImports, accounts, transactions, type NewTransaction } from "@/lib/db/schema";
+import { csvImportProfiles, csvImports, accounts, transactions, type NewTransaction } from "@/lib/db/schema";
 import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
 import { deleteTransactions } from "@/lib/actions/transactions";
 import { storage } from "@/lib/storage";
@@ -21,6 +21,10 @@ import {
   type AmountFormat,
   type InferredAmountFormat,
 } from "@/lib/import/parsing";
+import {
+  createCsvHeaderSignature,
+  suggestAustralianCsvMapping,
+} from "@/lib/import/csv-presets";
 import { detectDuplicates, markDuplicates } from "@/lib/utils/duplicate-detection";
 import { decryptWithFallback, encryptValue } from "@/lib/security/data-encryption";
 import OpenAI from "openai";
@@ -40,6 +44,17 @@ function resolveImportFilePath(importSession: {
 function normalizeColumnMapping(mapping: ColumnMapping): ColumnMapping {
   return {
     ...mapping,
+    date: mapping.date ?? null,
+    amount: mapping.amount ?? null,
+    debitAmount: mapping.debitAmount ?? null,
+    creditAmount: mapping.creditAmount ?? null,
+    description: mapping.description ?? null,
+    merchant: mapping.merchant ?? null,
+    transactionType: mapping.transactionType ?? null,
+    fee: mapping.fee ?? null,
+    state: mapping.state ?? null,
+    startingBalance: mapping.startingBalance ?? null,
+    endingBalance: mapping.endingBalance ?? null,
     typeConfig: {
       ...mapping.typeConfig,
       amountFormat: mapping.typeConfig?.amountFormat ?? "AUTO",
@@ -125,6 +140,8 @@ async function getCsvImportAccess() {
 export interface ColumnMapping {
   date: string | null;
   amount: string | null;
+  debitAmount: string | null;
+  creditAmount: string | null;
   description: string | null;
   merchant: string | null;
   transactionType: string | null;
@@ -158,6 +175,7 @@ export interface BalanceVerification {
   // Fields for starting balance recalculation
   importedTransactionSum: number | null;
   suggestedStartingBalance: number | null; // fileEndingBalance - transactionSum
+  flagsMissingTransactions: boolean;
 }
 
 export interface ParsedCsvData {
@@ -172,6 +190,9 @@ export interface CsvImportSession {
   fileName: string;
   status: string;
   columnMapping: ColumnMapping | null;
+  importProfileId: string | null;
+  importProfileName: string | null;
+  profileApplied: boolean;
   totalRows: number | null;
   parsedData?: ParsedCsvData;
 }
@@ -210,6 +231,12 @@ export async function initializeCsvImport(
     const delimiter = detectCsvDelimiter(fileContent);
     const parsed = parseDelimitedText(fileContent, delimiter);
     const totalRows = parsed.rows.length;
+    const savedProfile = await db.query.csvImportProfiles.findFirst({
+      where: and(
+        eq(csvImportProfiles.accountId, accountId),
+        eq(csvImportProfiles.userId, session.user.id)
+      ),
+    });
 
     // Create import session
     const [result] = await db
@@ -220,10 +247,25 @@ export async function initializeCsvImport(
         fileName,
         filePath,
         filePathCiphertext: encryptedFilePath,
-        status: "pending",
+        status: savedProfile ? "mapping" : "pending",
+        columnMapping: savedProfile
+          ? normalizeColumnMapping(savedProfile.columnMapping as ColumnMapping)
+          : undefined,
+        importProfileId: savedProfile?.id,
         totalRows,
       })
       .returning({ id: csvImports.id });
+
+    if (savedProfile) {
+      await db
+        .update(csvImportProfiles)
+        .set({
+          headerSignature: createCsvHeaderSignature(parsed.headers),
+          lastUsedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(csvImportProfiles.id, savedProfile.id));
+    }
 
     return { success: true, importId: result.id };
   } catch (error) {
@@ -295,9 +337,20 @@ export async function getAiColumnMapping(
   }
   const { userId } = access;
 
+  const suggestedMapping = normalizeColumnMapping(
+    suggestAustralianCsvMapping(csvHeaders, sampleRows) as ColumnMapping
+  );
   const openaiApiKey = process.env.OPENAI_API_KEY;
   if (!openaiApiKey) {
-    return { success: false, error: "OpenAI API key not configured" };
+    await db
+      .update(csvImports)
+      .set({
+        columnMapping: suggestedMapping,
+        status: "mapping",
+      })
+      .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
+
+    return { success: true, mapping: suggestedMapping };
   }
 
   try {
@@ -321,7 +374,9 @@ ${JSON.stringify(sampleData, null, 2)}
 
 Map these columns to the following transaction fields:
 - date: The transaction date column (prefer "Completed Date" over "Started Date" if both exist)
-- amount: The transaction amount column
+- amount: The single transaction amount column when the file uses one signed or type-based amount column
+- debitAmount: The debit/withdrawal/money-out amount column when the file uses separate debit and credit columns
+- creditAmount: The credit/deposit/money-in amount column when the file uses separate debit and credit columns
 - description: The transaction description/narrative column
 - merchant: The merchant/payee name column (if separate from description)
 - transactionType: The column indicating debit/credit (if exists)
@@ -341,6 +396,8 @@ Respond ONLY with a valid JSON object in this exact format:
 {
   "date": "column_name_or_null",
   "amount": "column_name_or_null",
+  "debitAmount": "column_name_or_null",
+  "creditAmount": "column_name_or_null",
   "description": "column_name_or_null",
   "merchant": "column_name_or_null",
   "transactionType": "column_name_or_null",
@@ -358,7 +415,7 @@ Respond ONLY with a valid JSON object in this exact format:
   }
 }
 
-Use null for columns that don't exist or can't be determined.`;
+Use null for columns that don't exist or can't be determined. Australian bank CSV files often use separate debit and credit columns; in that case set amount to null and populate debitAmount and/or creditAmount.`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -377,7 +434,15 @@ Use null for columns that don't exist or can't be determined.`;
       return { success: false, error: "Invalid AI response format" };
     }
 
-    const mapping = normalizeColumnMapping(JSON.parse(jsonMatch[0]) as ColumnMapping);
+    const aiMapping = normalizeColumnMapping(JSON.parse(jsonMatch[0]) as ColumnMapping);
+    const mapping = normalizeColumnMapping({
+      ...suggestedMapping,
+      ...aiMapping,
+      typeConfig: {
+        ...suggestedMapping.typeConfig,
+        ...aiMapping.typeConfig,
+      },
+    });
 
     // Update the import session with the mapping
     await db
@@ -397,7 +462,8 @@ Use null for columns that don't exist or can't be determined.`;
 
 export async function saveColumnMapping(
   importId: string,
-  mapping: ColumnMapping
+  mapping: ColumnMapping,
+  options: { saveProfile?: boolean } = {}
 ): Promise<{ success: boolean; error?: string }> {
   const access = await getCsvImportAccess();
   if ("error" in access) {
@@ -406,15 +472,61 @@ export async function saveColumnMapping(
   const { userId } = access;
 
   try {
+    const importSession = await db.query.csvImports.findFirst({
+      where: and(eq(csvImports.id, importId), eq(csvImports.userId, userId)),
+    });
+
+    if (!importSession) {
+      return { success: false, error: "Import session not found" };
+    }
+
+    const normalizedMapping = normalizeColumnMapping(mapping);
+    let importProfileId = importSession.importProfileId;
+
+    if (options.saveProfile) {
+      let headerSignature: string[] = [];
+      const filePath = resolveImportFilePath(importSession);
+      if (filePath) {
+        const fileBuffer = await storage.download(filePath);
+        const delimiter = detectCsvDelimiter(fileBuffer.toString("utf-8"));
+        headerSignature = createCsvHeaderSignature(
+          parseDelimitedText(fileBuffer.toString("utf-8"), delimiter).headers
+        );
+      }
+
+      const [profile] = await db
+        .insert(csvImportProfiles)
+        .values({
+          userId,
+          accountId: importSession.accountId,
+          name: "Default CSV mapping",
+          columnMapping: normalizedMapping,
+          headerSignature,
+          lastUsedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [csvImportProfiles.userId, csvImportProfiles.accountId],
+          set: {
+            columnMapping: normalizedMapping,
+            headerSignature,
+            lastUsedAt: new Date(),
+            updatedAt: new Date(),
+          },
+        })
+        .returning({ id: csvImportProfiles.id });
+
+      importProfileId = profile?.id ?? importProfileId;
+    }
+
     await db
       .update(csvImports)
       .set({
-        columnMapping: normalizeColumnMapping(mapping),
+        columnMapping: normalizedMapping,
+        importProfileId,
         status: "previewing",
       })
-      .where(
-        and(eq(csvImports.id, importId), eq(csvImports.userId, userId))
-      );
+      .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
 
     return { success: true };
   } catch (error) {
@@ -434,6 +546,91 @@ export interface PreviewTransaction {
   duplicateOf?: string;
 }
 
+interface RowAmountResult {
+  amount: number;
+  transactionType: "debit" | "credit";
+}
+
+function resolveTransactionTypeFromRow(
+  row: string[],
+  typeIndex: number,
+  mapping: ColumnMapping,
+  parsedAmount: number
+): "debit" | "credit" {
+  let transactionType: "debit" | "credit" = "debit";
+
+  if (typeIndex >= 0 && mapping.typeConfig) {
+    const typeValue = row[typeIndex]?.toLowerCase().trim();
+    if (mapping.typeConfig.creditValue && typeValue?.includes(mapping.typeConfig.creditValue.toLowerCase())) {
+      transactionType = "credit";
+    } else if (mapping.typeConfig.debitValue && typeValue?.includes(mapping.typeConfig.debitValue.toLowerCase())) {
+      transactionType = "debit";
+    } else if (typeValue && (typeValue.includes("expense") || typeValue.includes("debit") || typeValue.includes("outgoing") || typeValue.includes("payment"))) {
+      transactionType = "debit";
+    } else if (typeValue && (typeValue.includes("income") || typeValue.includes("credit") || typeValue.includes("incoming") || typeValue.includes("deposit"))) {
+      transactionType = "credit";
+    }
+  }
+
+  if (typeIndex === -1 && mapping.typeConfig?.isAmountSigned) {
+    transactionType = parsedAmount >= 0 ? "credit" : "debit";
+  }
+
+  return transactionType;
+}
+
+function resolveRowAmount(
+  row: string[],
+  rowNumber: number,
+  mapping: ColumnMapping,
+  indices: {
+    amountIndex: number;
+    debitAmountIndex: number;
+    creditAmountIndex: number;
+    typeIndex: number;
+  },
+  numberParseOptions: {
+    amountFormat: AmountFormat;
+    inferredFormat: InferredAmountFormat;
+  }
+): RowAmountResult | null {
+  const { amountIndex, debitAmountIndex, creditAmountIndex, typeIndex } = indices;
+
+  if (debitAmountIndex >= 0 || creditAmountIndex >= 0) {
+    const debitAmount = debitAmountIndex >= 0
+      ? parseImportedNumber(row[debitAmountIndex], "debit amount", rowNumber, numberParseOptions)
+      : null;
+    const creditAmount = creditAmountIndex >= 0
+      ? parseImportedNumber(row[creditAmountIndex], "credit amount", rowNumber, numberParseOptions)
+      : null;
+    const hasDebit = debitAmount !== null && Math.abs(debitAmount) > 0;
+    const hasCredit = creditAmount !== null && Math.abs(creditAmount) > 0;
+
+    if (hasDebit === hasCredit) {
+      return null;
+    }
+
+    return hasDebit
+      ? { amount: -Math.abs(debitAmount ?? 0), transactionType: "debit" }
+      : { amount: Math.abs(creditAmount ?? 0), transactionType: "credit" };
+  }
+
+  if (amountIndex < 0) {
+    return null;
+  }
+
+  const parsedAmount = parseImportedNumber(row[amountIndex], "amount", rowNumber, numberParseOptions);
+  if (parsedAmount === null) {
+    return null;
+  }
+
+  const transactionType = resolveTransactionTypeFromRow(row, typeIndex, mapping, parsedAmount);
+  return {
+    amount: transactionType === "debit" ? -Math.abs(parsedAmount) : Math.abs(parsedAmount),
+    transactionType,
+  };
+}
+
 // Daily balance extracted from CSV
 export interface DailyBalance {
   date: string;  // ISO date string (YYYY-MM-DD)
@@ -442,7 +639,7 @@ export interface DailyBalance {
 
 export async function previewImportedTransactions(
   importId: string
-): Promise<{ success: boolean; error?: string; transactions?: PreviewTransaction[]; balanceVerification?: BalanceVerification; dailyBalances?: DailyBalance[] }> {
+): Promise<{ success: boolean; error?: string; transactions?: PreviewTransaction[]; balanceVerification?: BalanceVerification; dailyBalances?: DailyBalance[]; rowsNeedingAttention?: number }> {
   const access = await getCsvImportAccess();
   if ("error" in access) {
     return { success: false, error: access.error };
@@ -478,6 +675,8 @@ export async function previewImportedTransactions(
     // Get column indices
     const dateIndex = mapping.date ? headers.indexOf(mapping.date) : -1;
     const amountIndex = mapping.amount ? headers.indexOf(mapping.amount) : -1;
+    const debitAmountIndex = mapping.debitAmount ? headers.indexOf(mapping.debitAmount) : -1;
+    const creditAmountIndex = mapping.creditAmount ? headers.indexOf(mapping.creditAmount) : -1;
     const descriptionIndex = mapping.description ? headers.indexOf(mapping.description) : -1;
     const merchantIndex = mapping.merchant ? headers.indexOf(mapping.merchant) : -1;
     const typeIndex = mapping.transactionType ? headers.indexOf(mapping.transactionType) : -1;
@@ -486,12 +685,15 @@ export async function previewImportedTransactions(
     const endBalIdx = mapping.endingBalance ? headers.indexOf(mapping.endingBalance) : -1;
     const feeIdx = mapping.fee ? headers.indexOf(mapping.fee) : -1;
 
-    if (dateIndex === -1 || amountIndex === -1 || descriptionIndex === -1) {
+    const hasAmountMapping = amountIndex >= 0 || debitAmountIndex >= 0 || creditAmountIndex >= 0;
+    if (dateIndex === -1 || !hasAmountMapping || descriptionIndex === -1) {
       return { success: false, error: "Required columns not mapped" };
     }
 
     const numberParseOptions = createNumberParseOptions(mapping, rows, [
       amountIndex,
+      debitAmountIndex,
+      creditAmountIndex,
       feeIdx,
       startBalIdx,
       endBalIdx,
@@ -499,6 +701,7 @@ export async function previewImportedTransactions(
 
     // Parse transactions
     const previewTransactions: PreviewTransaction[] = [];
+    let rowsNeedingAttention = 0;
     const completedStateValue = mapping.typeConfig?.completedStateValue?.toLowerCase();
 
     for (let i = 0; i < rows.length; i++) {
@@ -515,9 +718,13 @@ export async function previewImportedTransactions(
       }
 
       const dateStr = row[dateIndex];
-      const amountStr = row[amountIndex];
-      const description = row[descriptionIndex];
+      const description = row[descriptionIndex]?.trim();
       const merchant = merchantIndex >= 0 ? row[merchantIndex] : undefined;
+
+      if (!description) {
+        rowsNeedingAttention += 1;
+        continue;
+      }
 
       // Parse date with multiple format support
       let parsedDate: Date | null = null;
@@ -697,53 +904,40 @@ export async function previewImportedTransactions(
 
         // Validate the parsed date
         if (!parsedDate || isNaN(parsedDate.getTime())) {
+          rowsNeedingAttention += 1;
           continue; // Skip invalid rows
         }
       } catch {
+        rowsNeedingAttention += 1;
         continue; // Skip invalid rows
       }
 
-      // Parse amount (preserve sign for now to determine transaction type)
-      const parsedAmount = parseImportedNumber(amountStr, "amount", i + 2, numberParseOptions);
-      if (parsedAmount === null) continue;
-
-      // Determine transaction type BEFORE calling Math.abs()
-      let transactionType: "debit" | "credit" = "debit";
-
-      // First check if there's an explicit transaction type column
-      if (typeIndex >= 0 && mapping.typeConfig) {
-        const typeValue = row[typeIndex]?.toLowerCase().trim();
-        if (mapping.typeConfig.creditValue && typeValue?.includes(mapping.typeConfig.creditValue.toLowerCase())) {
-          transactionType = "credit";
-        } else if (mapping.typeConfig.debitValue && typeValue?.includes(mapping.typeConfig.debitValue.toLowerCase())) {
-          transactionType = "debit";
-        } else {
-          // If type column exists but value doesn't match, check for common aliases
-          if (typeValue && (typeValue.includes("expense") || typeValue.includes("debit") || typeValue.includes("outgoing") || typeValue.includes("payment"))) {
-            transactionType = "debit";
-          } else if (typeValue && (typeValue.includes("income") || typeValue.includes("credit") || typeValue.includes("incoming") || typeValue.includes("deposit"))) {
-            transactionType = "credit";
-          }
-        }
+      let rowAmount: RowAmountResult | null = null;
+      try {
+        rowAmount = resolveRowAmount(
+          row,
+          i + 2,
+          mapping,
+          { amountIndex, debitAmountIndex, creditAmountIndex, typeIndex },
+          numberParseOptions
+        );
+      } catch {
+        rowsNeedingAttention += 1;
+        continue;
       }
 
-      // If no explicit type column, infer from amount sign (if amounts are signed)
-      // Note: Negative amounts = expenses (debit), Positive amounts = income (credit)
-      if (typeIndex === -1 && mapping.typeConfig?.isAmountSigned) {
-        transactionType = parsedAmount >= 0 ? "credit" : "debit";
+      if (!rowAmount) {
+        rowsNeedingAttention += 1;
+        continue;
       }
-
-      // Send amount with correct sign based on transaction_type
-      // Backend expects: debit = negative, credit = positive
-      const amount = transactionType === "debit" ? -Math.abs(parsedAmount) : Math.abs(parsedAmount);
 
       previewTransactions.push({
         rowIndex: i,
         date: parsedDate.toISOString(),
-        amount,
+        amount: rowAmount.amount,
         description,
         merchant,
-        transactionType,
+        transactionType: rowAmount.transactionType,
       });
     }
 
@@ -764,6 +958,7 @@ export async function previewImportedTransactions(
       .update(csvImports)
       .set({
         duplicatesFound: duplicateMatches.size,
+        rowsNeedingAttention,
       })
       .where(eq(csvImports.id, importId));
 
@@ -811,9 +1006,20 @@ export async function previewImportedTransactions(
       let calculatedStartingBalance: number | null = null;
       if (fileStartingBalance === null && endBalIdx >= 0) {
         const firstRowEndingBalance = parseImportedNumber(firstRow?.[endBalIdx], "ending balance", 2, numberParseOptions);
-        const firstRowAmount = amountIndex >= 0
-          ? parseImportedNumber(firstRow?.[amountIndex], "amount", 2, numberParseOptions)
-          : null;
+        let firstRowAmount: number | null = null;
+        try {
+          firstRowAmount = firstRow
+            ? resolveRowAmount(
+              firstRow,
+              2,
+              mapping,
+              { amountIndex, debitAmountIndex, creditAmountIndex, typeIndex },
+              numberParseOptions
+            )?.amount ?? null
+            : null;
+        } catch {
+          firstRowAmount = null;
+        }
 
         if (firstRowEndingBalance !== null && firstRowAmount !== null) {
           // first_ending_balance = starting_balance + first_amount
@@ -859,6 +1065,7 @@ export async function previewImportedTransactions(
         isVerified: canVerify && discrepancy !== null && Math.abs(discrepancy) < 0.01,
         importedTransactionSum: Math.round(transactionSum * 100) / 100,
         suggestedStartingBalance,
+        flagsMissingTransactions: canVerify && discrepancy !== null && Math.abs(discrepancy) >= 0.01,
       };
 
       // Extract daily balances from CSV rows
@@ -938,28 +1145,24 @@ export async function previewImportedTransactions(
           if (endBalIdx >= 0) {
             // Use ending balance directly if available
             dayBalance = parseImportedNumber(row[endBalIdx], "ending balance", i + 2, numberParseOptions);
-          } else if (startBalIdx >= 0 && amountIndex >= 0) {
+          } else if (startBalIdx >= 0 && hasAmountMapping) {
             // Calculate ending balance from starting balance + transaction amount
             const startBal = parseImportedNumber(row[startBalIdx], "starting balance", i + 2, numberParseOptions);
-            const amountStr = row[amountIndex];
-            const txAmount = parseImportedNumber(amountStr, "amount", i + 2, numberParseOptions);
+            let rowAmount: RowAmountResult | null = null;
+            try {
+              rowAmount = resolveRowAmount(
+                row,
+                i + 2,
+                mapping,
+                { amountIndex, debitAmountIndex, creditAmountIndex, typeIndex },
+                numberParseOptions
+              );
+            } catch {
+              rowAmount = null;
+            }
 
-            if (startBal !== null && txAmount !== null) {
-              // For signed amounts, just add directly. For type-based, need to check type
-              if (mapping.typeConfig?.isAmountSigned) {
-                dayBalance = startBal + txAmount;
-              } else {
-                // Need to determine if credit or debit
-                const typeIndex = mapping.transactionType ? headers.indexOf(mapping.transactionType) : -1;
-                let isCredit = false;
-                if (typeIndex >= 0 && mapping.typeConfig) {
-                  const typeValue = row[typeIndex]?.toLowerCase();
-                  if (mapping.typeConfig.creditValue && typeValue?.includes(mapping.typeConfig.creditValue.toLowerCase())) {
-                    isCredit = true;
-                  }
-                }
-                dayBalance = startBal + (isCredit ? Math.abs(txAmount) : -Math.abs(txAmount));
-              }
+            if (startBal !== null && rowAmount !== null) {
+              dayBalance = startBal + rowAmount.amount;
             }
           }
 
@@ -975,7 +1178,13 @@ export async function previewImportedTransactions(
       }
     }
 
-    return { success: true, transactions: markedTransactions, balanceVerification, dailyBalances };
+    return {
+      success: true,
+      transactions: markedTransactions,
+      balanceVerification,
+      dailyBalances,
+      rowsNeedingAttention,
+    };
   } catch (error) {
     console.error("Failed to preview transactions:", error);
     return {
@@ -1259,11 +1468,16 @@ export async function finalizeImport(
       }
 
       // Update import session
+      const duplicatesSkipped = previewResult.transactions.filter((tx) =>
+        tx.isDuplicate && !selectedIndices.includes(tx.rowIndex)
+      ).length;
       await db
         .update(csvImports)
         .set({
           status: "completed",
           importedRows: totalImported,
+          duplicatesFound: duplicatesSkipped,
+          rowsNeedingAttention: previewResult.rowsNeedingAttention ?? 0,
           completedAt: new Date(),
         })
         .where(eq(csvImports.id, importId));
@@ -1404,6 +1618,10 @@ export async function enqueueBackgroundImport(
       transactions,
       daily_balances: previewResult.dailyBalances || undefined,
       starting_balance: previewResult.balanceVerification?.fileStartingBalance ?? undefined,
+      duplicates_found: previewResult.transactions.filter((tx) =>
+        tx.isDuplicate && !selectedIndices.includes(tx.rowIndex)
+      ).length,
+      rows_needing_attention: previewResult.rowsNeedingAttention ?? 0,
     };
 
     // Call backend enqueue endpoint
@@ -1476,6 +1694,15 @@ export async function getCsvImportSession(
     return null;
   }
 
+  const importProfile = importSession.importProfileId
+    ? await db.query.csvImportProfiles.findFirst({
+      where: and(
+        eq(csvImportProfiles.id, importSession.importProfileId),
+        eq(csvImportProfiles.userId, userId)
+      ),
+    })
+    : null;
+
   return {
     id: importSession.id,
     accountId: importSession.accountId,
@@ -1484,6 +1711,9 @@ export async function getCsvImportSession(
     columnMapping: importSession.columnMapping
       ? normalizeColumnMapping(importSession.columnMapping as ColumnMapping)
       : null,
+    importProfileId: importSession.importProfileId ?? null,
+    importProfileName: importProfile?.name ?? null,
+    profileApplied: Boolean(importProfile),
     totalRows: importSession.totalRows,
   };
 }
@@ -1781,6 +2011,8 @@ export interface CsvImportWithStats {
   status: string | null;
   importedRows: number | null;
   totalRows: number | null;
+  duplicatesFound: number | null;
+  rowsNeedingAttention: number | null;
   createdAt: Date | null;
   completedAt: Date | null;
   account: { id: string; name: string; currency: string | null } | null;
@@ -1836,6 +2068,8 @@ export async function getCsvImportHistory(): Promise<CsvImportWithStats[]> {
       status: imp.status,
       importedRows: imp.importedRows,
       totalRows: imp.totalRows,
+      duplicatesFound: imp.duplicatesFound,
+      rowsNeedingAttention: imp.rowsNeedingAttention,
       createdAt: imp.createdAt,
       completedAt: imp.completedAt,
       account: imp.account ?? null,

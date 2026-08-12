@@ -48,6 +48,8 @@ class EnqueueImportRequest(BaseModel):
     transactions: List[TransactionForImport]
     daily_balances: Optional[List[DailyBalanceForImport]] = None
     starting_balance: Optional[float] = None
+    duplicates_found: Optional[int] = None
+    rows_needing_attention: Optional[int] = None
 
 
 class EnqueueImportResponse(BaseModel):
@@ -64,6 +66,8 @@ class ImportStatusResponse(BaseModel):
     status: str  # pending, mapping, previewing, importing, completed, failed
     total_rows: Optional[int] = None
     imported_rows: Optional[int] = None
+    duplicates_found: Optional[int] = None
+    rows_needing_attention: Optional[int] = None
     progress_count: Optional[int] = None
     error_message: Optional[str] = None
     celery_task_id: Optional[str] = None
@@ -83,10 +87,13 @@ def _reconcile_import_status(db: Session, csv_import: CsvImport) -> None:
         if task_state == "SUCCESS":
             result_payload = task_result.result if isinstance(task_result.result, dict) else {}
             imported_count = result_payload.get("imported_count")
+            skipped_count = result_payload.get("skipped_count")
 
             csv_import.status = "completed"
             if isinstance(imported_count, int) and csv_import.imported_rows is None:
                 csv_import.imported_rows = imported_count
+            if isinstance(skipped_count, int):
+                csv_import.duplicates_found = max(csv_import.duplicates_found or 0, skipped_count)
             if csv_import.completed_at is None:
                 csv_import.completed_at = datetime.utcnow()
             db.commit()
@@ -150,6 +157,10 @@ def enqueue_csv_import(
         csv_import.status = "importing"
         csv_import.total_rows = len(request.transactions)
         csv_import.progress_count = 0
+        if request.duplicates_found is not None:
+            csv_import.duplicates_found = request.duplicates_found
+        if request.rows_needing_attention is not None:
+            csv_import.rows_needing_attention = request.rows_needing_attention
         db.commit()
 
         # Convert transactions to dict format for Celery task
@@ -239,6 +250,8 @@ def get_import_status(
             status=csv_import.status or "pending",
             total_rows=csv_import.total_rows,
             imported_rows=csv_import.imported_rows,
+            duplicates_found=csv_import.duplicates_found,
+            rows_needing_attention=csv_import.rows_needing_attention,
             progress_count=csv_import.progress_count,
             error_message=csv_import.error_message,
             celery_task_id=csv_import.celery_task_id,

@@ -37,6 +37,8 @@ function MappingPageContent() {
   const [mapping, setMapping] = useState<ColumnMapping>({
     date: null,
     amount: null,
+    debitAmount: null,
+    creditAmount: null,
     description: null,
     merchant: null,
     transactionType: null,
@@ -62,7 +64,7 @@ function MappingPageContent() {
       const result = await getAiColumnMapping(id, data.headers, data.sampleRows);
       if (result.success && result.mapping) {
         setMapping(result.mapping);
-        toast.success("AI mapping applied automatically");
+        toast.success("Column mapping applied automatically");
       }
     } catch {
       // Silently fail - user can still manually map
@@ -87,7 +89,13 @@ function MappingPageContent() {
       }
 
       const hasExistingMapping = session.columnMapping &&
-        (session.columnMapping.date || session.columnMapping.amount || session.columnMapping.description);
+        (
+          session.columnMapping.date ||
+          session.columnMapping.amount ||
+          session.columnMapping.debitAmount ||
+          session.columnMapping.creditAmount ||
+          session.columnMapping.description
+        );
 
       if (hasExistingMapping) {
         setMapping(session.columnMapping!);
@@ -121,8 +129,9 @@ function MappingPageContent() {
   const handleContinue = async () => {
     if (!importId) return;
 
-    if (!mapping.date || !mapping.amount || !mapping.description) {
-      toast.error("Please map all required fields");
+    const hasAmountMapping = Boolean(mapping.amount || mapping.debitAmount || mapping.creditAmount);
+    if (!mapping.date || !hasAmountMapping || !mapping.description) {
+      toast.error("Please map Date, Description, and at least one amount column");
       return;
     }
 

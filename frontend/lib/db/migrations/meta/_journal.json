@@ -176,6 +176,13 @@
 			"when": 1786665600000,
 			"tag": "0028_cashflow_forecast",
 			"breakpoints": true
+		},
+		{
+			"idx": 27,
+			"version": "7",
+			"when": 1786752000000,
+			"tag": "0029_csv_import_profiles",
+			"breakpoints": true
 		}
 	]
 }

@@ -486,6 +486,30 @@ export const recurringTransactionScheduleOverrides = pgTable(
   ]
 );
 
+export const csvImportProfiles = pgTable(
+  "csv_import_profiles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 255 }).default("Default CSV mapping").notNull(),
+    columnMapping: jsonb("column_mapping").notNull(),
+    headerSignature: jsonb("header_signature"),
+    lastUsedAt: timestamp("last_used_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_csv_import_profiles_user").on(table.userId),
+    index("idx_csv_import_profiles_account").on(table.accountId),
+    unique("csv_import_profiles_user_account_unique").on(table.userId, table.accountId),
+  ]
+);
+
 export const csvImports = pgTable(
   "csv_imports",
   {
@@ -496,6 +520,7 @@ export const csvImports = pgTable(
     accountId: uuid("account_id")
       .references(() => accounts.id, { onDelete: "cascade" })
       .notNull(),
+    importProfileId: uuid("import_profile_id").references(() => csvImportProfiles.id, { onDelete: "set null" }),
     fileName: varchar("file_name", { length: 255 }).notNull(),
     filePath: text("file_path"),
     filePathCiphertext: text("file_path_ciphertext"),
@@ -504,6 +529,7 @@ export const csvImports = pgTable(
     totalRows: integer("total_rows"),
     importedRows: integer("imported_rows"),
     duplicatesFound: integer("duplicates_found"),
+    rowsNeedingAttention: integer("rows_needing_attention").default(0),
     errorMessage: text("error_message"),
     // Background worker fields
     celeryTaskId: varchar("celery_task_id", { length: 255 }),
@@ -515,6 +541,7 @@ export const csvImports = pgTable(
   (table) => [
     index("idx_csv_imports_user").on(table.userId),
     index("idx_csv_imports_account").on(table.accountId),
+    index("idx_csv_imports_import_profile").on(table.importProfileId),
   ]
 );
 
@@ -974,6 +1001,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
   csvImports: many(csvImports),
+  csvImportProfiles: many(csvImportProfiles),
   properties: many(properties),
   vehicles: many(vehicles),
   subscriptionSuggestions: many(subscriptionSuggestions),
@@ -1019,6 +1047,7 @@ export const accountsRelations = relations(accounts, ({ one, many }) => ({
   }),
   transactions: many(transactions),
   csvImports: many(csvImports),
+  csvImportProfiles: many(csvImportProfiles),
   balances: many(accountBalances),
   recurringTransactions: many(recurringTransactions),
   plannedExpenses: many(plannedExpenses),
@@ -1240,7 +1269,23 @@ export const csvImportsRelations = relations(csvImports, ({ one, many }) => ({
     fields: [csvImports.accountId],
     references: [accounts.id],
   }),
+  importProfile: one(csvImportProfiles, {
+    fields: [csvImports.importProfileId],
+    references: [csvImportProfiles.id],
+  }),
   transactions: many(transactions),
+}));
+
+export const csvImportProfilesRelations = relations(csvImportProfiles, ({ one, many }) => ({
+  user: one(users, {
+    fields: [csvImportProfiles.userId],
+    references: [users.id],
+  }),
+  account: one(accounts, {
+    fields: [csvImportProfiles.accountId],
+    references: [accounts.id],
+  }),
+  imports: many(csvImports),
 }));
 
 export const propertiesRelations = relations(properties, ({ one, many }) => ({
@@ -1420,6 +1465,8 @@ export type NewCategorizationRule = typeof categorizationRules.$inferInsert;
 
 export type CsvImport = typeof csvImports.$inferSelect;
 export type NewCsvImport = typeof csvImports.$inferInsert;
+export type CsvImportProfile = typeof csvImportProfiles.$inferSelect;
+export type NewCsvImportProfile = typeof csvImportProfiles.$inferInsert;
 
 export type Property = typeof properties.$inferSelect;
 export type NewProperty = typeof properties.$inferInsert;

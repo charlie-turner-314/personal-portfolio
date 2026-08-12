@@ -77,6 +77,9 @@ export function ImportHistoryManager({ initialImports, canDelete = true }: Impor
               {initialImports.map((imp) => {
                 const hasTransactions = imp.transactionCount > 0;
                 const canRevert = hasTransactions && canDelete;
+                const importedCount = imp.importedRows ?? imp.transactionCount;
+                const duplicatesSkipped = imp.duplicatesFound ?? 0;
+                const needsAttention = imp.rowsNeedingAttention ?? 0;
 
                 return (
                   <div
@@ -106,12 +109,20 @@ export function ImportHistoryManager({ initialImports, canDelete = true }: Impor
                         {imp.createdAt && (
                           <span>{formatDate(imp.createdAt)}</span>
                         )}
-                        {imp.transactionCount > 0 && (
-                          <>
-                            <span>·</span>
-                            <span className="font-mono">{imp.transactionCount} transaction{imp.transactionCount !== 1 ? "s" : ""}</span>
-                          </>
-                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span>
+                          Imported{" "}
+                          <span className="font-mono text-foreground">{importedCount}</span>
+                        </span>
+                        <span>
+                          Duplicates skipped{" "}
+                          <span className="font-mono text-foreground">{duplicatesSkipped}</span>
+                        </span>
+                        <span>
+                          Needs attention{" "}
+                          <span className="font-mono text-foreground">{needsAttention}</span>
+                        </span>
                       </div>
                     </div>
 

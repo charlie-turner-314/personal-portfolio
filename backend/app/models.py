@@ -70,6 +70,7 @@ class Account(Base):
         passive_deletes=True,
     )
     csv_imports = relationship("CsvImport", back_populates="account")
+    csv_import_profiles = relationship("CsvImportProfile", back_populates="account", cascade="all, delete-orphan")
     balances = relationship("AccountBalance", back_populates="account")
     recurring_transactions = relationship("RecurringTransaction", back_populates="account")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="account")
@@ -557,6 +558,7 @@ class CsvImport(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    import_profile_id = Column(UUID(as_uuid=True), ForeignKey("csv_import_profiles.id", ondelete="SET NULL"), nullable=True, index=True)
     file_name = Column(String(255), nullable=False)
     file_path = Column(Text, nullable=True)
     file_path_ciphertext = Column(Text, nullable=True)
@@ -565,6 +567,7 @@ class CsvImport(Base):
     total_rows = Column(Integer, nullable=True)
     imported_rows = Column(Integer, nullable=True)
     duplicates_found = Column(Integer, nullable=True)
+    rows_needing_attention = Column(Integer, default=0, server_default=text("0"), nullable=True)
     error_message = Column(Text, nullable=True)
     # Background worker fields
     celery_task_id = Column(String(255), nullable=True)
@@ -576,12 +579,42 @@ class CsvImport(Base):
     # Relationships
     user = relationship("User", back_populates="csv_imports")
     account = relationship("Account", back_populates="csv_imports")
+    import_profile = relationship("CsvImportProfile", back_populates="csv_imports")
     transactions = relationship("Transaction", back_populates="csv_import")
 
     # Indexes and constraints
     __table_args__ = (
         Index("idx_csv_imports_user", "user_id"),
         Index("idx_csv_imports_account", "account_id"),
+        Index("idx_csv_imports_import_profile", "import_profile_id"),
+    )
+
+
+class CsvImportProfile(Base):
+    """
+    Saved CSV column mapping for an account.
+    At most one profile is stored per user/account pair.
+    """
+    __tablename__ = "csv_import_profiles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False, default="Default CSV mapping", server_default=text("'Default CSV mapping'"))
+    column_mapping = Column(JSONB, nullable=False)
+    header_signature = Column(JSONB, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="csv_import_profiles")
+    account = relationship("Account", back_populates="csv_import_profiles")
+    csv_imports = relationship("CsvImport", back_populates="import_profile")
+
+    __table_args__ = (
+        Index("idx_csv_import_profiles_user", "user_id"),
+        Index("idx_csv_import_profiles_account", "account_id"),
+        UniqueConstraint("user_id", "account_id", name="csv_import_profiles_user_account_unique"),
     )
 
 
@@ -885,6 +918,7 @@ class User(Base):
     recurring_transactions = relationship("RecurringTransaction", back_populates="user", cascade="all, delete-orphan")
     categorization_rules = relationship("CategorizationRule", back_populates="user", cascade="all, delete-orphan")
     csv_imports = relationship("CsvImport", back_populates="user", cascade="all, delete-orphan")
+    csv_import_profiles = relationship("CsvImportProfile", back_populates="user", cascade="all, delete-orphan")
     properties = relationship("Property", back_populates="user", cascade="all, delete-orphan")
     vehicles = relationship("Vehicle", back_populates="user", cascade="all, delete-orphan")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="user", cascade="all, delete-orphan")

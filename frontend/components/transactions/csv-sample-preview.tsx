@@ -13,7 +13,11 @@ interface CsvSamplePreviewProps {
 const MAPPED_FIELDS = [
   { key: "date", label: "Date" },
   { key: "amount", label: "Amount" },
+  { key: "debitAmount", label: "Debit Amount" },
+  { key: "creditAmount", label: "Credit Amount" },
   { key: "description", label: "Description" },
+  { key: "merchant", label: "Merchant" },
+  { key: "transactionType", label: "Type" },
 ] as const;
 
 export function CsvSamplePreview({
@@ -27,7 +31,7 @@ export function CsvSamplePreview({
       const mapped: Record<string, string> = {};
 
       MAPPED_FIELDS.forEach((field) => {
-        const columnName = mapping[field.key as keyof ColumnMapping] as string | null;
+        const columnName = mapping[field.key] as string | null;
         if (columnName) {
           const columnIndex = headers.indexOf(columnName);
           if (columnIndex !== -1) {
@@ -47,7 +51,7 @@ export function CsvSamplePreview({
 
   // Get the list of mapped fields for display
   const activeMappings = MAPPED_FIELDS.filter(
-    (field) => mapping[field.key as keyof ColumnMapping]
+    (field) => mapping[field.key]
   );
 
   if (!hasMappings) {
@@ -67,7 +71,7 @@ export function CsvSamplePreview({
       {/* Mapping indicators */}
       <div className="flex flex-wrap gap-2">
         {activeMappings.map((field) => {
-          const columnName = mapping[field.key as keyof ColumnMapping] as string;
+          const columnName = mapping[field.key] as string;
           return (
             <div
               key={field.key}
