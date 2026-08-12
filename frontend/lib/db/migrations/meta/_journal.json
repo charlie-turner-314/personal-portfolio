@@ -162,6 +162,13 @@
 			"when": 1786492800000,
 			"tag": "0026_budget_limits",
 			"breakpoints": true
+		},
+		{
+			"idx": 25,
+			"version": "7",
+			"when": 1786579200000,
+			"tag": "0027_planned_expenses",
+			"breakpoints": true
 		}
 	]
 }

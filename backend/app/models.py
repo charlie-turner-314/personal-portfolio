@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     UniqueConstraint,
+    CheckConstraint,
     JSON,
     text,
 )
@@ -72,6 +73,7 @@ class Account(Base):
     balances = relationship("AccountBalance", back_populates="account")
     recurring_transactions = relationship("RecurringTransaction", back_populates="account")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="account")
+    planned_expenses = relationship("PlannedExpense", back_populates="account")
 
     # Indexes and constraints
     __table_args__ = (
@@ -155,6 +157,7 @@ class Category(Base):
     categorization_rules = relationship("CategorizationRule", back_populates="category")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="suggested_category")
     budget_limits = relationship("BudgetLimit", back_populates="category")
+    planned_expenses = relationship("PlannedExpense", back_populates="category")
 
     # Indexes and constraints
     __table_args__ = (
@@ -183,6 +186,80 @@ class BudgetLimit(Base):
         Index("idx_budget_limits_user_month", "user_id", "month"),
         Index("idx_budget_limits_category", "category_id"),
         UniqueConstraint("user_id", "month", "category_id", name="budget_limits_user_month_category"),
+    )
+
+
+class PlannedExpense(Base):
+    """Expected irregular expense with recurrence and optional sinking-fund target."""
+    __tablename__ = "planned_expenses"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="EUR")
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="RESTRICT"), nullable=False, index=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    due_date = Column(Date, nullable=False)
+    recurrence_type = Column(String(20), nullable=False)
+    custom_interval_months = Column(Integer, nullable=True)
+    sinking_fund_target_amount = Column(Numeric(15, 2), nullable=False)
+    sinking_fund_start_date = Column(Date, nullable=False, server_default=text("CURRENT_DATE"))
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="planned_expenses")
+    category = relationship("Category", back_populates="planned_expenses")
+    account = relationship("Account", back_populates="planned_expenses")
+    linked_transactions = relationship(
+        "PlannedExpenseTransactionLink",
+        back_populates="planned_expense",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("idx_planned_expenses_user_active_due", "user_id", "is_active", "due_date"),
+        Index("idx_planned_expenses_category", "category_id"),
+        Index("idx_planned_expenses_account", "account_id"),
+        CheckConstraint("amount > 0", name="planned_expenses_amount_positive"),
+        CheckConstraint("sinking_fund_target_amount > 0", name="planned_expenses_sinking_target_positive"),
+        CheckConstraint(
+            "recurrence_type in ('one_off', 'monthly', 'quarterly', 'annual', 'custom')",
+            name="planned_expenses_recurrence_type_check",
+        ),
+        CheckConstraint(
+            "recurrence_type <> 'custom' or custom_interval_months between 1 and 120",
+            name="planned_expenses_custom_interval_check",
+        ),
+    )
+
+
+class PlannedExpenseTransactionLink(Base):
+    """Transaction linked as payment for a planned irregular expense occurrence."""
+    __tablename__ = "planned_expense_transaction_links"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    planned_expense_id = Column(UUID(as_uuid=True), ForeignKey("planned_expenses.id", ondelete="CASCADE"), nullable=False, index=True)
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False, index=True)
+    occurrence_due_date = Column(Date, nullable=False)
+    amount_applied = Column(Numeric(15, 2), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="planned_expense_transaction_links")
+    planned_expense = relationship("PlannedExpense", back_populates="linked_transactions")
+    transaction = relationship("Transaction", back_populates="planned_expense_links")
+
+    __table_args__ = (
+        Index("idx_planned_expense_links_user", "user_id"),
+        Index("idx_planned_expense_links_expense_occurrence", "planned_expense_id", "occurrence_due_date"),
+        Index("idx_planned_expense_links_transaction", "transaction_id"),
+        UniqueConstraint("planned_expense_id", "transaction_id", "occurrence_due_date", name="planned_expense_link_occurrence_unique"),
+        UniqueConstraint("transaction_id", name="planned_expense_link_transaction_unique"),
+        CheckConstraint("amount_applied > 0", name="planned_expense_links_amount_positive"),
     )
 
 
@@ -231,6 +308,7 @@ class Transaction(Base):
     category_system = relationship("Category", foreign_keys=[category_system_id], back_populates="system_transactions")
     recurring_transaction = relationship("RecurringTransaction", back_populates="linked_transactions")
     transaction_link = relationship("TransactionLink", back_populates="transaction", uselist=False)
+    planned_expense_links = relationship("PlannedExpenseTransactionLink", back_populates="transaction")
     csv_import = relationship("CsvImport", back_populates="transactions")
 
     # Indexes and constraints
@@ -746,6 +824,8 @@ class User(Base):
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
     transaction_links = relationship("TransactionLink", back_populates="user", cascade="all, delete-orphan")
+    planned_expenses = relationship("PlannedExpense", back_populates="user", cascade="all, delete-orphan")
+    planned_expense_transaction_links = relationship("PlannedExpenseTransactionLink", back_populates="user", cascade="all, delete-orphan")
     bank_connections = relationship("BankConnection", back_populates="user", cascade="all, delete-orphan")
 
 

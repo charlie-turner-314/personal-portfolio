@@ -19,6 +19,7 @@ import {
   getAssetCategory,
 } from "@/lib/assets/asset-category";
 import { getPortfolio } from "@/lib/api/investments";
+import { getUpcomingPlannedExpenses } from "@/lib/actions/planned-expenses";
 
 async function getUserCurrency(userId: string): Promise<string> {
   const result = await db
@@ -1130,6 +1131,15 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
         })),
       },
       sankeyData: { nodes: [], links: [] },
+      upcomingPlannedExpenses: {
+        currency: "EUR",
+        generatedAt: new Date().toISOString().slice(0, 10),
+        horizons: [
+          { days: 30 as const, total: 0, items: [] },
+          { days: 60 as const, total: 0, items: [] },
+          { days: 90 as const, total: 0, items: [] },
+        ],
+      },
       periodLabel: { title: "30-Day", subtitle: "Last 30 days" },
       horizon: 30,
       referencePeriod: {
@@ -1183,6 +1193,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     spendingByCategory,
     assetsOverview,
     sankeyData,
+    upcomingPlannedExpenses,
   ] = await Promise.all([
     getTotalBalance(normalizedAccountIds),
     getBalanceHistory(startDate, endDate, normalizedAccountIds),
@@ -1194,6 +1205,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     getSpendingByCategory(startDate, endDate, normalizedAccountIds, 5),
     getAssetsOverview(),
     getSankeyData(startDate, endDate, normalizedAccountIds),
+    getUpcomingPlannedExpenses({ days: 90, accountIds: normalizedAccountIds }),
   ]);
 
   // Calculate savings rate (income - expenses = potential savings)
@@ -1307,6 +1319,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     spendingByCategory,
     assetsOverview,
     sankeyData,
+    upcomingPlannedExpenses,
     periodLabel,
     horizon: horizonDays,
     referencePeriod: {

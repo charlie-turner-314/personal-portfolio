@@ -11,6 +11,7 @@ import {
   jsonb,
   index,
   unique,
+  check,
   numeric,
   date,
   time,
@@ -332,6 +333,95 @@ export const budgetLimits = pgTable(
     index("idx_budget_limits_user_month").on(table.userId, table.month),
     index("idx_budget_limits_category").on(table.categoryId),
     unique("budget_limits_user_month_category").on(table.userId, table.month, table.categoryId),
+  ]
+);
+
+export const plannedExpenses = pgTable(
+  "planned_expenses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    amount: decimal("amount", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).default("EUR").notNull(),
+    categoryId: uuid("category_id")
+      .references(() => categories.id, { onDelete: "restrict" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    dueDate: date("due_date").notNull(),
+    recurrenceType: varchar("recurrence_type", { length: 20 }).notNull(),
+    customIntervalMonths: integer("custom_interval_months"),
+    sinkingFundTargetAmount: decimal("sinking_fund_target_amount", {
+      precision: 15,
+      scale: 2,
+    }).notNull(),
+    sinkingFundStartDate: date("sinking_fund_start_date")
+      .default(sql`CURRENT_DATE`)
+      .notNull(),
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_planned_expenses_user_active_due").on(
+      table.userId,
+      table.isActive,
+      table.dueDate
+    ),
+    index("idx_planned_expenses_category").on(table.categoryId),
+    index("idx_planned_expenses_account").on(table.accountId),
+    check("planned_expenses_amount_positive", sql`${table.amount} > 0`),
+    check(
+      "planned_expenses_sinking_target_positive",
+      sql`${table.sinkingFundTargetAmount} > 0`
+    ),
+    check(
+      "planned_expenses_recurrence_type_check",
+      sql`${table.recurrenceType} IN ('one_off', 'monthly', 'quarterly', 'annual', 'custom')`
+    ),
+    check(
+      "planned_expenses_custom_interval_check",
+      sql`${table.recurrenceType} <> 'custom' OR ${table.customIntervalMonths} BETWEEN 1 AND 120`
+    ),
+  ]
+);
+
+export const plannedExpenseTransactionLinks = pgTable(
+  "planned_expense_transaction_links",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    plannedExpenseId: uuid("planned_expense_id")
+      .references(() => plannedExpenses.id, { onDelete: "cascade" })
+      .notNull(),
+    transactionId: uuid("transaction_id")
+      .references(() => transactions.id, { onDelete: "cascade" })
+      .notNull(),
+    occurrenceDueDate: date("occurrence_due_date").notNull(),
+    amountApplied: decimal("amount_applied", { precision: 15, scale: 2 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_planned_expense_links_user").on(table.userId),
+    index("idx_planned_expense_links_expense_occurrence").on(
+      table.plannedExpenseId,
+      table.occurrenceDueDate
+    ),
+    index("idx_planned_expense_links_transaction").on(table.transactionId),
+    unique("planned_expense_link_occurrence_unique").on(
+      table.plannedExpenseId,
+      table.transactionId,
+      table.occurrenceDueDate
+    ),
+    unique("planned_expense_link_transaction_unique").on(table.transactionId),
+    check("planned_expense_links_amount_positive", sql`${table.amountApplied} > 0`),
   ]
 );
 
@@ -816,6 +906,8 @@ export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
   categories: many(categories),
   budgetLimits: many(budgetLimits),
+  plannedExpenses: many(plannedExpenses),
+  plannedExpenseTransactionLinks: many(plannedExpenseTransactionLinks),
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
   csvImports: many(csvImports),
@@ -866,6 +958,7 @@ export const accountsRelations = relations(accounts, ({ one, many }) => ({
   csvImports: many(csvImports),
   balances: many(accountBalances),
   recurringTransactions: many(recurringTransactions),
+  plannedExpenses: many(plannedExpenses),
   owners: many(accountOwners),
 }));
 
@@ -898,6 +991,7 @@ export const categoriesRelations = relations(categories, ({ one, many }) => ({
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
   budgetLimits: many(budgetLimits),
+  plannedExpenses: many(plannedExpenses),
 }));
 
 export const budgetLimitsRelations = relations(budgetLimits, ({ one }) => ({
@@ -911,7 +1005,41 @@ export const budgetLimitsRelations = relations(budgetLimits, ({ one }) => ({
   }),
 }));
 
-export const transactionsRelations = relations(transactions, ({ one }) => ({
+export const plannedExpensesRelations = relations(plannedExpenses, ({ one, many }) => ({
+  user: one(users, {
+    fields: [plannedExpenses.userId],
+    references: [users.id],
+  }),
+  category: one(categories, {
+    fields: [plannedExpenses.categoryId],
+    references: [categories.id],
+  }),
+  account: one(accounts, {
+    fields: [plannedExpenses.accountId],
+    references: [accounts.id],
+  }),
+  linkedTransactions: many(plannedExpenseTransactionLinks),
+}));
+
+export const plannedExpenseTransactionLinksRelations = relations(
+  plannedExpenseTransactionLinks,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [plannedExpenseTransactionLinks.userId],
+      references: [users.id],
+    }),
+    plannedExpense: one(plannedExpenses, {
+      fields: [plannedExpenseTransactionLinks.plannedExpenseId],
+      references: [plannedExpenses.id],
+    }),
+    transaction: one(transactions, {
+      fields: [plannedExpenseTransactionLinks.transactionId],
+      references: [transactions.id],
+    }),
+  })
+);
+
+export const transactionsRelations = relations(transactions, ({ one, many }) => ({
   user: one(users, {
     fields: [transactions.userId],
     references: [users.id],
@@ -939,6 +1067,7 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
     fields: [transactions.id],
     references: [transactionLinks.transactionId],
   }),
+  plannedExpenseLinks: many(plannedExpenseTransactionLinks),
   csvImport: one(csvImports, {
     fields: [transactions.csvImportId],
     references: [csvImports.id],
@@ -1167,6 +1296,14 @@ export type NewCategory = typeof categories.$inferInsert;
 
 export type BudgetLimit = typeof budgetLimits.$inferSelect;
 export type NewBudgetLimit = typeof budgetLimits.$inferInsert;
+
+export type PlannedExpense = typeof plannedExpenses.$inferSelect;
+export type NewPlannedExpense = typeof plannedExpenses.$inferInsert;
+
+export type PlannedExpenseTransactionLink =
+  typeof plannedExpenseTransactionLinks.$inferSelect;
+export type NewPlannedExpenseTransactionLink =
+  typeof plannedExpenseTransactionLinks.$inferInsert;
 
 export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;

@@ -8,6 +8,7 @@ import { AssetsOverviewCard } from "@/components/assets";
 import { PortfolioSummaryCard } from "@/components/investments/PortfolioSummaryCard";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
 import { SearchButton } from "@/components/dashboard/search-button";
+import { UpcomingPlannedExpensesCard } from "@/components/dashboard/upcoming-planned-expenses-card";
 import {
   getDashboardData,
   getUserAccounts,
@@ -175,12 +176,17 @@ async function DashboardContent({
           </div>
         </div>
 
-        {/* Row 4: Assets Overview */}
+        {/* Row 4: Upcoming Irregular Expenses */}
+        <div className="grid gap-4">
+          <UpcomingPlannedExpensesCard data={data.upcomingPlannedExpenses} />
+        </div>
+
+        {/* Row 5: Assets Overview */}
         <div className="grid gap-4">
           <AssetsOverviewCard data={data.assetsOverview} />
         </div>
 
-        {/* Row 5: Investments Summary */}
+        {/* Row 6: Investments Summary */}
         <div className="grid gap-4">
           <PortfolioSummaryCard />
         </div>

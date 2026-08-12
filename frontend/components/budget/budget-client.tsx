@@ -3,13 +3,17 @@
 import { Fragment, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  RiAddLine,
   RiArrowDownSLine,
   RiArrowGoBackLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
+  RiDeleteBinLine,
+  RiEditLine,
   RiExternalLinkLine,
   RiFileCopyLine,
   RiInformationLine,
+  RiLink,
   RiSaveLine,
 } from "@remixicon/react";
 import { toast } from "sonner";
@@ -37,11 +41,26 @@ import {
   saveBudgetLines,
   type BudgetData,
 } from "@/lib/actions/budget";
+import {
+  createPlannedExpense,
+  deletePlannedExpense,
+  findTransactionsForPlannedExpense,
+  linkTransactionToPlannedExpense,
+  updatePlannedExpense,
+  type BudgetPlannedExpenseSummary,
+  type PlannedExpenseFormOptions,
+  type PlannedExpenseInput,
+  type PlannedExpenseListItem,
+  type PlannedExpenseRecurrence,
+  type PlannedExpenseTransactionCandidate,
+} from "@/lib/actions/planned-expenses";
 import { cn } from "@/lib/utils";
 
 interface BudgetClientProps {
   data: BudgetData;
   accounts: BudgetAccount[];
+  plannedExpenses: BudgetPlannedExpenseSummary;
+  plannedExpenseOptions: PlannedExpenseFormOptions;
 }
 
 interface BudgetAccount {
@@ -56,6 +75,19 @@ type EditableLine = BudgetData["lines"][number] & {
   notesInput: string;
 };
 type BudgetInsight = NonNullable<BudgetData["lines"][number]["insight"]>;
+type PlannedExpenseFormState = {
+  id: string | null;
+  name: string;
+  amount: string;
+  categoryId: string;
+  accountId: string;
+  dueDate: string;
+  recurrenceType: PlannedExpenseRecurrence;
+  customIntervalMonths: string;
+  sinkingFundTargetAmount: string;
+  sinkingFundStartDate: string;
+  notes: string;
+};
 
 function formatCurrency(value: number, currency: string): string {
   return new Intl.NumberFormat(undefined, {
@@ -97,6 +129,79 @@ function amountToInput(value: number): string {
   }
 
   return String(Math.round(value * 100) / 100);
+}
+
+function todayDateKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function defaultPlannedExpenseForm(
+  options: PlannedExpenseFormOptions
+): PlannedExpenseFormState {
+  return {
+    id: null,
+    name: "",
+    amount: "",
+    categoryId: options.categories[0]?.id ?? "",
+    accountId: options.accounts[0]?.id ?? "",
+    dueDate: todayDateKey(),
+    recurrenceType: "annual",
+    customIntervalMonths: "",
+    sinkingFundTargetAmount: "",
+    sinkingFundStartDate: todayDateKey(),
+    notes: "",
+  };
+}
+
+function plannedExpenseToForm(item: PlannedExpenseListItem): PlannedExpenseFormState {
+  return {
+    id: item.id,
+    name: item.name,
+    amount: amountToInput(item.amount),
+    categoryId: item.categoryId,
+    accountId: item.accountId,
+    dueDate: item.dueDate,
+    recurrenceType: item.recurrenceType,
+    customIntervalMonths: item.customIntervalMonths
+      ? String(item.customIntervalMonths)
+      : "",
+    sinkingFundTargetAmount: amountToInput(item.sinkingFundTargetAmount),
+    sinkingFundStartDate: item.sinkingFundStartDate,
+    notes: item.notes ?? "",
+  };
+}
+
+function recurrenceLabel(
+  recurrenceType: PlannedExpenseRecurrence,
+  customIntervalMonths: number | null
+): string {
+  if (recurrenceType === "one_off") return "One-off";
+  if (recurrenceType === "monthly") return "Monthly";
+  if (recurrenceType === "quarterly") return "Quarterly";
+  if (recurrenceType === "annual") return "Annual";
+  return customIntervalMonths ? `Every ${customIntervalMonths} months` : "Custom";
+}
+
+function formToPlannedExpenseInput(
+  form: PlannedExpenseFormState
+): PlannedExpenseInput {
+  return {
+    name: form.name,
+    amount: parseAmount(form.amount),
+    categoryId: form.categoryId,
+    accountId: form.accountId,
+    dueDate: form.dueDate,
+    recurrenceType: form.recurrenceType,
+    customIntervalMonths:
+      form.recurrenceType === "custom" ? Number(form.customIntervalMonths) : null,
+    sinkingFundTargetAmount:
+      form.sinkingFundTargetAmount.trim() === ""
+        ? parseAmount(form.amount)
+        : parseAmount(form.sinkingFundTargetAmount),
+    sinkingFundStartDate: form.sinkingFundStartDate,
+    notes: form.notes,
+    isActive: true,
+  };
 }
 
 function driverLabel(driverType: BudgetInsight["driverType"]): string {
@@ -239,15 +344,34 @@ function toEditableLines(data: BudgetData): EditableLine[] {
   }));
 }
 
-export function BudgetClient({ data, accounts }: BudgetClientProps) {
+export function BudgetClient({
+  data,
+  accounts,
+  plannedExpenses,
+  plannedExpenseOptions,
+}: BudgetClientProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [lines, setLines] = useState<EditableLine[]>(() => toEditableLines(data));
+  const [plannedExpenseForm, setPlannedExpenseForm] =
+    useState<PlannedExpenseFormState>(() =>
+      defaultPlannedExpenseForm(plannedExpenseOptions)
+    );
+  const [candidateExpenseId, setCandidateExpenseId] = useState<string | null>(null);
+  const [transactionCandidates, setTransactionCandidates] = useState<
+    PlannedExpenseTransactionCandidate[]
+  >([]);
 
   useEffect(() => {
     setLines(toEditableLines(data));
   }, [data]);
+
+  useEffect(() => {
+    setPlannedExpenseForm((current) =>
+      current.id ? current : defaultPlannedExpenseForm(plannedExpenseOptions)
+    );
+  }, [plannedExpenseOptions]);
 
   const totals = useMemo(() => {
     const plannedAmount = lines.reduce(
@@ -389,6 +513,89 @@ export function BudgetClient({ data, accounts }: BudgetClientProps) {
           : line
       )
     );
+  };
+
+  const resetPlannedExpenseForm = () => {
+    setPlannedExpenseForm(defaultPlannedExpenseForm(plannedExpenseOptions));
+  };
+
+  const editPlannedExpense = (item: PlannedExpenseListItem) => {
+    setPlannedExpenseForm(plannedExpenseToForm(item));
+  };
+
+  const handleSavePlannedExpense = () => {
+    startTransition(async () => {
+      const payload = formToPlannedExpenseInput(plannedExpenseForm);
+      const result = plannedExpenseForm.id
+        ? await updatePlannedExpense(plannedExpenseForm.id, payload)
+        : await createPlannedExpense(payload);
+
+      if (result.success) {
+        toast.success(
+          plannedExpenseForm.id ? "Irregular expense updated" : "Irregular expense added"
+        );
+        resetPlannedExpenseForm();
+        router.refresh();
+      } else {
+        toast.error(result.error || "Failed to save irregular expense");
+      }
+    });
+  };
+
+  const handleDeletePlannedExpense = (item: PlannedExpenseListItem) => {
+    if (!window.confirm(`Delete ${item.name}? Linked payments will be removed.`)) {
+      return;
+    }
+
+    startTransition(async () => {
+      const result = await deletePlannedExpense(item.id);
+      if (result.success) {
+        toast.success("Irregular expense deleted");
+        router.refresh();
+      } else {
+        toast.error(result.error || "Failed to delete irregular expense");
+      }
+    });
+  };
+
+  const handleFindTransactions = (item: PlannedExpenseListItem) => {
+    if (candidateExpenseId === item.id) {
+      setCandidateExpenseId(null);
+      setTransactionCandidates([]);
+      return;
+    }
+
+    startTransition(async () => {
+      const candidates = await findTransactionsForPlannedExpense(
+        item.id,
+        item.nextDueDate ?? item.dueDate
+      );
+      setCandidateExpenseId(item.id);
+      setTransactionCandidates(candidates);
+    });
+  };
+
+  const handleLinkTransaction = (
+    item: PlannedExpenseListItem,
+    transactionId: string
+  ) => {
+    startTransition(async () => {
+      const result = await linkTransactionToPlannedExpense({
+        plannedExpenseId: item.id,
+        transactionId,
+        occurrenceDueDate: item.nextDueDate ?? item.dueDate,
+      });
+
+      if (result.success) {
+        toast.success("Payment linked");
+        setTransactionCandidates((current) =>
+          current.filter((candidate) => candidate.id !== transactionId)
+        );
+        router.refresh();
+      } else {
+        toast.error(result.error || "Failed to link payment");
+      }
+    });
   };
 
   return (
@@ -809,6 +1016,339 @@ export function BudgetClient({ data, accounts }: BudgetClientProps) {
                 </Table>
               </div>
             </>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Lumpy Provision</CardTitle>
+          </CardHeader>
+          <CardContent className="text-lg font-medium tabular-nums">
+            {formatCurrency(plannedExpenses.totals.monthlyProvision, data.currency)}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Lumpy Paid</CardTitle>
+          </CardHeader>
+          <CardContent className="text-lg font-medium tabular-nums">
+            {formatCurrency(plannedExpenses.totals.actualPaidThisMonth, data.currency)}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Due This Month</CardTitle>
+          </CardHeader>
+          <CardContent className="text-lg font-medium tabular-nums">
+            {formatCurrency(plannedExpenses.totals.upcomingAmountThisMonth, data.currency)}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Active Items</CardTitle>
+          </CardHeader>
+          <CardContent className="text-lg font-medium tabular-nums">
+            {plannedExpenses.totals.activeCount}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Irregular Expenses</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 border p-3 md:grid-cols-6">
+            <Input
+              value={plannedExpenseForm.name}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  name: event.target.value,
+                }))
+              }
+              placeholder="Name"
+              aria-label="Irregular expense name"
+            />
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={plannedExpenseForm.amount}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  amount: event.target.value,
+                }))
+              }
+              placeholder="Amount"
+              aria-label="Irregular expense amount"
+            />
+            <select
+              value={plannedExpenseForm.categoryId}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  categoryId: event.target.value,
+                }))
+              }
+              className="h-8 border border-input bg-background px-2 text-xs"
+              aria-label="Irregular expense category"
+            >
+              {plannedExpenseOptions.categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={plannedExpenseForm.accountId}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  accountId: event.target.value,
+                }))
+              }
+              className="h-8 border border-input bg-background px-2 text-xs"
+              aria-label="Irregular expense account"
+            >
+              {plannedExpenseOptions.accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                </option>
+              ))}
+            </select>
+            <Input
+              type="date"
+              value={plannedExpenseForm.dueDate}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  dueDate: event.target.value,
+                }))
+              }
+              aria-label="Irregular expense due date"
+            />
+            <select
+              value={plannedExpenseForm.recurrenceType}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  recurrenceType: event.target.value as PlannedExpenseRecurrence,
+                }))
+              }
+              className="h-8 border border-input bg-background px-2 text-xs"
+              aria-label="Irregular expense recurrence"
+            >
+              <option value="one_off">One-off</option>
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly</option>
+              <option value="annual">Annual</option>
+              <option value="custom">Custom</option>
+            </select>
+            {plannedExpenseForm.recurrenceType === "custom" && (
+              <Input
+                type="number"
+                min="1"
+                max="120"
+                value={plannedExpenseForm.customIntervalMonths}
+                onChange={(event) =>
+                  setPlannedExpenseForm((current) => ({
+                    ...current,
+                    customIntervalMonths: event.target.value,
+                  }))
+                }
+                placeholder="Months"
+                aria-label="Custom recurrence interval months"
+              />
+            )}
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={plannedExpenseForm.sinkingFundTargetAmount}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  sinkingFundTargetAmount: event.target.value,
+                }))
+              }
+              placeholder="Target"
+              aria-label="Sinking fund target"
+            />
+            <Input
+              type="date"
+              value={plannedExpenseForm.sinkingFundStartDate}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  sinkingFundStartDate: event.target.value,
+                }))
+              }
+              aria-label="Sinking fund start date"
+            />
+            <Input
+              value={plannedExpenseForm.notes}
+              onChange={(event) =>
+                setPlannedExpenseForm((current) => ({
+                  ...current,
+                  notes: event.target.value,
+                }))
+              }
+              placeholder="Notes"
+              aria-label="Irregular expense notes"
+              className="md:col-span-2"
+            />
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                onClick={handleSavePlannedExpense}
+                disabled={
+                  isPending ||
+                  plannedExpenseOptions.categories.length === 0 ||
+                  plannedExpenseOptions.accounts.length === 0
+                }
+              >
+                {plannedExpenseForm.id ? <RiSaveLine /> : <RiAddLine />}
+                {plannedExpenseForm.id ? "Update" : "Add"}
+              </Button>
+              {plannedExpenseForm.id && (
+                <Button type="button" variant="outline" onClick={resetPlannedExpenseForm}>
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {plannedExpenses.items.length === 0 ? (
+            <div className="border border-dashed p-8 text-center text-xs text-muted-foreground">
+              Add annual bills, insurance, repairs, holidays, or other irregular costs.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table className="min-w-[1040px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Account</TableHead>
+                    <TableHead>Next Due</TableHead>
+                    <TableHead>Recurrence</TableHead>
+                    <TableHead className="text-right">Provision</TableHead>
+                    <TableHead className="text-right">Paid</TableHead>
+                    <TableHead className="text-right">Due</TableHead>
+                    <TableHead className="w-56">Link Payment</TableHead>
+                    <TableHead className="w-24 text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {plannedExpenses.items.map((item) => (
+                    <Fragment key={item.id}>
+                      <TableRow>
+                        <TableCell className="font-medium">{item.name}</TableCell>
+                        <TableCell>{item.categoryName}</TableCell>
+                        <TableCell>{item.accountName}</TableCell>
+                        <TableCell className="tabular-nums">
+                          {item.nextDueDate ?? item.dueDate}
+                        </TableCell>
+                        <TableCell>
+                          {recurrenceLabel(item.recurrenceType, item.customIntervalMonths)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(item.monthlyProvision, data.currency)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(item.actualPaidThisMonth, data.currency)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(item.upcomingAmountThisMonth, data.currency)}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleFindTransactions(item)}
+                            disabled={isPending}
+                          >
+                            <RiLink />
+                            {candidateExpenseId === item.id ? "Hide" : "Find"}
+                          </Button>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon-sm"
+                              aria-label={`Edit ${item.name}`}
+                              onClick={() => editPlannedExpense(item)}
+                            >
+                              <RiEditLine />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon-sm"
+                              aria-label={`Delete ${item.name}`}
+                              onClick={() => handleDeletePlannedExpense(item)}
+                            >
+                              <RiDeleteBinLine />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {candidateExpenseId === item.id && (
+                        <TableRow>
+                          <TableCell colSpan={10} className="bg-muted/20">
+                            {transactionCandidates.length === 0 ? (
+                              <div className="border border-dashed bg-background p-4 text-xs text-muted-foreground">
+                                No unmatched debit transactions found within 30 days of the due date.
+                              </div>
+                            ) : (
+                              <div className="grid gap-2 md:grid-cols-2">
+                                {transactionCandidates.map((candidate) => (
+                                  <div
+                                    key={candidate.id}
+                                    className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border bg-background p-2"
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="truncate text-xs font-medium">
+                                        {candidate.merchant ||
+                                          candidate.description ||
+                                          "Transaction"}
+                                      </p>
+                                      <p className="truncate text-xs text-muted-foreground">
+                                        {candidate.bookedAt} ·{" "}
+                                        {formatCurrency(candidate.amount, data.currency)}
+                                      </p>
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() =>
+                                        handleLinkTransaction(item, candidate.id)
+                                      }
+                                      disabled={isPending}
+                                    >
+                                      <RiLink />
+                                      Link
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

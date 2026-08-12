@@ -4,6 +4,10 @@ import { BudgetClient } from "@/components/budget/budget-client";
 import { CardGridSkeleton, TableSkeleton } from "@/components/skeletons/page-skeletons";
 import { getBudgetData } from "@/lib/actions/budget";
 import { getUserAccounts } from "@/lib/actions/transactions";
+import {
+  getBudgetPlannedExpenseSummary,
+  getPlannedExpenseFormOptions,
+} from "@/lib/actions/planned-expenses";
 
 interface BudgetPageProps {
   searchParams: Promise<{
@@ -57,10 +61,19 @@ async function BudgetSection({
   month?: string;
   accountIds: string[];
 }) {
-  const [data, accounts] = await Promise.all([
+  const [data, accounts, plannedExpenses, plannedExpenseOptions] = await Promise.all([
     getBudgetData(month, { accountIds }),
     getUserAccounts(),
+    getBudgetPlannedExpenseSummary(month, { accountIds }),
+    getPlannedExpenseFormOptions(),
   ]);
 
-  return <BudgetClient data={data} accounts={accounts} />;
+  return (
+    <BudgetClient
+      data={data}
+      accounts={accounts}
+      plannedExpenses={plannedExpenses}
+      plannedExpenseOptions={plannedExpenseOptions}
+    />
+  );
 }
