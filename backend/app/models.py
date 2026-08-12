@@ -74,6 +74,7 @@ class Account(Base):
     recurring_transactions = relationship("RecurringTransaction", back_populates="account")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="account")
     planned_expenses = relationship("PlannedExpense", back_populates="account")
+    cashflow_overrides = relationship("CashflowOverride", back_populates="account")
 
     # Indexes and constraints
     __table_args__ = (
@@ -158,6 +159,7 @@ class Category(Base):
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="suggested_category")
     budget_limits = relationship("BudgetLimit", back_populates="category")
     planned_expenses = relationship("PlannedExpense", back_populates="category")
+    cashflow_overrides = relationship("CashflowOverride", back_populates="category")
 
     # Indexes and constraints
     __table_args__ = (
@@ -260,6 +262,64 @@ class PlannedExpenseTransactionLink(Base):
         UniqueConstraint("planned_expense_id", "transaction_id", "occurrence_due_date", name="planned_expense_link_occurrence_unique"),
         UniqueConstraint("transaction_id", name="planned_expense_link_transaction_unique"),
         CheckConstraint("amount_applied > 0", name="planned_expense_links_amount_positive"),
+    )
+
+
+class CashflowOverride(Base):
+    """Manual expected cashflow entry used by the forecast."""
+    __tablename__ = "cashflow_overrides"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True)
+    expected_date = Column(Date, nullable=False)
+    direction = Column(String(20), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    description = Column(String(255), nullable=False)
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="cashflow_overrides")
+    account = relationship("Account", back_populates="cashflow_overrides")
+    category = relationship("Category", back_populates="cashflow_overrides")
+
+    __table_args__ = (
+        Index("idx_cashflow_overrides_user_date", "user_id", "expected_date"),
+        Index("idx_cashflow_overrides_account", "account_id"),
+        Index("idx_cashflow_overrides_category", "category_id"),
+        CheckConstraint(
+            "direction in ('income', 'expense', 'transfer_in', 'transfer_out')",
+            name="cashflow_overrides_direction_check",
+        ),
+        CheckConstraint("amount > 0", name="cashflow_overrides_amount_positive"),
+    )
+
+
+class RecurringTransactionScheduleOverride(Base):
+    """User-controlled anchor and direction for forecasting a recurring item."""
+    __tablename__ = "recurring_transaction_schedule_overrides"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    recurring_transaction_id = Column(UUID(as_uuid=True), ForeignKey("recurring_transactions.id", ondelete="CASCADE"), nullable=False)
+    anchor_date = Column(Date, nullable=False)
+    direction = Column(String(10), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="recurring_transaction_schedule_overrides")
+    recurring_transaction = relationship("RecurringTransaction", back_populates="schedule_override")
+
+    __table_args__ = (
+        Index("idx_recurring_schedule_overrides_user", "user_id"),
+        UniqueConstraint("recurring_transaction_id", name="recurring_schedule_overrides_recurring_unique"),
+        CheckConstraint(
+            "direction in ('inflow', 'outflow')",
+            name="recurring_schedule_overrides_direction_check",
+        ),
     )
 
 
@@ -451,6 +511,12 @@ class RecurringTransaction(Base):
     category = relationship("Category")
     logo = relationship("CompanyLogo", back_populates="recurring_transactions")
     linked_transactions = relationship("Transaction", back_populates="recurring_transaction")
+    schedule_override = relationship(
+        "RecurringTransactionScheduleOverride",
+        back_populates="recurring_transaction",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     # Indexes and constraints
     __table_args__ = (
@@ -826,6 +892,8 @@ class User(Base):
     transaction_links = relationship("TransactionLink", back_populates="user", cascade="all, delete-orphan")
     planned_expenses = relationship("PlannedExpense", back_populates="user", cascade="all, delete-orphan")
     planned_expense_transaction_links = relationship("PlannedExpenseTransactionLink", back_populates="user", cascade="all, delete-orphan")
+    cashflow_overrides = relationship("CashflowOverride", back_populates="user", cascade="all, delete-orphan")
+    recurring_transaction_schedule_overrides = relationship("RecurringTransactionScheduleOverride", back_populates="user", cascade="all, delete-orphan")
     bank_connections = relationship("BankConnection", back_populates="user", cascade="all, delete-orphan")
 
 

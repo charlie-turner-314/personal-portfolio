@@ -12,6 +12,8 @@ import {
   RiMoonLine,
   RiSunLine,
   RiWallet3Line,
+  RiPieChartLine,
+  RiFundsLine,
   RiDownloadLine,
   RiUploadLine,
   RiRefreshLine,
@@ -148,6 +150,10 @@ export function CommandPalette() {
         case "a":
           e.preventDefault();
           router.push("/assets");
+          break;
+        case "c":
+          e.preventDefault();
+          router.push("/cashflow");
           break;
         case "s":
           e.preventDefault();
@@ -317,6 +323,8 @@ export function CommandPalette() {
     { label: "Dashboard", path: "/", icon: RiHomeLine, shortcut: "B" },
     { label: "Transactions", path: "/transactions", icon: RiExchangeLine, shortcut: "T" },
     { label: "Subscriptions", path: "/subscriptions", icon: RiLoopRightLine, shortcut: "S" },
+    { label: "Budget", path: "/budget", icon: RiPieChartLine },
+    { label: "Cashflow", path: "/cashflow", icon: RiFundsLine, shortcut: "C" },
     { label: "Assets", path: "/assets", icon: RiWallet3Line, shortcut: "A" },
     { label: "Settings", path: "/settings", icon: RiSettings3Line, shortcut: "D" },
   ];

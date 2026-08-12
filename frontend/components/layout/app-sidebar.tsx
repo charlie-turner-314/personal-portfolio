@@ -14,6 +14,7 @@ import {
   RiLineChartLine,
   RiFileTextLine,
   RiPieChartLine,
+  RiFundsLine,
   RiArrowRightSLine,
   RiArrowLeftSLine,
 } from "@remixicon/react";
@@ -74,6 +75,11 @@ const navItems = [
     title: "Budget",
     href: "/budget",
     icon: RiPieChartLine,
+  },
+  {
+    title: "Cashflow",
+    href: "/cashflow",
+    icon: RiFundsLine,
   },
   {
     title: "Investments",

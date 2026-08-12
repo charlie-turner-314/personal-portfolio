@@ -425,6 +425,67 @@ export const plannedExpenseTransactionLinks = pgTable(
   ]
 );
 
+export const cashflowOverrides = pgTable(
+  "cashflow_overrides",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    categoryId: uuid("category_id").references(() => categories.id, {
+      onDelete: "set null",
+    }),
+    expectedDate: date("expected_date").notNull(),
+    direction: varchar("direction", { length: 20 }).notNull(),
+    amount: decimal("amount", { precision: 15, scale: 2 }).notNull(),
+    description: varchar("description", { length: 255 }).notNull(),
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_cashflow_overrides_user_date").on(table.userId, table.expectedDate),
+    index("idx_cashflow_overrides_account").on(table.accountId),
+    index("idx_cashflow_overrides_category").on(table.categoryId),
+    check(
+      "cashflow_overrides_direction_check",
+      sql`${table.direction} IN ('income', 'expense', 'transfer_in', 'transfer_out')`
+    ),
+    check("cashflow_overrides_amount_positive", sql`${table.amount} > 0`),
+  ]
+);
+
+export const recurringTransactionScheduleOverrides = pgTable(
+  "recurring_transaction_schedule_overrides",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    recurringTransactionId: uuid("recurring_transaction_id")
+      .references(() => recurringTransactions.id, { onDelete: "cascade" })
+      .notNull(),
+    anchorDate: date("anchor_date").notNull(),
+    direction: varchar("direction", { length: 10 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_recurring_schedule_overrides_user").on(table.userId),
+    unique("recurring_schedule_overrides_recurring_unique").on(
+      table.recurringTransactionId
+    ),
+    check(
+      "recurring_schedule_overrides_direction_check",
+      sql`${table.direction} IN ('inflow', 'outflow')`
+    ),
+  ]
+);
+
 export const csvImports = pgTable(
   "csv_imports",
   {
@@ -908,6 +969,8 @@ export const usersRelations = relations(users, ({ many }) => ({
   budgetLimits: many(budgetLimits),
   plannedExpenses: many(plannedExpenses),
   plannedExpenseTransactionLinks: many(plannedExpenseTransactionLinks),
+  cashflowOverrides: many(cashflowOverrides),
+  recurringTransactionScheduleOverrides: many(recurringTransactionScheduleOverrides),
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
   csvImports: many(csvImports),
@@ -959,6 +1022,7 @@ export const accountsRelations = relations(accounts, ({ one, many }) => ({
   balances: many(accountBalances),
   recurringTransactions: many(recurringTransactions),
   plannedExpenses: many(plannedExpenses),
+  cashflowOverrides: many(cashflowOverrides),
   owners: many(accountOwners),
 }));
 
@@ -992,6 +1056,7 @@ export const categoriesRelations = relations(categories, ({ one, many }) => ({
   categorizationRules: many(categorizationRules),
   budgetLimits: many(budgetLimits),
   plannedExpenses: many(plannedExpenses),
+  cashflowOverrides: many(cashflowOverrides),
 }));
 
 export const budgetLimitsRelations = relations(budgetLimits, ({ one }) => ({
@@ -1035,6 +1100,35 @@ export const plannedExpenseTransactionLinksRelations = relations(
     transaction: one(transactions, {
       fields: [plannedExpenseTransactionLinks.transactionId],
       references: [transactions.id],
+    }),
+  })
+);
+
+export const cashflowOverridesRelations = relations(cashflowOverrides, ({ one }) => ({
+  user: one(users, {
+    fields: [cashflowOverrides.userId],
+    references: [users.id],
+  }),
+  account: one(accounts, {
+    fields: [cashflowOverrides.accountId],
+    references: [accounts.id],
+  }),
+  category: one(categories, {
+    fields: [cashflowOverrides.categoryId],
+    references: [categories.id],
+  }),
+}));
+
+export const recurringTransactionScheduleOverridesRelations = relations(
+  recurringTransactionScheduleOverrides,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [recurringTransactionScheduleOverrides.userId],
+      references: [users.id],
+    }),
+    recurringTransaction: one(recurringTransactions, {
+      fields: [recurringTransactionScheduleOverrides.recurringTransactionId],
+      references: [recurringTransactions.id],
     }),
   })
 );
@@ -1123,6 +1217,7 @@ export const recurringTransactionsRelations = relations(recurringTransactions, (
     references: [companyLogos.id],
   }),
   linkedTransactions: many(transactions),
+  scheduleOverride: many(recurringTransactionScheduleOverrides),
 }));
 
 export const categorizationRulesRelations = relations(categorizationRules, ({ one }) => ({
@@ -1304,6 +1399,14 @@ export type PlannedExpenseTransactionLink =
   typeof plannedExpenseTransactionLinks.$inferSelect;
 export type NewPlannedExpenseTransactionLink =
   typeof plannedExpenseTransactionLinks.$inferInsert;
+
+export type CashflowOverride = typeof cashflowOverrides.$inferSelect;
+export type NewCashflowOverride = typeof cashflowOverrides.$inferInsert;
+
+export type RecurringTransactionScheduleOverride =
+  typeof recurringTransactionScheduleOverrides.$inferSelect;
+export type NewRecurringTransactionScheduleOverride =
+  typeof recurringTransactionScheduleOverrides.$inferInsert;
 
 export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;
