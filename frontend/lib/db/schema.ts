@@ -228,6 +228,11 @@ export const accounts = pgTable(
     startingBalance: decimal("starting_balance", { precision: 15, scale: 2 }).default("0"), // Starting balance for calculation
     functionalBalance: decimal("functional_balance", { precision: 15, scale: 2 }), // Calculated balance (sum of transactions + starting_balance)
     balanceIsAnchored: boolean("balance_is_anchored").default(false), // True when startingBalance is derived from known bank data (CSV with verified opening/closing balance)
+    liabilityInterestRate: decimal("liability_interest_rate", { precision: 7, scale: 4 }),
+    liabilityRepaymentAmount: decimal("liability_repayment_amount", { precision: 15, scale: 2 }),
+    liabilityRepaymentFrequency: varchar("liability_repayment_frequency", { length: 20 }),
+    liabilityLoanTermMonths: integer("liability_loan_term_months"),
+    liabilitySecured: boolean("liability_secured"),
     isActive: boolean("is_active").default(true),
     aliasPatterns: jsonb("alias_patterns").$type<string[]>().default([]).notNull(),
     lastSyncedAt: timestamp("last_synced_at"),

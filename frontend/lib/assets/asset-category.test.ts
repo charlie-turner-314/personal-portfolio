@@ -34,6 +34,13 @@ describe("getAssetCategory", () => {
     expect(getAssetCategory("credit_card")).toBe("other");
   });
 
+  it("maps liability account types to other for gross asset grouping", () => {
+    expect(getAssetCategory("mortgage")).toBe("other");
+    expect(getAssetCategory("personal_loan")).toBe("other");
+    expect(getAssetCategory("hecs_help")).toBe("other");
+    expect(getAssetCategory("other_liability")).toBe("other");
+  });
+
   it("maps cash to cash", () => {
     expect(getAssetCategory("cash")).toBe("cash");
   });

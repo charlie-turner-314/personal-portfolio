@@ -53,6 +53,11 @@ class Account(Base):
     starting_balance = Column(Numeric(15, 2), default=Decimal("0"))  # Starting balance for calculation
     functional_balance = Column(Numeric(15, 2), nullable=True)  # Calculated balance (sum of transactions + starting_balance)
     balance_is_anchored = Column(Boolean, default=False)  # True when starting_balance is from verified bank data
+    liability_interest_rate = Column(Numeric(7, 4), nullable=True)
+    liability_repayment_amount = Column(Numeric(15, 2), nullable=True)
+    liability_repayment_frequency = Column(String(20), nullable=True)
+    liability_loan_term_months = Column(Integer, nullable=True)
+    liability_secured = Column(Boolean, nullable=True)
     is_active = Column(Boolean, default=True)
     alias_patterns = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     last_synced_at = Column(DateTime, nullable=True)

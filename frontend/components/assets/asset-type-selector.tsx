@@ -27,7 +27,7 @@ const ASSET_TYPE_OPTIONS: AssetTypeOption[] = [
   {
     type: "account",
     label: "Account",
-    description: "Add a bank account or cash",
+    description: "Add a bank account, cash, loan, or liability",
     icon: RiBankLine,
   },
 ];

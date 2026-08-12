@@ -28,6 +28,7 @@ def seeded_household(db_session):
       - self_overdraft: owned by self, balance -50, type=checking
       - self_card: owned by self, balance 300, type=credit_card
       - joint_loan: owned by both with explicit 25/75 share, balance 400, type=loan
+      - self_hecs: owned by self, balance 1200, type=hecs_help
 
     Yields (user_id, self_id, partner_id, {account_name: uuid}).
     Cleans up on teardown.
@@ -113,6 +114,17 @@ def seeded_household(db_session):
         starting_balance=Decimal("0"),
         functional_balance=Decimal("400"),
     )
+    self_hecs = Account(
+        user_id=user_id,
+        name="Self HECS",
+        account_type="hecs_help",
+        institution="ATO",
+        currency="EUR",
+        provider="manual",
+        is_active=True,
+        starting_balance=Decimal("0"),
+        functional_balance=Decimal("1200"),
+    )
     accounts_to_seed = (
         self_account,
         partner_account,
@@ -120,6 +132,7 @@ def seeded_household(db_session):
         self_overdraft,
         self_card,
         joint_loan,
+        self_hecs,
     )
     for acct in accounts_to_seed:
         db_session.add(acct)
@@ -131,6 +144,7 @@ def seeded_household(db_session):
     self_overdraft_id = str(self_overdraft.id)
     self_card_id = str(self_card.id)
     joint_loan_id = str(joint_loan.id)
+    self_hecs_id = str(self_hecs.id)
 
     # Ownership rows
     db_session.add(AccountOwner(account_id=self_account.id, person_id=self_person.id, share=None))
@@ -142,6 +156,7 @@ def seeded_household(db_session):
     db_session.add(AccountOwner(account_id=self_card.id, person_id=self_person.id, share=None))
     db_session.add(AccountOwner(account_id=joint_loan.id, person_id=self_person.id, share=Decimal("0.25")))
     db_session.add(AccountOwner(account_id=joint_loan.id, person_id=partner_person.id, share=Decimal("0.75")))
+    db_session.add(AccountOwner(account_id=self_hecs.id, person_id=self_person.id, share=None))
 
     db_session.commit()
 
@@ -157,6 +172,7 @@ def seeded_household(db_session):
                 "self_overdraft": self_overdraft_id,
                 "self_card": self_card_id,
                 "joint_loan": joint_loan_id,
+                "self_hecs": self_hecs_id,
             },
         )
     finally:
@@ -207,10 +223,10 @@ def test_household_summary_separates_liabilities_from_cash(seeded_household):
 
     assert by_person[self_id]["cash"] == pytest.approx(600.0)
     assert by_person[self_id]["gross_assets"] == pytest.approx(600.0)
-    # self liabilities: 50 overdraft + 300 credit card + 100 share of joint loan
-    assert by_person[self_id]["total_liabilities"] == pytest.approx(450.0)
-    assert by_person[self_id]["net_worth"] == pytest.approx(150.0)
-    assert by_person[self_id]["total"] == pytest.approx(150.0)
+    # self liabilities: 50 overdraft + 300 card + 100 loan share + 1200 HECS
+    assert by_person[self_id]["total_liabilities"] == pytest.approx(1650.0)
+    assert by_person[self_id]["net_worth"] == pytest.approx(-1050.0)
+    assert by_person[self_id]["total"] == pytest.approx(-1050.0)
 
     assert by_person[partner_id]["cash"] == pytest.approx(700.0)
     assert by_person[partner_id]["gross_assets"] == pytest.approx(700.0)
@@ -225,7 +241,7 @@ def test_household_summary_filter_by_person_ids(seeded_household):
     summary = get_household_summary(user_id=user_id, person_ids=[self_id])
     assert len(summary["people"]) == 1
     assert summary["people"][0]["person_id"] == self_id
-    assert summary["people"][0]["total_liabilities"] == pytest.approx(450.0)
+    assert summary["people"][0]["total_liabilities"] == pytest.approx(1650.0)
 
 
 def test_financial_summary_reports_account_net_worth_for_person(seeded_household):
@@ -233,6 +249,6 @@ def test_financial_summary_reports_account_net_worth_for_person(seeded_household
     summary = get_financial_summary(user_id=user_id, person_ids=[self_id])
 
     assert summary["gross_assets"] == pytest.approx(600.0)
-    assert summary["total_liabilities"] == pytest.approx(450.0)
-    assert summary["net_worth"] == pytest.approx(150.0)
-    assert summary["total_balance"] == pytest.approx(950.0)
+    assert summary["total_liabilities"] == pytest.approx(1650.0)
+    assert summary["net_worth"] == pytest.approx(-1050.0)
+    assert summary["total_balance"] == pytest.approx(2150.0)

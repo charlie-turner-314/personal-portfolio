@@ -5,6 +5,7 @@ import {
   getAssetCategory,
   type AssetCategoryKey,
 } from "@/lib/assets/asset-category";
+import { isLiabilityAccountType } from "@/lib/constants/account-types";
 
 export type NetWorthEntrySource = "account" | "property" | "vehicle" | "portfolio";
 
@@ -59,14 +60,6 @@ export interface NetWorthOverview {
   liabilities: NetWorthLiability[];
 }
 
-export const LIABILITY_ACCOUNT_TYPES = new Set([
-  "credit",
-  "credit_card",
-  "loan",
-  "mortgage",
-  "line_of_credit",
-]);
-
 function parseAmount(value: NetWorthEntry["value"]): number {
   const parsed = typeof value === "number" ? value : parseFloat(value || "0");
   return Number.isFinite(parsed) ? parsed : 0;
@@ -74,10 +67,6 @@ function parseAmount(value: NetWorthEntry["value"]): number {
 
 function getInitial(name: string): string {
   return name.charAt(0).toUpperCase();
-}
-
-function isLiabilityAccountType(accountType: string | null | undefined): boolean {
-  return accountType ? LIABILITY_ACCOUNT_TYPES.has(accountType.toLowerCase()) : false;
 }
 
 function getEntryAssetCategory(entry: NetWorthEntry): AssetCategoryKey {

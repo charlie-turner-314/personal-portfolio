@@ -126,4 +126,44 @@ describe("calculateNetWorthOverview", () => {
     expect(overview.liabilities.map((liability) => liability.id)).toEqual(["loan", "card"]);
     expect(overview.liabilities.map((liability) => liability.value)).toEqual([12_500, 500]);
   });
+
+  it("classifies first-class Australian liability account types as liabilities", () => {
+    const overview = calculateNetWorthOverview([
+      {
+        id: "mortgage",
+        name: "Home Loan",
+        institution: "Bank",
+        value: 600_000,
+        currency: "AUD",
+        source: "account",
+        accountType: "mortgage",
+      },
+      {
+        id: "hecs",
+        name: "HECS",
+        institution: "ATO",
+        value: 22_000,
+        currency: "AUD",
+        source: "account",
+        accountType: "hecs_help",
+      },
+      {
+        id: "offset",
+        name: "Offset",
+        institution: "Bank",
+        value: 50_000,
+        currency: "AUD",
+        source: "account",
+        accountType: "savings",
+      },
+    ], "AUD");
+
+    expect(overview.grossAssets).toBe(50_000);
+    expect(overview.totalLiabilities).toBe(622_000);
+    expect(overview.netWorth).toBe(-572_000);
+    expect(overview.liabilities.map((liability) => liability.id)).toEqual([
+      "mortgage",
+      "hecs",
+    ]);
+  });
 });

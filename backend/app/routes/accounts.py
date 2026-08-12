@@ -180,6 +180,11 @@ def _serialize_account(account: Account) -> AccountResponse:
         alias_patterns=account.alias_patterns or [],
         provider=account.provider,
         external_id=decrypt_with_fallback(account.external_id_ciphertext, account.external_id),
+        liability_interest_rate=account.liability_interest_rate,
+        liability_repayment_amount=account.liability_repayment_amount,
+        liability_repayment_frequency=account.liability_repayment_frequency,
+        liability_loan_term_months=account.liability_loan_term_months,
+        liability_secured=account.liability_secured,
         created_at=account.created_at,
         updated_at=account.updated_at,
     )

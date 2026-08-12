@@ -8,8 +8,49 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
+LIABILITY_REPAYMENT_FREQUENCIES = {
+    "weekly",
+    "fortnightly",
+    "monthly",
+    "quarterly",
+    "annually",
+}
+
+
+class LiabilityAccountDetailsMixin(BaseModel):
+    liability_interest_rate: Optional[Decimal] = None
+    liability_repayment_amount: Optional[Decimal] = None
+    liability_repayment_frequency: Optional[str] = None
+    liability_loan_term_months: Optional[int] = None
+    liability_secured: Optional[bool] = None
+
+    @field_validator("liability_interest_rate", "liability_repayment_amount")
+    @classmethod
+    def _non_negative_decimal(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and value < 0:
+            raise ValueError("must be non-negative")
+        return value
+
+    @field_validator("liability_loan_term_months")
+    @classmethod
+    def _positive_term_months(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value <= 0:
+            raise ValueError("must be greater than zero")
+        return value
+
+    @field_validator("liability_repayment_frequency")
+    @classmethod
+    def _known_repayment_frequency(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = value.lower()
+        if normalized not in LIABILITY_REPAYMENT_FREQUENCIES:
+            raise ValueError("unknown repayment frequency")
+        return normalized
+
+
 # Account Schemas
-class AccountBase(BaseModel):
+class AccountBase(LiabilityAccountDetailsMixin):
     name: str
     account_type: str
     institution: Optional[str] = None
@@ -20,8 +61,9 @@ class AccountCreate(AccountBase):
     pass
 
 
-class AccountUpdate(BaseModel):
+class AccountUpdate(LiabilityAccountDetailsMixin):
     name: Optional[str] = None
+    account_type: Optional[str] = None
     institution: Optional[str] = None
     balance_current: Optional[Decimal] = None
     is_active: Optional[bool] = None

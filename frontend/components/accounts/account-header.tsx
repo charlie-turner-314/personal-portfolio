@@ -6,15 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { AccountLogo } from "@/components/ui/account-logo";
 import { formatDistanceToNow } from "date-fns";
 import type { Account } from "@/lib/db/schema";
-
-const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  checking: "Checking",
-  savings: "Savings",
-  credit_card: "Credit Card",
-  investment: "Investment",
-  cash: "Cash",
-  other: "Other",
-};
+import { getAccountTypeLabel, isLiabilityAccountType } from "@/lib/constants/account-types";
 
 interface AccountHeaderProps {
   account: Account & {
@@ -35,7 +27,8 @@ function formatCurrency(value: string | null, currency: string): string {
 }
 
 export function AccountHeader({ account, currency }: AccountHeaderProps) {
-  const typeLabel = ACCOUNT_TYPE_LABELS[account.accountType] || account.accountType;
+  const typeLabel = getAccountTypeLabel(account.accountType);
+  const isLiability = isLiabilityAccountType(account.accountType);
   const lastSyncedText = account.lastSyncedAt
     ? `Synced ${formatDistanceToNow(new Date(account.lastSyncedAt), { addSuffix: true })}`
     : "Manual account";
@@ -67,13 +60,36 @@ export function AccountHeader({ account, currency }: AccountHeaderProps) {
                 <span>{lastSyncedText}</span>
               </div>
             </div>
+            {isLiability && (
+              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                {account.liabilityInterestRate && (
+                  <span>{account.liabilityInterestRate}% interest</span>
+                )}
+                {account.liabilityRepaymentAmount && (
+                  <span>
+                    {formatCurrency(account.liabilityRepaymentAmount, currency)}
+                    {account.liabilityRepaymentFrequency
+                      ? ` ${account.liabilityRepaymentFrequency}`
+                      : " repayment"}
+                  </span>
+                )}
+                {account.liabilityLoanTermMonths && (
+                  <span>{account.liabilityLoanTermMonths} month term</span>
+                )}
+                {typeof account.liabilitySecured === "boolean" && (
+                  <span>{account.liabilitySecured ? "Secured" : "Unsecured"}</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="text-right">
           <p className="font-mono text-2xl font-semibold">
             {formatCurrency(account.functionalBalance, currency)}
           </p>
-          <p className="text-sm text-muted-foreground">{currency}</p>
+          <p className="text-sm text-muted-foreground">
+            {isLiability ? "Balance owed" : currency}
+          </p>
         </div>
       </CardContent>
     </Card>

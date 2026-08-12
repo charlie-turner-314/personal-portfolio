@@ -29,6 +29,12 @@ class TestAccountTypeToAssetClass:
     def test_credit_card_maps_to_other(self):
         assert account_type_to_asset_class("credit_card") == "other"
 
+    def test_liability_types_map_to_other(self):
+        assert account_type_to_asset_class("mortgage") == "other"
+        assert account_type_to_asset_class("personal_loan") == "other"
+        assert account_type_to_asset_class("hecs_help") == "other"
+        assert account_type_to_asset_class("other_liability") == "other"
+
     def test_cash_maps_to_cash(self):
         assert account_type_to_asset_class("cash") == "cash"
 

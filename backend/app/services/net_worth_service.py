@@ -12,7 +12,14 @@ LIABILITY_ACCOUNT_TYPES: frozenset[str] = frozenset(
         "credit_card",
         "loan",
         "mortgage",
+        "personal_loan",
+        "car_loan",
+        "hecs_help",
+        "bnpl",
+        "tax_debt",
+        "private_debt",
         "line_of_credit",
+        "other_liability",
     }
 )
 

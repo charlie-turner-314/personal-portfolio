@@ -13,7 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CURRENCIES, ACCOUNT_TYPES } from "@/lib/constants";
+import {
+  ACCOUNT_TYPES,
+  CURRENCIES,
+  LIABILITY_REPAYMENT_FREQUENCIES,
+  isLiabilityAccountType,
+} from "@/lib/constants";
 import { createAccount, createPocketAccount } from "@/lib/actions/accounts";
 import { OwnersField, type OwnerValue } from "@/components/household/owners-field";
 
@@ -45,6 +50,11 @@ export function AccountForm({
   const [institution, setInstitution] = useState("");
   const [currency, setCurrency] = useState("EUR");
   const [initialBalance, setInitialBalance] = useState("");
+  const [liabilityInterestRate, setLiabilityInterestRate] = useState("");
+  const [liabilityRepaymentAmount, setLiabilityRepaymentAmount] = useState("");
+  const [liabilityRepaymentFrequency, setLiabilityRepaymentFrequency] = useState("unknown");
+  const [liabilityLoanTermMonths, setLiabilityLoanTermMonths] = useState("");
+  const [liabilitySecured, setLiabilitySecured] = useState("unknown");
   const [isPocket, setIsPocket] = useState(false);
   const [iban, setIban] = useState("");
 
@@ -70,12 +80,26 @@ export function AccountForm({
       .finally(() => setPeopleLoaded(true));
   }, []);
 
+  const accountIsLiability = isLiabilityAccountType(accountType);
+
+  useEffect(() => {
+    if (accountIsLiability && isPocket) {
+      setIsPocket(false);
+      setIban("");
+    }
+  }, [accountIsLiability, isPocket]);
+
   const resetForm = () => {
     setName("");
     setAccountType("");
     setInstitution("");
     setCurrency("EUR");
     setInitialBalance("");
+    setLiabilityInterestRate("");
+    setLiabilityRepaymentAmount("");
+    setLiabilityRepaymentFrequency("unknown");
+    setLiabilityLoanTermMonths("");
+    setLiabilitySecured("unknown");
     setIsPocket(false);
     setIban("");
     setOwnersError(null);
@@ -163,13 +187,24 @@ export function AccountForm({
     setIsLoading(true);
 
     try {
-      const balance = initialBalance ? parseFloat(initialBalance) : 0;
-      if (initialBalance && isNaN(balance)) {
-        toast.error("Please enter a valid initial balance");
+      const parseOptionalNumber = (value: string, label: string): number | undefined => {
+        if (!value.trim()) return undefined;
+        const parsed = parseFloat(value);
+        if (!Number.isFinite(parsed)) {
+          throw new Error(`Please enter a valid ${label}`);
+        }
+        return parsed;
+      };
+
+      const balance = parseOptionalNumber(initialBalance, "balance") ?? 0;
+      const interestRate = parseOptionalNumber(liabilityInterestRate, "interest rate");
+      const repaymentAmount = parseOptionalNumber(liabilityRepaymentAmount, "repayment amount");
+      const loanTermMonths = parseOptionalNumber(liabilityLoanTermMonths, "loan term");
+      if (loanTermMonths !== undefined && (!Number.isInteger(loanTermMonths) || loanTermMonths <= 0)) {
+        toast.error("Loan term must be a whole number of months");
         setIsLoading(false);
         return;
       }
-
       const result = isPocket
         ? await createPocketAccount({
             name: name.trim(),
@@ -184,6 +219,15 @@ export function AccountForm({
             institution: institution.trim() || undefined,
             currency,
             startingBalance: balance,
+            liabilityInterestRate: accountIsLiability ? interestRate : undefined,
+            liabilityRepaymentAmount: accountIsLiability ? repaymentAmount : undefined,
+            liabilityRepaymentFrequency: accountIsLiability && liabilityRepaymentFrequency !== "unknown"
+              ? liabilityRepaymentFrequency
+              : undefined,
+            liabilityLoanTermMonths: accountIsLiability ? loanTermMonths : undefined,
+            liabilitySecured: accountIsLiability && liabilitySecured !== "unknown"
+              ? liabilitySecured === "secured"
+              : undefined,
           });
 
       if (result.success) {
@@ -205,8 +249,8 @@ export function AccountForm({
       } else {
         toast.error(result.error || "Failed to create account");
       }
-    } catch {
-      toast.error("An error occurred. Please try again.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "An error occurred. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -275,7 +319,11 @@ export function AccountForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="account-balance">Initial Balance (optional)</Label>
+          <Label htmlFor="account-balance">
+            {accountIsLiability
+              ? "Opening Balance Owed (optional)"
+              : "Initial Balance (optional)"}
+          </Label>
           <Input
             id="account-balance"
             type="number"
@@ -286,22 +334,108 @@ export function AccountForm({
           />
         </div>
 
-        <div className="flex items-center justify-between rounded border p-3">
-          <div className="space-y-0.5">
-            <Label htmlFor="is-pocket" className="cursor-pointer">
-              Register as pocket account
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              Track a savings pocket by IBAN. Transfers from your synced accounts
-              will be auto-detected and linked.
-            </p>
+        {accountIsLiability && (
+          <div className="grid gap-4 rounded border p-3">
+            <div>
+              <p className="text-sm font-medium">Loan details</p>
+              <p className="text-xs text-muted-foreground">
+                Leave anything unknown blank.
+              </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="liability-interest-rate">Interest Rate % (optional)</Label>
+                <Input
+                  id="liability-interest-rate"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  placeholder="6.49"
+                  value={liabilityInterestRate}
+                  onChange={(e) => setLiabilityInterestRate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="liability-repayment-amount">Repayment Amount (optional)</Label>
+                <Input
+                  id="liability-repayment-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="0.00"
+                  value={liabilityRepaymentAmount}
+                  onChange={(e) => setLiabilityRepaymentAmount(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="liability-repayment-frequency">Frequency (optional)</Label>
+                <Select
+                  value={liabilityRepaymentFrequency}
+                  onValueChange={(v) => v && setLiabilityRepaymentFrequency(v)}
+                >
+                  <SelectTrigger id="liability-repayment-frequency">
+                    <SelectValue placeholder="Select frequency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unknown">Unknown</SelectItem>
+                    {LIABILITY_REPAYMENT_FREQUENCIES.map((frequency) => (
+                      <SelectItem key={frequency.value} value={frequency.value}>
+                        {frequency.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="liability-loan-term">Loan Term Months (optional)</Label>
+                <Input
+                  id="liability-loan-term"
+                  type="number"
+                  step="1"
+                  min="1"
+                  placeholder="360"
+                  value={liabilityLoanTermMonths}
+                  onChange={(e) => setLiabilityLoanTermMonths(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="liability-secured">Security (optional)</Label>
+              <Select
+                value={liabilitySecured}
+                onValueChange={(v) => v && setLiabilitySecured(v)}
+              >
+                <SelectTrigger id="liability-secured">
+                  <SelectValue placeholder="Select security type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unknown">Unknown</SelectItem>
+                  <SelectItem value="secured">Secured</SelectItem>
+                  <SelectItem value="unsecured">Unsecured</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <Switch
-            id="is-pocket"
-            checked={isPocket}
-            onCheckedChange={setIsPocket}
-          />
-        </div>
+        )}
+
+        {!accountIsLiability && (
+          <div className="flex items-center justify-between rounded border p-3">
+            <div className="space-y-0.5">
+              <Label htmlFor="is-pocket" className="cursor-pointer">
+                Register as pocket account
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Track a savings pocket by IBAN. Transfers from your synced accounts
+                will be auto-detected and linked.
+              </p>
+            </div>
+            <Switch
+              id="is-pocket"
+              checked={isPocket}
+              onCheckedChange={setIsPocket}
+            />
+          </div>
+        )}
 
         {isPocket && (
           <div className="space-y-2">
