@@ -31,7 +31,7 @@ import { PortfolioChart } from "./PortfolioChart";
 import { TypeBadge } from "./HoldingsTableHF";
 import { EditHoldingDialog } from "./EditHoldingDialog";
 
-const RANGES: Range[] = ["1W", "1M", "3M", "1Y", "ALL"];
+const RANGES: Range[] = ["1W", "1M", "3M", "1Y", "FY", "ALL"];
 
 function fmt(n: number, digits = 2) {
   return n.toLocaleString("en", {

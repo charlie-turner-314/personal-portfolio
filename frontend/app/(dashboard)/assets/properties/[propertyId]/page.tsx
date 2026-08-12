@@ -29,10 +29,15 @@ import {
 import { getPeople, getOwnersForEntities } from "@/lib/people";
 import { requireAuth } from "@/lib/auth-helpers";
 import { calculatePropertyEquity, getLiabilityMagnitude } from "@/lib/properties/equity";
+import {
+  getAustralianFinancialYearForDate,
+  getAustralianFinancialYearRange,
+} from "@/lib/dates/australian-financial-year";
 import { cn } from "@/lib/utils";
 
 interface PropertyPageProps {
   params: Promise<{ propertyId: string }>;
+  searchParams: Promise<{ fy?: string | string[] }>;
 }
 
 function formatCurrency(value: string | number | null | undefined, currency: string | null | undefined): string {
@@ -49,11 +54,6 @@ function formatDate(value: Date | string): string {
     month: "short",
     day: "numeric",
   }).format(new Date(value));
-}
-
-function currentAustralianFinancialYearStart(): number {
-  const now = new Date();
-  return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
 }
 
 function csvEscape(value: string | number | null | undefined): string {
@@ -78,8 +78,21 @@ function propertyTaxCsv(summary: {
   return rows.map((row) => row.map(csvEscape).join(",")).join("\n");
 }
 
-export default async function PropertyPage({ params }: PropertyPageProps) {
+function parseFinancialYearStartYear(
+  value: string | string[] | undefined,
+  fallbackStartYear: number,
+): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) return fallbackStartYear;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed >= 1900 && parsed <= 9998
+    ? parsed
+    : fallbackStartYear;
+}
+
+export default async function PropertyPage({ params, searchParams }: PropertyPageProps) {
   const { propertyId } = await params;
+  const query = await searchParams;
   const userId = await requireAuth();
   const property = await getProperty(propertyId);
 
@@ -87,7 +100,13 @@ export default async function PropertyPage({ params }: PropertyPageProps) {
     notFound();
   }
 
-  const financialYearStartYear = currentAustralianFinancialYearStart();
+  const currentFinancialYear = getAustralianFinancialYearForDate();
+  const financialYear = getAustralianFinancialYearRange(
+    parseFinancialYearStartYear(query.fy, currentFinancialYear.startYear),
+  );
+  const financialYearOptions = Array.from({ length: 6 }, (_, index) =>
+    getAustralianFinancialYearRange(currentFinancialYear.startYear - index)
+  );
   const [
     accounts,
     links,
@@ -101,7 +120,7 @@ export default async function PropertyPage({ params }: PropertyPageProps) {
     getPropertyLiabilityLinks([property.id]),
     getPropertyValuations([property.id]),
     getPropertyTaggedTransactions(property.id, 25),
-    getPropertyTaxYearSummary(property.id, financialYearStartYear),
+    getPropertyTaxYearSummary(property.id, financialYear.startYear),
     getPeople(userId),
     getOwnersForEntities("property", [property.id]),
   ]);
@@ -139,14 +158,33 @@ export default async function PropertyPage({ params }: PropertyPageProps) {
           </div>
         </div>
         {taxSummary && (
-          <a
-            className={buttonVariants({ variant: "outline" })}
-            href={csvHref}
-            download={`${property.name.replaceAll(/\s+/g, "-").toLowerCase()}-fy${financialYearStartYear}.csv`}
-          >
-            <RiDownloadLine className="h-4 w-4" />
-            Export FY CSV
-          </a>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex items-center border">
+              {financialYearOptions.map((option) => (
+                <Link
+                  key={option.startYear}
+                  href={`/assets/properties/${property.id}?fy=${option.startYear}`}
+                  className={cn(
+                    buttonVariants({
+                      variant: option.startYear === financialYear.startYear ? "default" : "ghost",
+                      size: "sm",
+                    }),
+                    "border-0"
+                  )}
+                >
+                  {option.label}
+                </Link>
+              ))}
+            </div>
+            <a
+              className={buttonVariants({ variant: "outline" })}
+              href={csvHref}
+              download={`${property.name.replaceAll(/\s+/g, "-").toLowerCase()}-${financialYear.label.toLowerCase()}.csv`}
+            >
+              <RiDownloadLine className="h-4 w-4" />
+              Export FY CSV
+            </a>
+          </div>
         )}
       </div>
 

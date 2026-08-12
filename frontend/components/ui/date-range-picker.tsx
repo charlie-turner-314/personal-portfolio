@@ -24,17 +24,57 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { RiCalendarLine, RiArrowDownSLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
+import {
+  getAustralianFinancialYearLabelForDateRange,
+  getAustralianFinancialYearPresetDateRanges,
+} from "@/lib/dates/australian-financial-year";
 
 // Date range presets
-const datePresets = [
-  { label: "This Week", getValue: () => ({ from: startOfWeek(new Date(), { weekStartsOn: 1 }), to: endOfWeek(new Date(), { weekStartsOn: 1 }) }) },
-  { label: "This Month", getValue: () => ({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) }) },
-  { label: "Last Month", getValue: () => ({ from: startOfMonth(subMonths(new Date(), 1)), to: endOfMonth(subMonths(new Date(), 1)) }) },
-  { label: "This Quarter", getValue: () => ({ from: startOfQuarter(new Date()), to: endOfQuarter(new Date()) }) },
-  { label: "Last Quarter", getValue: () => ({ from: startOfQuarter(subQuarters(new Date(), 1)), to: endOfQuarter(subQuarters(new Date(), 1)) }) },
-  { label: "This Year", getValue: () => ({ from: startOfYear(new Date()), to: endOfYear(new Date()) }) },
-  { label: "Last Year", getValue: () => ({ from: startOfYear(subYears(new Date(), 1)), to: endOfYear(subYears(new Date(), 1)) }) },
-];
+function getDatePresets() {
+  return [
+    {
+      label: "This Week",
+      getValue: () => ({
+        from: startOfWeek(new Date(), { weekStartsOn: 1 }),
+        to: endOfWeek(new Date(), { weekStartsOn: 1 }),
+      }),
+    },
+    {
+      label: "This Month",
+      getValue: () => ({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) }),
+    },
+    {
+      label: "Last Month",
+      getValue: () => ({
+        from: startOfMonth(subMonths(new Date(), 1)),
+        to: endOfMonth(subMonths(new Date(), 1)),
+      }),
+    },
+    {
+      label: "This Quarter",
+      getValue: () => ({ from: startOfQuarter(new Date()), to: endOfQuarter(new Date()) }),
+    },
+    {
+      label: "Last Quarter",
+      getValue: () => ({
+        from: startOfQuarter(subQuarters(new Date(), 1)),
+        to: endOfQuarter(subQuarters(new Date(), 1)),
+      }),
+    },
+    {
+      label: "This Year",
+      getValue: () => ({ from: startOfYear(new Date()), to: endOfYear(new Date()) }),
+    },
+    {
+      label: "Last Year",
+      getValue: () => ({ from: startOfYear(subYears(new Date(), 1)), to: endOfYear(subYears(new Date(), 1)) }),
+    },
+    ...getAustralianFinancialYearPresetDateRanges().map((preset) => ({
+      label: preset.label,
+      getValue: () => ({ from: preset.range.from, to: preset.range.to }),
+    })),
+  ];
+}
 
 interface DateRangePickerProps {
   value: DateRange | undefined;
@@ -56,10 +96,13 @@ export function DateRangePicker({
   active = false,
 }: DateRangePickerProps) {
   const [open, setOpen] = React.useState(false);
+  const datePresets = getDatePresets();
 
   const getDisplayText = () => {
     if (!value?.from) return placeholder;
     if (!showSelectedText) return placeholder;
+    const financialYearLabel = getAustralianFinancialYearLabelForDateRange(value.from, value.to);
+    if (financialYearLabel) return financialYearLabel;
     if (!value.to) return format(value.from, "MMM d, yyyy");
     return `${format(value.from, "MMM d")} - ${format(value.to, "MMM d, yyyy")}`;
   };
@@ -115,8 +158,8 @@ export function DateRangePicker({
                   onChange(preset.getValue());
                   setOpen(false);
                 }}
-                  className="w-full whitespace-nowrap px-2 py-1.5 text-left text-xs hover:bg-accent"
-                >
+                className="w-full whitespace-nowrap px-2 py-1.5 text-left text-xs hover:bg-accent"
+              >
                 {preset.label}
               </button>
             ))}

@@ -567,6 +567,8 @@ def portfolio_summary(
 def holding_history(
     holding_id: UUID,
     days: int = Query(30, ge=1, le=3650),
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -578,12 +580,16 @@ def holding_history(
     )
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
-    cutoff = date.today() - timedelta(days=days)
+    end_date = to_date or date.today()
+    cutoff = from_date or (date.today() - timedelta(days=days))
+    if end_date < cutoff:
+        raise HTTPException(status_code=400, detail="to must be on or after from")
     rows = (
         db.query(HoldingValuation)
         .filter(
             HoldingValuation.holding_id == holding_id,
             HoldingValuation.date >= cutoff,
+            HoldingValuation.date <= end_date,
         )
         .order_by(HoldingValuation.date.asc())
         .all()
@@ -597,11 +603,16 @@ def holding_history(
 @router.get("/portfolio/history", response_model=list[ValuationPoint])
 def portfolio_history(
     days: int = Query(30, ge=1, le=3650),
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
-    cutoff = date.today() - timedelta(days=days)
+    end_date = to_date or date.today()
+    cutoff = from_date or (date.today() - timedelta(days=days))
+    if end_date < cutoff:
+        raise HTTPException(status_code=400, detail="to must be on or after from")
 
     accounts = (
         db.query(Account.id)
@@ -620,6 +631,7 @@ def portfolio_history(
         .filter(
             AccountBalance.account_id.in_(account_ids),
             AccountBalance.date >= cutoff,
+            AccountBalance.date <= end_date,
         )
         .order_by(AccountBalance.date.asc())
         .all()

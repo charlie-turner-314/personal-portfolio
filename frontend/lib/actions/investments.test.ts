@@ -15,6 +15,16 @@ describe("rangeToDates", () => {
   it("ALL uses a far-back date", () => {
     expect(rangeToDates("ALL", ref).from).toBe("2010-01-01");
   });
+  it("FY uses Australian financial-year boundaries", () => {
+    expect(rangeToDates("FY", new Date("2026-06-30T00:00:00Z"))).toEqual({
+      from: "2025-07-01",
+      to: "2026-06-30",
+    });
+    expect(rangeToDates("FY", new Date("2026-07-01T00:00:00Z"))).toEqual({
+      from: "2026-07-01",
+      to: "2027-06-30",
+    });
+  });
 });
 
 describe("fetchHoldingHistoryRange export", () => {

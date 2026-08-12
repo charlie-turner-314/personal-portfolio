@@ -61,6 +61,19 @@ describe("category-spending query params", () => {
     expect(params.has("horizon")).toBe(false);
   });
 
+  it("preserves Australian financial-year ranges and ignores horizon", () => {
+    const parsed = parseCategorySpendingSearchParams({
+      from: "2025-07-01",
+      to: "2026-06-30",
+      horizon: "365",
+    });
+
+    expect(parsed.dateFrom).toBe("2025-07-01");
+    expect(parsed.dateTo).toBe("2026-06-30");
+    expect(parsed.horizon).toBeUndefined();
+    expect(parsed.effectiveHorizon).toBeUndefined();
+  });
+
   it("builds query with horizon when date range is missing", () => {
     const query = buildCategorySpendingQuery({
       categoryId: "cat-2",

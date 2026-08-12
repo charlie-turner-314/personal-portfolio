@@ -39,6 +39,19 @@ describe("query-params helpers", () => {
     expect(parsed.dateTo).toBeUndefined();
   });
 
+  it("parses Australian financial-year ranges as date-range mode", () => {
+    const parsed = parseDashboardSearchParams({
+      from: "2025-07-01",
+      to: "2026-06-30",
+      horizon: "365",
+    });
+
+    expect(parsed.dateFrom).toBe("2025-07-01");
+    expect(parsed.dateTo).toBe("2026-06-30");
+    expect(parsed.horizon).toBe(365);
+    expect(parsed.effectiveHorizon).toBeUndefined();
+  });
+
   it("falls back to horizon=30 for invalid horizon values", () => {
     const parsed = parseDashboardSearchParams({
       horizon: "999",

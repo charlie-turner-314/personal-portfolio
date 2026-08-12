@@ -23,6 +23,7 @@ import {
   calculatePropertyEquity,
   getLinkedLiabilityAccountIds,
 } from "@/lib/properties/equity";
+import { getAustralianFinancialYearLabelForDateRange } from "@/lib/dates/australian-financial-year";
 
 async function getUserCurrency(userId: string): Promise<string> {
   const result = await db
@@ -1126,6 +1127,10 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   const getDateModePeriodLabel = (rangeStart: Date, rangeEnd: Date) => {
+    const financialYearLabel = getAustralianFinancialYearLabelForDateRange(rangeStart, rangeEnd);
+    if (financialYearLabel) {
+      return { title: "Financial Year", subtitle: financialYearLabel };
+    }
     if (isFullYearRange(rangeStart, rangeEnd)) {
       return { title: "Year", subtitle: String(rangeStart.getFullYear()) };
     }

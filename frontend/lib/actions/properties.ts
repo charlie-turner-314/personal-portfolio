@@ -15,6 +15,10 @@ import {
 } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-helpers";
 import { isLiabilityAccountType } from "@/lib/constants/account-types";
+import {
+  getAustralianFinancialYearRange,
+  getAustralianFinancialYearUtcInterval,
+} from "@/lib/dates/australian-financial-year";
 
 export interface CreatePropertyInput {
   name: string;
@@ -451,8 +455,8 @@ export async function getPropertyTaxYearSummary(
     return { success: false, error: "Property not found" };
   }
 
-  const rangeStart = new Date(Date.UTC(financialYearStartYear, 6, 1));
-  const rangeEnd = new Date(Date.UTC(financialYearStartYear + 1, 5, 30, 23, 59, 59, 999));
+  const range = getAustralianFinancialYearRange(financialYearStartYear);
+  const { start: rangeStart, end: rangeEnd } = getAustralianFinancialYearUtcInterval(financialYearStartYear);
 
   const rows = await db
     .select({
@@ -494,8 +498,8 @@ export async function getPropertyTaxYearSummary(
     success: true,
     summary: {
       propertyId,
-      taxYearStart: rangeStart.toISOString().slice(0, 10),
-      taxYearEnd: rangeEnd.toISOString().slice(0, 10),
+      taxYearStart: range.startDate,
+      taxYearEnd: range.endDate,
       rentReceived,
       expenses,
     },
