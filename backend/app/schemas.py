@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from datetime import datetime
 from datetime import time as _time_type
 from decimal import Decimal
-from typing import Optional, List
+from typing import Any, Optional, List
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -414,6 +414,17 @@ class CgtFinancialYearSummary(BaseModel):
     net_capital_gain_before_losses_aud: Decimal
     allocation_count: int
     missing_fx_allocation_count: int
+    assumptions: list[str]
+
+
+class AustralianTaxReportResponse(BaseModel):
+    """Auditable, informational Australian FY reporting pack."""
+    financial_year_start: int
+    financial_year_end: int
+    period: dict[str, str]
+    investment_income: dict[str, Any]
+    cgt: dict[str, Any]
+    transactions: dict[str, Any]
     assumptions: list[str]
 
 
