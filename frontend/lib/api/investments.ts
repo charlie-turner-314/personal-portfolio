@@ -181,6 +181,50 @@ export type HoldingLot = {
   currency: string;
 };
 
+export type CgtAllocation = {
+  id: string;
+  acquisition_trade_id: string;
+  disposal_trade_id: string;
+  symbol: string;
+  acquisition_date: string;
+  disposal_date: string;
+  quantity: string;
+  currency: string;
+  cost_base_native: string;
+  proceeds_native: string;
+  gain_native: string;
+  cost_base_aud?: string | null;
+  proceeds_aud?: string | null;
+  gain_aud?: string | null;
+  fx_missing: boolean;
+  discount_eligible: boolean;
+  calculation_version: string;
+  assumptions: string[];
+};
+
+export type CgtFinancialYearSummary = {
+  financial_year_start: number;
+  gross_gains_aud: string;
+  capital_losses_aud: string;
+  discounted_gains_aud: string;
+  net_capital_gain_before_losses_aud: string;
+  allocation_count: number;
+  missing_fx_allocation_count: number;
+  assumptions: string[];
+};
+
+export async function getHoldingCgtAllocations(holdingId: string): Promise<CgtAllocation[]> {
+  const resp = await signedFetch("GET", `/api/investments/holdings/${holdingId}/cgt-allocations`);
+  return readJsonOrThrow<CgtAllocation[]>(resp);
+}
+
+export async function getCgtFinancialYearSummary(financialYearStart: number): Promise<CgtFinancialYearSummary> {
+  const resp = await signedFetch("GET", "/api/investments/cgt/summary", {
+    query: { financial_year_start: String(financialYearStart) },
+  });
+  return readJsonOrThrow<CgtFinancialYearSummary>(resp);
+}
+
 export type InvestmentIncomeEvent = {
   id: string;
   account_id: string;
