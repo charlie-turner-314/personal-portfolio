@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,15 @@ class OpenLot:
 class FifoResult:
     realized: list[ClosedLot] = field(default_factory=list)
     open_lots: list[OpenLot] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CgtAudValues:
+    """AUD amounts for an auditable disposal allocation, or an explicit FX gap."""
+    cost_base_aud: Optional[Decimal]
+    proceeds_aud: Optional[Decimal]
+    gain_aud: Optional[Decimal]
+    fx_missing: bool
 
 
 class OverSellError(Exception):
@@ -166,6 +175,29 @@ def is_cgt_discount_eligible(acquisition_date: date, disposal_date: date) -> boo
     except ValueError:  # 29 February has no anniversary in a non-leap year.
         anniversary = acquisition_date.replace(year=acquisition_date.year + 1, day=28)
     return disposal_date >= anniversary
+
+
+def cgt_aud_values_for_closed_lot(
+    lot: ClosedLot,
+    fx_rate_for: Callable[[str, str, date], Optional[Decimal]],
+) -> CgtAudValues:
+    """Convert cost and proceeds independently at their respective transaction dates."""
+    def convert(amount: Decimal, on: date) -> Optional[Decimal]:
+        if lot.currency.upper() == "AUD":
+            return amount.quantize(Decimal("0.01"))
+        rate = fx_rate_for(lot.currency.upper(), "AUD", on)
+        return (amount * Decimal(rate)).quantize(Decimal("0.01")) if rate is not None else None
+
+    cost_base_aud = convert(lot.cost_native, lot.open_date)
+    proceeds_aud = convert(lot.proceeds_native, lot.close_date)
+    if cost_base_aud is None or proceeds_aud is None:
+        return CgtAudValues(None, None, None, fx_missing=True)
+    return CgtAudValues(
+        cost_base_aud=cost_base_aud,
+        proceeds_aud=proceeds_aud,
+        gain_aud=proceeds_aud - cost_base_aud,
+        fx_missing=False,
+    )
 
 
 def compute_open_quantity_series(

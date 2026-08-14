@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.services.pnl_service import (
     Trade,
+    cgt_aud_values_for_closed_lot,
     compute_fifo,
     compute_open_quantity_series,
     is_cgt_discount_eligible,
@@ -412,22 +413,17 @@ def _recompute_cgt_allocations(
     except ImportError:
         fx_service = None
 
-    def aud_amount(amount: Decimal, currency: str, on: date) -> Decimal | None:
-        if currency.upper() == "AUD":
-            return amount.quantize(Decimal("0.01"))
-        if fx_service is None:
-            return None
-        rate = fx_service.get_exchange_rate(currency.upper(), "AUD", on)
-        return (amount * Decimal(rate)).quantize(Decimal("0.01")) if rate is not None else None
-
     for lot in fifo.realized:
         # These IDs are populated for BrokerTrade-derived FIFO inputs. Guarding
         # avoids persisting an incomplete audit row if this service is reused.
         if not lot.acquisition_trade_id or not lot.disposal_trade_id:
             continue
-        cost_aud = aud_amount(lot.cost_native, lot.currency, lot.open_date)
-        proceeds_aud = aud_amount(lot.proceeds_native, lot.currency, lot.close_date)
-        missing_fx = cost_aud is None or proceeds_aud is None
+        aud_values = cgt_aud_values_for_closed_lot(
+            lot,
+            lambda source, target, on: (
+                None if fx_service is None else fx_service.get_exchange_rate(source, target, on)
+            ),
+        )
         db.add(CgtAllocation(
             account_id=account.id,
             acquisition_trade_id=lot.acquisition_trade_id,
@@ -440,10 +436,10 @@ def _recompute_cgt_allocations(
             cost_base_native=lot.cost_native,
             proceeds_native=lot.proceeds_native,
             gain_native=lot.pnl_native,
-            cost_base_aud=None if missing_fx else cost_aud,
-            proceeds_aud=None if missing_fx else proceeds_aud,
-            gain_aud=None if missing_fx else proceeds_aud - cost_aud,
-            fx_missing=missing_fx,
+            cost_base_aud=aud_values.cost_base_aud,
+            proceeds_aud=aud_values.proceeds_aud,
+            gain_aud=aud_values.gain_aud,
+            fx_missing=aud_values.fx_missing,
             discount_eligible=is_cgt_discount_eligible(lot.open_date, lot.close_date),
             calculation_version=CGT_CALCULATION_VERSION,
             assumptions=list(CGT_ASSUMPTIONS),
