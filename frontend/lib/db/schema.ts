@@ -38,6 +38,8 @@ export const users = pgTable("users", {
   onboardingStatus: varchar("onboarding_status", { length: 20 }).default("pending"), // pending, step_1, step_2, step_3, completed
   onboardingCompletedAt: timestamp("onboarding_completed_at"),
   functionalCurrency: char("functional_currency", { length: 3 }).default("EUR"), // User's functional currency for reporting
+  countryCode: char("country_code", { length: 2 }),
+  locale: varchar("locale", { length: 35 }),
   profilePhotoPath: text("profile_photo_path"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

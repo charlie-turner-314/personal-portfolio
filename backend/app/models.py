@@ -962,6 +962,8 @@ class User(Base):
     onboarding_status = Column(String(20), default="pending")  # pending, step_1, step_2, step_3, completed
     onboarding_completed_at = Column(DateTime, nullable=True)
     functional_currency = Column(String(3), default="EUR")  # User's functional currency for reporting
+    country_code = Column(String(2), nullable=True)
+    locale = Column(String(35), nullable=True)
     profile_photo_path = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

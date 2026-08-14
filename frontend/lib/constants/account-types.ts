@@ -14,7 +14,7 @@ export const LIABILITY_ACCOUNT_TYPE_VALUES = [
 ] as const;
 
 export const ACCOUNT_TYPES = [
-  { value: "checking", label: "Checking Account" },
+  { value: "checking", label: "Transaction Account" },
   { value: "savings", label: "Savings Account" },
   { value: "credit_card", label: "Credit Card" },
   { value: "mortgage", label: "Mortgage" },
@@ -27,6 +27,7 @@ export const ACCOUNT_TYPES = [
   { value: "line_of_credit", label: "Line of Credit" },
   { value: "other_liability", label: "Other Liability" },
   { value: "investment", label: "Investment Account" },
+  { value: "superannuation", label: "Superannuation" },
   { value: "cash", label: "Cash" },
   { value: "other", label: "Other" },
 ] as const;

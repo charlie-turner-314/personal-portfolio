@@ -3,9 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { users, categories, transactions, accounts, type User } from "@/lib/db/schema";
+import { users, transactions, accounts, type User } from "@/lib/db/schema";
 import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
 import { storage } from "@/lib/storage";
+import {
+  getCountryDefaults,
+  inferCountryCodeFromProfile,
+  isSupportedCountryCode,
+  isSupportedLocaleCode,
+} from "@/lib/constants";
 
 /**
  * Check if the OpenAI API key is configured in the environment.
@@ -46,12 +52,24 @@ export async function updateUserProfile(
 
   try {
     const name = formData.get("name") as string;
+    const submittedCountryCode = formData.get("countryCode") as string;
+    const submittedLocale = formData.get("locale") as string;
     const profilePhotoEntry = formData.get("profilePhoto");
     const profilePhoto = profilePhotoEntry instanceof File ? profilePhotoEntry : null;
 
     if (!name?.trim()) {
       return { success: false, error: "Name is required" };
     }
+
+    const countryCode = isSupportedCountryCode(submittedCountryCode)
+      ? submittedCountryCode
+      : inferCountryCodeFromProfile({
+          locale: submittedLocale,
+        });
+    const countryDefaults = getCountryDefaults(countryCode);
+    const locale = isSupportedLocaleCode(submittedLocale)
+      ? submittedLocale
+      : countryDefaults.defaultLocale;
 
     let profilePhotoPath: string | undefined;
 
@@ -73,6 +91,8 @@ export async function updateUserProfile(
       .update(users)
       .set({
         name: name.trim(),
+        countryCode,
+        locale,
         ...(profilePhotoPath && { profilePhotoPath, image: profilePhotoPath }),
         updatedAt: new Date(),
       })

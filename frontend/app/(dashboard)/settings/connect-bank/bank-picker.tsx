@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -50,8 +50,7 @@ interface Aspsp {
   beta?: boolean;
 }
 
-export function BankPicker() {
-  const router = useRouter();
+export function BankPicker({ countryCode }: { countryCode?: string | null }) {
   const searchParams = useSearchParams();
   const error = searchParams.get("error");
 
@@ -61,8 +60,16 @@ export function BankPicker() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [connectingBank, setConnectingBank] = useState<string | null>(null);
+  const isAustralianProfile = countryCode === "AU";
 
   useEffect(() => {
+    if (isAustralianProfile) {
+      setAspsps([]);
+      setLoading(false);
+      setFetchError(null);
+      return;
+    }
+
     const controller = new AbortController();
     async function fetchAspsps() {
       setLoading(true);
@@ -87,7 +94,7 @@ export function BankPicker() {
     }
     fetchAspsps();
     return () => controller.abort();
-  }, [country]);
+  }, [country, isAustralianProfile]);
 
   const filtered = useMemo(() => {
     if (!search) return aspsps;
@@ -110,6 +117,47 @@ export function BankPicker() {
       setConnectingBank(null);
     }
   };
+
+  if (isAustralianProfile) {
+    return (
+      <div className="space-y-6">
+        <Link
+          href="/settings?tab=bank-connections"
+          className={buttonVariants({ variant: "ghost", size: "sm" })}
+        >
+          <RiArrowLeftLine className="mr-1.5 h-4 w-4" />
+          Back to Settings
+        </Link>
+
+        {error && (
+          <div className="flex items-center gap-2 rounded-lg border border-destructive bg-destructive/10 p-3 text-sm text-destructive">
+            <RiAlertLine className="h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="rounded-lg border bg-muted/30 p-6">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <RiBankLine className="h-5 w-5" />
+            </div>
+            <div className="space-y-3">
+              <div>
+                <h2 className="text-lg font-semibold">Australian bank sync is not available yet</h2>
+                <p className="text-sm text-muted-foreground">
+                  Use CSV import for CommBank, Westpac, NAB, ANZ, Macquarie, ING,
+                  and other Australian banks while the CDR connector path is being built.
+                </p>
+              </div>
+              <Link href="/transactions/import" className={buttonVariants({ variant: "default" })}>
+                Import Transactions CSV
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

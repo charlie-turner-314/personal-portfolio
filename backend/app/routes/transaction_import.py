@@ -666,6 +666,11 @@ def import_transactions(
                 if not account_currencies:
                     account_currencies = ["EUR"]
                     logger.warning("[IMPORT] No account currencies found, defaulting to EUR")
+
+                user = db.query(User).filter(User.id == user_id).first()
+                functional_currency = (user.functional_currency if user else None) or "EUR"
+                functional_currency = functional_currency.upper()
+                target_currencies = sorted({"EUR", "USD", functional_currency})
                 
                 # Find earliest transaction date from imported transactions only
                 if normalized_transactions:
@@ -689,10 +694,10 @@ def import_transactions(
                 total_rates_stored = 0
                 
                 for account_currency in account_currencies:
-                    # Fetch rates for this account currency to EUR and USD
+                    # Fetch rates for this account currency to baseline and user reporting currencies.
                     rates_by_date = service.fetch_exchange_rates_batch(
                         base_currency=account_currency,
-                        target_currencies=["EUR", "USD"],
+                        target_currencies=target_currencies,
                         start_date=earliest_date,
                         end_date=end_date
                     )
@@ -700,32 +705,23 @@ def import_transactions(
                     # Store the fetched rates for each date
                     stored_count = 0
                     for rate_date, rate_dict in rates_by_date.items():
-                        # Store EUR rate if available
-                        if "EUR" in rate_dict:
-                            eur_stored = service.store_exchange_rates(
-                                target_currency="EUR",
-                                rates={account_currency: rate_dict["EUR"]},
+                        for target_currency, rate in rate_dict.items():
+                            stored_count += service.store_exchange_rates(
+                                target_currency=target_currency,
+                                rates={account_currency: rate},
                                 for_date=rate_date
                             )
-                            stored_count += eur_stored
-                        
-                        # Store USD rate if available
-                        if "USD" in rate_dict:
-                            usd_stored = service.store_exchange_rates(
-                                target_currency="USD",
-                                rates={account_currency: rate_dict["USD"]},
-                                for_date=rate_date
-                            )
-                            stored_count += usd_stored
                     
                     total_rates_stored += stored_count
                     logger.info(
-                        f"[IMPORT] Fetched and stored {stored_count} rates for {account_currency} -> EUR/USD"
+                        f"[IMPORT] Fetched and stored {stored_count} rates for "
+                        f"{account_currency} -> {target_currencies}"
                     )
                 
                 exchange_rates_result = {
                     "total_rates_stored": total_rates_stored,
                     "account_currencies": account_currencies,
+                    "target_currencies": target_currencies,
                     "date_range": {
                         "start": earliest_date.isoformat(),
                         "end": end_date.isoformat()

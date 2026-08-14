@@ -18,9 +18,11 @@ import { CategoryListEditor } from "@/components/onboarding/category-list-editor
 import {
   saveOnboardingCategories,
   getDefaultCategories,
+  getCurrentUser,
   type CategoryInput,
 } from "@/lib/actions/onboarding";
-import { DEFAULT_CATEGORIES } from "@/lib/constants/default-categories";
+import { getDefaultCategoriesForCountry } from "@/lib/constants/default-categories";
+import { FALLBACK_REGIONAL_DEFAULTS, inferCountryCodeFromProfile } from "@/lib/constants";
 import { type CategoryType } from "@/lib/utils/category-utils";
 
 export default function OnboardingStep2Page() {
@@ -29,6 +31,7 @@ export default function OnboardingStep2Page() {
   const [categories, setCategories] = useState<CategoryInput[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeSubstep, setActiveSubstep] = useState<CategoryType>("expense");
+  const [countryCode, setCountryCode] = useState(FALLBACK_REGIONAL_DEFAULTS.code);
 
   const substeps: Array<{
     type: CategoryType;
@@ -59,7 +62,14 @@ export default function OnboardingStep2Page() {
   useEffect(() => {
     async function loadCategories() {
       try {
-        const defaultCats = await getDefaultCategories();
+        const user = await getCurrentUser();
+        const nextCountryCode = inferCountryCodeFromProfile({
+          countryCode: user?.countryCode,
+          functionalCurrency: user?.functionalCurrency,
+          locale: user?.locale,
+        });
+        setCountryCode(nextCountryCode);
+        const defaultCats = await getDefaultCategories(nextCountryCode);
         setCategories(
           defaultCats.map((cat) => ({
             name: cat.name,
@@ -67,20 +77,23 @@ export default function OnboardingStep2Page() {
             color: cat.color,
             icon: cat.icon,
             description: cat.description,
+            categorizationInstructions: cat.categorizationInstructions,
             isSystem: cat.isSystem,
             hideFromSelection: cat.hideFromSelection,
           }))
         );
       } catch (error) {
         console.error("Failed to load categories:", error);
+        setCountryCode(FALLBACK_REGIONAL_DEFAULTS.code);
         // Fall back to local constants
         setCategories(
-          DEFAULT_CATEGORIES.map((cat) => ({
+          getDefaultCategoriesForCountry(null).map((cat) => ({
             name: cat.name,
             categoryType: cat.categoryType,
             color: cat.color,
             icon: cat.icon,
             description: cat.description,
+            categorizationInstructions: cat.categorizationInstructions,
             isSystem: cat.isSystem,
             hideFromSelection: cat.hideFromSelection,
           }))
@@ -94,12 +107,13 @@ export default function OnboardingStep2Page() {
 
   const handleResetToDefaults = () => {
     setCategories(
-      DEFAULT_CATEGORIES.map((cat) => ({
+      getDefaultCategoriesForCountry(countryCode).map((cat) => ({
         name: cat.name,
         categoryType: cat.categoryType,
         color: cat.color,
         icon: cat.icon,
         description: cat.description,
+        categorizationInstructions: cat.categorizationInstructions,
         isSystem: cat.isSystem,
         hideFromSelection: cat.hideFromSelection,
       }))
@@ -171,6 +185,7 @@ export default function OnboardingStep2Page() {
               </CardDescription>
               <p className="mt-2 text-xs text-muted-foreground">
                 Tip: Add categorization instructions by clicking the edit icon.
+                {countryCode === "AU" ? " These defaults include Australian merchant examples." : ""}
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={handleResetToDefaults}>

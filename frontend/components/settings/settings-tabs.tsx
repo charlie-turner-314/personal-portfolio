@@ -115,7 +115,7 @@ export function SettingsTabs({
 
       {!isDemoUser && (
         <TabsContent value="bank-connections">
-          <BankConnectionsManager connections={bankConnections} />
+          <BankConnectionsManager connections={bankConnections} countryCode={user.countryCode} />
         </TabsContent>
       )}
 

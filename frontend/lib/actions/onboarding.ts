@@ -6,7 +6,14 @@ import { db } from "@/lib/db";
 import { users, categories, type User, type NewCategory } from "@/lib/db/schema";
 import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
 import { storage } from "@/lib/storage";
-import { DEFAULT_CATEGORIES, type DefaultCategory } from "@/lib/constants/default-categories";
+import {
+  getCountryDefaults,
+  getDefaultCategoriesForCountry,
+  inferCountryCodeFromProfile,
+  isSupportedCountryCode,
+  isSupportedLocaleCode,
+  type DefaultCategory,
+} from "@/lib/constants";
 import { CACHE_TAGS } from "@/lib/data/cached";
 import { type CategoryInput } from "./categories";
 
@@ -43,11 +50,14 @@ export async function getOnboardingStatus(): Promise<OnboardingStatusResult | nu
       status,
       isCompleted: status === "completed",
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const details = error instanceof Error
+      ? { message: error.message, stack: error.stack }
+      : { message: String(error), stack: undefined };
     // Log detailed error information
     console.error("[Onboarding] Failed to get onboarding status:", {
-      error: error?.message || String(error),
-      stack: error?.stack,
+      error: details.message,
+      stack: details.stack,
       userId,
       databaseUrl: process.env.DATABASE_URL ? "set" : "not set",
     });
@@ -93,12 +103,26 @@ export async function updatePersonalDetails(
   try {
     const name = formData.get("name") as string;
     const currency = formData.get("currency") as string;
+    const submittedCountryCode = formData.get("countryCode") as string;
+    const submittedLocale = formData.get("locale") as string;
     const profilePhotoEntry = formData.get("profilePhoto");
     const profilePhoto = profilePhotoEntry instanceof File ? profilePhotoEntry : null;
 
     if (!name?.trim()) {
       return { success: false, error: "Name is required" };
     }
+
+    const countryCode = isSupportedCountryCode(submittedCountryCode)
+      ? submittedCountryCode
+      : inferCountryCodeFromProfile({
+          functionalCurrency: currency,
+          locale: submittedLocale,
+        });
+    const countryDefaults = getCountryDefaults(countryCode);
+    const locale = isSupportedLocaleCode(submittedLocale)
+      ? submittedLocale
+      : countryDefaults.defaultLocale;
+    const functionalCurrency = currency || countryDefaults.defaultCurrency;
 
     let profilePhotoPath: string | undefined;
 
@@ -120,7 +144,9 @@ export async function updatePersonalDetails(
       .update(users)
       .set({
         name: name.trim(),
-        functionalCurrency: currency || "EUR",
+        functionalCurrency,
+        countryCode,
+        locale,
         ...(profilePhotoPath && { profilePhotoPath, image: profilePhotoPath }),
         onboardingStatus: "step_1",
         updatedAt: new Date(),
@@ -227,8 +253,8 @@ export async function completeOnboarding(): Promise<{ success: boolean; error?: 
 /**
  * Get default categories for onboarding
  */
-export async function getDefaultCategories(): Promise<DefaultCategory[]> {
-  return DEFAULT_CATEGORIES;
+export async function getDefaultCategories(countryCode?: string): Promise<DefaultCategory[]> {
+  return getDefaultCategoriesForCountry(countryCode);
 }
 
 /**

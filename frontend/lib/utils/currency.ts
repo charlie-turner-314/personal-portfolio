@@ -1,4 +1,5 @@
 const SYMBOLS: Record<string, string> = {
+  AUD: "A$",
   USD: "$",
   EUR: "€",
   GBP: "£",

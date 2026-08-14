@@ -57,6 +57,7 @@ const ACCOUNT_TYPE_TO_CATEGORY: Record<string, AssetCategoryKey> = {
   investment_brokerage: "investment",
   investment_manual: "investment",
   brokerage: "investment",
+  superannuation: "investment",
   crypto: "crypto",
   property: "property",
   vehicle: "vehicle",

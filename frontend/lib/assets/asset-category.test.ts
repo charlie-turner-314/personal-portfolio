@@ -22,6 +22,7 @@ describe("getAssetCategory", () => {
   it("maps investment and brokerage to investment", () => {
     expect(getAssetCategory("investment")).toBe("investment");
     expect(getAssetCategory("brokerage")).toBe("investment");
+    expect(getAssetCategory("superannuation")).toBe("investment");
   });
 
   it("maps investment_brokerage and investment_manual to investment", () => {

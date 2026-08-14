@@ -14,8 +14,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ProfilePhotoUpload } from "@/components/onboarding/profile-photo-upload";
 import { updateUserProfile } from "@/lib/actions/settings";
+import {
+  COUNTRY_OPTIONS,
+  LOCALE_OPTIONS,
+  getCountryDefaults,
+  inferCountryCodeFromProfile,
+} from "@/lib/constants";
 import type { User } from "@/lib/db/schema";
 
 interface ProfileEditorProps {
@@ -26,7 +39,20 @@ export function ProfileEditor({ user }: ProfileEditorProps) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [name, setName] = useState(user.name || "");
+  const initialCountryDefaults = getCountryDefaults(inferCountryCodeFromProfile({
+    countryCode: user.countryCode,
+    functionalCurrency: user.functionalCurrency,
+    locale: user.locale,
+  }));
+  const [countryCode, setCountryCode] = useState(initialCountryDefaults.code);
+  const [locale, setLocale] = useState(user.locale || initialCountryDefaults.defaultLocale);
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+
+  const handleCountryChange = (nextCountryCode: string) => {
+    const defaults = getCountryDefaults(nextCountryCode);
+    setCountryCode(defaults.code);
+    setLocale(defaults.defaultLocale);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,6 +67,8 @@ export function ProfileEditor({ user }: ProfileEditorProps) {
     try {
       const formData = new FormData();
       formData.append("name", name.trim());
+      formData.append("countryCode", countryCode);
+      formData.append("locale", locale);
       if (profilePhoto) {
         formData.append("profilePhoto", profilePhoto);
       }
@@ -113,6 +141,46 @@ export function ProfileEditor({ user }: ProfileEditorProps) {
             <p className="text-xs text-muted-foreground">
               Functional currency is set during onboarding and cannot be changed.
             </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="country">Country</Label>
+              <Select value={countryCode} onValueChange={(v) => v && handleCountryChange(v)}>
+                <SelectTrigger id="country" className="w-fit min-w-[200px]">
+                  <SelectValue placeholder="Select country" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COUNTRY_OPTIONS.map((country) => (
+                    <SelectItem key={country.code} value={country.code}>
+                      {country.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Used for local defaults, financial-year periods, and onboarding guidance.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="locale">Locale</Label>
+              <Select value={locale} onValueChange={(v) => v && setLocale(v)}>
+                <SelectTrigger id="locale" className="w-fit min-w-[200px]">
+                  <SelectValue placeholder="Select locale" />
+                </SelectTrigger>
+                <SelectContent>
+                  {LOCALE_OPTIONS.map((localeOption) => (
+                    <SelectItem key={localeOption.code} value={localeOption.code}>
+                      {localeOption.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Used for display preferences separate from reporting currency.
+              </p>
+            </div>
           </div>
         </CardContent>
         <CardFooter>

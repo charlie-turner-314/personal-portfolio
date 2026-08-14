@@ -1,12 +1,19 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { RiArrowRightLine, RiLoader4Line } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -19,15 +26,24 @@ import { OnboardingProgress } from "@/components/onboarding/onboarding-progress"
 import { ProfilePhotoUpload } from "@/components/onboarding/profile-photo-upload";
 import { CurrencySelector } from "@/components/onboarding/currency-selector";
 import { updatePersonalDetails, getCurrentUser } from "@/lib/actions/onboarding";
-import { useEffect } from "react";
+import {
+  COUNTRY_OPTIONS,
+  FALLBACK_REGIONAL_DEFAULTS,
+  LOCALE_OPTIONS,
+  getCountryDefaults,
+  inferCountryCodeFromProfile,
+} from "@/lib/constants";
 
 export default function OnboardingStep1Page() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [name, setName] = useState("");
-  const [currency, setCurrency] = useState("EUR");
+  const [countryCode, setCountryCode] = useState(FALLBACK_REGIONAL_DEFAULTS.code);
+  const [locale, setLocale] = useState(FALLBACK_REGIONAL_DEFAULTS.defaultLocale);
+  const [currency, setCurrency] = useState(FALLBACK_REGIONAL_DEFAULTS.defaultCurrency);
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
   const [defaultImage, setDefaultImage] = useState<string | null>(null);
+  const currencyWasManuallyChanged = useRef(false);
 
   // Load current user data on mount
   useEffect(() => {
@@ -35,12 +51,47 @@ export default function OnboardingStep1Page() {
       const user = await getCurrentUser();
       if (user) {
         setName(user.name || "");
-        setCurrency(user.functionalCurrency || "EUR");
+        const browserLocale = typeof navigator === "undefined" ? null : navigator.language;
+        const browserTimeZone = typeof Intl === "undefined"
+          ? null
+          : Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const hasSavedRegion = Boolean(user.countryCode || user.locale);
+        const savedFunctionalCurrency = hasSavedRegion || user.functionalCurrency !== "EUR"
+          ? user.functionalCurrency
+          : null;
+        const inferredCountryCode = inferCountryCodeFromProfile({
+          countryCode: user.countryCode,
+          functionalCurrency: savedFunctionalCurrency,
+          locale: user.locale || browserLocale,
+          timeZone: browserTimeZone,
+        });
+        const defaults = getCountryDefaults(inferredCountryCode);
+        setCountryCode(defaults.code);
+        setLocale(user.locale || defaults.defaultLocale);
+        setCurrency(savedFunctionalCurrency || defaults.defaultCurrency);
         setDefaultImage(user.profilePhotoPath || user.image || null);
       }
     }
     loadUser();
   }, []);
+
+  const handleCountryChange = (nextCountryCode: string) => {
+    const defaults = getCountryDefaults(nextCountryCode);
+    setCountryCode(defaults.code);
+    setLocale(defaults.defaultLocale);
+    if (!currencyWasManuallyChanged.current) {
+      setCurrency(defaults.defaultCurrency);
+    }
+  };
+
+  const handleCurrencyChange = (nextCurrency: string) => {
+    currencyWasManuallyChanged.current = true;
+    setCurrency(nextCurrency);
+    if (nextCurrency === "AUD") {
+      setCountryCode("AU");
+      setLocale("en-AU");
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,6 +105,8 @@ export default function OnboardingStep1Page() {
       const formData = new FormData();
       formData.append("name", name);
       formData.append("currency", currency);
+      formData.append("countryCode", countryCode);
+      formData.append("locale", locale);
       if (profilePhoto) {
         formData.append("profilePhoto", profilePhoto);
       }
@@ -72,7 +125,7 @@ export default function OnboardingStep1Page() {
     <div className="space-y-8">
       <OnboardingProgress currentStep={1} />
 
-      <Card className="min-h-[640px] h-[640px] flex flex-col">
+      <Card className="min-h-[720px] flex flex-col">
         <CardHeader>
           <CardTitle>Welcome! Let&apos;s set up your profile</CardTitle>
           <CardDescription>
@@ -107,10 +160,44 @@ export default function OnboardingStep1Page() {
 
             <CurrencySelector
               value={currency}
-              onChange={setCurrency}
+              onChange={handleCurrencyChange}
               label="Functional Currency"
               showTooltip={true}
             />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="country">Country</Label>
+                <Select value={countryCode} onValueChange={(v) => v && handleCountryChange(v)}>
+                  <SelectTrigger id="country">
+                    <SelectValue placeholder="Select country" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COUNTRY_OPTIONS.map((country) => (
+                      <SelectItem key={country.code} value={country.code}>
+                        {country.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="locale">Locale</Label>
+                <Select value={locale} onValueChange={(v) => v && setLocale(v)}>
+                  <SelectTrigger id="locale">
+                    <SelectValue placeholder="Select locale" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LOCALE_OPTIONS.map((localeOption) => (
+                      <SelectItem key={localeOption.code} value={localeOption.code}>
+                        {localeOption.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </CardContent>
           <CardFooter className="flex justify-end">
             <Button type="submit" disabled={isPending || !name.trim()}>

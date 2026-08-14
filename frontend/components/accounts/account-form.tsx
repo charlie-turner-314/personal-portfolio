@@ -33,6 +33,9 @@ interface AccountFormProps {
   cancelLabel?: string;
   showCancel?: boolean;
   successMessage?: string;
+  defaultCurrency?: string;
+  defaultAccountType?: string;
+  countryCode?: string | null;
 }
 
 export function AccountForm({
@@ -42,13 +45,16 @@ export function AccountForm({
   cancelLabel = "Cancel",
   showCancel = true,
   successMessage = "Account created successfully",
+  defaultCurrency = "EUR",
+  defaultAccountType = "",
+  countryCode = null,
 }: AccountFormProps) {
   const [isLoading, setIsLoading] = useState(false);
 
   const [name, setName] = useState("");
-  const [accountType, setAccountType] = useState("");
+  const [accountType, setAccountType] = useState(defaultAccountType);
   const [institution, setInstitution] = useState("");
-  const [currency, setCurrency] = useState("EUR");
+  const [currency, setCurrency] = useState(defaultCurrency);
   const [initialBalance, setInitialBalance] = useState("");
   const [liabilityInterestRate, setLiabilityInterestRate] = useState("");
   const [liabilityRepaymentAmount, setLiabilityRepaymentAmount] = useState("");
@@ -81,6 +87,7 @@ export function AccountForm({
   }, []);
 
   const accountIsLiability = isLiabilityAccountType(accountType);
+  const isAustralianProfile = countryCode === "AU";
 
   useEffect(() => {
     if (accountIsLiability && isPocket) {
@@ -91,9 +98,9 @@ export function AccountForm({
 
   const resetForm = () => {
     setName("");
-    setAccountType("");
+    setAccountType(defaultAccountType);
     setInstitution("");
-    setCurrency("EUR");
+    setCurrency(defaultCurrency);
     setInitialBalance("");
     setLiabilityInterestRate("");
     setLiabilityRepaymentAmount("");
@@ -268,7 +275,7 @@ export function AccountForm({
           <Label htmlFor="account-name">Account Name</Label>
           <Input
             id="account-name"
-            placeholder="e.g., Main Checking"
+            placeholder={isAustralianProfile ? "e.g., Everyday Account" : "e.g., Main Checking"}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -295,7 +302,7 @@ export function AccountForm({
             <Label htmlFor="account-institution">Institution (optional)</Label>
             <Input
               id="account-institution"
-              placeholder="e.g., Bank of America"
+              placeholder={isAustralianProfile ? "e.g., CommBank, Westpac, NAB, ANZ" : "e.g., Bank of America"}
               value={institution}
               onChange={(e) => setInstitution(e.target.value)}
             />
@@ -418,7 +425,7 @@ export function AccountForm({
           </div>
         )}
 
-        {!accountIsLiability && (
+        {!accountIsLiability && !isAustralianProfile && (
           <div className="flex items-center justify-between rounded border p-3">
             <div className="space-y-0.5">
               <Label htmlFor="is-pocket" className="cursor-pointer">
