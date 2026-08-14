@@ -393,7 +393,9 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
                 <Label htmlFor="edit-type">Account Type</Label>
                 <Select value={editAccountType} onValueChange={(v) => v && setEditAccountType(v)}>
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue>
+                      {(value) => value ? getAccountTypeLabel(value) : "Select account type"}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {ACCOUNT_TYPES.map((type) => (
