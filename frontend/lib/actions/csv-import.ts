@@ -197,6 +197,22 @@ export interface CsvImportSession {
   parsedData?: ParsedCsvData;
 }
 
+export type AiColumnMappingOutcome = "success" | "failed" | "timed_out";
+
+export type AiColumnMappingResult =
+  | {
+      outcome: "success";
+      success: true;
+      mapping: ColumnMapping;
+    }
+  | {
+      outcome: "failed" | "timed_out";
+      success: false;
+      error: string;
+    };
+
+const AI_COLUMN_MAPPING_TIMEOUT_MS = 30_000;
+
 export async function initializeCsvImport(
   accountId: string,
   fileName: string,
@@ -330,10 +346,14 @@ export async function getAiColumnMapping(
   importId: string,
   csvHeaders: string[],
   sampleRows: string[][]
-): Promise<{ success: boolean; error?: string; mapping?: ColumnMapping }> {
+): Promise<AiColumnMappingResult> {
   const access = await getCsvImportAccess();
   if ("error" in access) {
-    return { success: false, error: access.error };
+    return {
+      outcome: "failed",
+      success: false,
+      error: access.error ?? "Unable to analyze CSV columns.",
+    };
   }
   const { userId } = access;
 
@@ -350,11 +370,17 @@ export async function getAiColumnMapping(
       })
       .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
 
-    return { success: true, mapping: suggestedMapping };
+    return { outcome: "success", success: true, mapping: suggestedMapping };
   }
 
   try {
-    const openai = new OpenAI({ apiKey: openaiApiKey });
+    const openai = new OpenAI({
+      apiKey: openaiApiKey,
+      timeout: AI_COLUMN_MAPPING_TIMEOUT_MS,
+      // A single bounded request gives the UI a reliable timeout rather than
+      // allowing SDK retries to extend the analysis indefinitely.
+      maxRetries: 0,
+    });
 
     // Prepare sample data for the prompt
     const sampleData = sampleRows.slice(0, 3).map((row) => {
@@ -425,13 +451,21 @@ Use null for columns that don't exist or can't be determined. Australian bank CS
 
     const content = response.choices[0]?.message?.content;
     if (!content) {
-      return { success: false, error: "No response from AI" };
+      return {
+        outcome: "failed",
+        success: false,
+        error: "AI could not analyze this CSV. Try again or map the columns manually.",
+      };
     }
 
     // Parse the JSON response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      return { success: false, error: "Invalid AI response format" };
+      return {
+        outcome: "failed",
+        success: false,
+        error: "AI could not analyze this CSV. Try again or map the columns manually.",
+      };
     }
 
     const aiMapping = normalizeColumnMapping(JSON.parse(jsonMatch[0]) as ColumnMapping);
@@ -451,12 +485,27 @@ Use null for columns that don't exist or can't be determined. Australian bank CS
         columnMapping: mapping,
         status: "mapping",
       })
-      .where(eq(csvImports.id, importId));
+      .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
 
-    return { success: true, mapping };
+    return { outcome: "success", success: true, mapping };
   } catch (error) {
     console.error("Failed to get AI column mapping:", error);
-    return { success: false, error: "Failed to analyze CSV columns" };
+    if (
+      error instanceof OpenAI.APIConnectionTimeoutError ||
+      (error instanceof Error && error.name === "AbortError")
+    ) {
+      return {
+        outcome: "timed_out",
+        success: false,
+        error: "AI analysis timed out. Try again or map the columns manually.",
+      };
+    }
+
+    return {
+      outcome: "failed",
+      success: false,
+      error: "AI could not analyze this CSV. Try again or map the columns manually.",
+    };
   }
 }
 
