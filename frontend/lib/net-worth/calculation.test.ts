@@ -166,4 +166,64 @@ describe("calculateNetWorthOverview", () => {
       "hecs",
     ]);
   });
+
+  it("keeps superannuation separate from generic investments and includes it once", () => {
+    const overview = calculateNetWorthOverview([
+      {
+        id: "brokerage",
+        name: "Brokerage",
+        institution: null,
+        value: 20_000,
+        source: "account",
+        accountType: "investment_brokerage",
+      },
+      {
+        id: "super",
+        name: "AustralianSuper",
+        institution: "Balanced",
+        value: 180_000,
+        source: "account",
+        accountType: "superannuation",
+        isSuperannuation: true,
+        includeInNetWorth: true,
+      },
+    ], "AUD");
+
+    expect(overview.grossAssets).toBe(200_000);
+    expect(overview.netWorth).toBe(200_000);
+    expect(overview.categories.find((category) => category.key === "investment")?.value).toBe(20_000);
+    expect(overview.superannuation.includedValue).toBe(180_000);
+    expect(overview.superannuation.includedAccounts).toMatchObject([{ id: "super", value: 180_000 }]);
+    expect(overview.superannuation.excludedValue).toBe(0);
+  });
+
+  it("discloses excluded superannuation without counting it in gross assets or net worth", () => {
+    const overview = calculateNetWorthOverview([
+      {
+        id: "cash",
+        name: "Cash",
+        institution: null,
+        value: 10_000,
+        source: "account",
+        accountType: "checking",
+      },
+      {
+        id: "super-excluded",
+        name: "Hostplus",
+        institution: "Indexed Balanced",
+        value: 150_000,
+        source: "account",
+        accountType: "superannuation",
+        isSuperannuation: true,
+        includeInNetWorth: false,
+      },
+    ], "AUD");
+
+    expect(overview.grossAssets).toBe(10_000);
+    expect(overview.netWorth).toBe(10_000);
+    expect(overview.categories.find((category) => category.key === "investment")?.value).toBe(0);
+    expect(overview.superannuation.includedValue).toBe(0);
+    expect(overview.superannuation.excludedValue).toBe(150_000);
+    expect(overview.superannuation.excludedAccounts).toMatchObject([{ id: "super-excluded", value: 150_000 }]);
+  });
 });

@@ -82,6 +82,7 @@ class Account(Base):
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="account")
     planned_expenses = relationship("PlannedExpense", back_populates="account")
     cashflow_overrides = relationship("CashflowOverride", back_populates="account")
+    super_account = relationship("SuperAccount", back_populates="account", uselist=False, cascade="all, delete-orphan")
 
     # Indexes and constraints
     __table_args__ = (
@@ -676,6 +677,76 @@ class AccountBalance(Base):
     )
 
 
+class SuperAccount(Base):
+    """First-class superannuation metadata for a manual super account."""
+    __tablename__ = "super_accounts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    fund_name = Column(String(255), nullable=False)
+    investment_option = Column(String(255), nullable=True)
+    include_in_net_worth = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship("Account", back_populates="super_account")
+    user = relationship("User", back_populates="super_accounts")
+    contributions = relationship("SuperContribution", back_populates="super_account", cascade="all, delete-orphan")
+
+    __table_args__ = (Index("idx_super_accounts_user", "user_id"),)
+
+
+class SuperContribution(Base):
+    """Immutable fund-statement or manual contribution event, never a cash transaction."""
+    __tablename__ = "super_contributions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    super_account_id = Column(UUID(as_uuid=True), ForeignKey("super_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(Date, nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="AUD")
+    kind = Column(String(40), nullable=False)
+    notes = Column(Text, nullable=True)
+    source_import_id = Column(UUID(as_uuid=True), ForeignKey("csv_imports.id", ondelete="SET NULL"), nullable=True)
+    source_row_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    super_account = relationship("SuperAccount", back_populates="contributions")
+    user = relationship("User", back_populates="super_contributions")
+
+    __table_args__ = (
+        Index("idx_super_contributions_user_date", "user_id", "date"),
+        Index("idx_super_contributions_account_date", "super_account_id", "date"),
+        Index("super_contributions_import_row_unique", "source_import_id", "source_row_hash", unique=True, postgresql_where=text("source_import_id IS NOT NULL AND source_row_hash IS NOT NULL")),
+        CheckConstraint("amount > 0", name="super_contributions_amount_positive"),
+        CheckConstraint("kind in ('employer_sg', 'salary_sacrifice', 'personal_concessional', 'personal_non_concessional', 'fee', 'insurance')", name="super_contributions_kind_check"),
+    )
+
+
+class SuperContributionCap(Base):
+    """User-configured contribution caps for one Australian financial year."""
+    __tablename__ = "super_contribution_caps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    financial_year_start = Column(Integer, nullable=False)
+    concessional_cap = Column(Numeric(15, 2), nullable=True)
+    non_concessional_cap = Column(Numeric(15, 2), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="super_contribution_caps")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "financial_year_start", name="super_contribution_caps_user_fy_unique"),
+        CheckConstraint("financial_year_start BETWEEN 1900 AND 9998", name="super_contribution_caps_fy_check"),
+        CheckConstraint("concessional_cap IS NULL OR concessional_cap >= 0", name="super_contribution_caps_concessional_positive"),
+        CheckConstraint("non_concessional_cap IS NULL OR non_concessional_cap >= 0", name="super_contribution_caps_non_concessional_positive"),
+    )
+
+
 class Property(Base):
     """
     Property model matching Drizzle schema.
@@ -990,6 +1061,9 @@ class User(Base):
     cashflow_overrides = relationship("CashflowOverride", back_populates="user", cascade="all, delete-orphan")
     recurring_transaction_schedule_overrides = relationship("RecurringTransactionScheduleOverride", back_populates="user", cascade="all, delete-orphan")
     bank_connections = relationship("BankConnection", back_populates="user", cascade="all, delete-orphan")
+    super_accounts = relationship("SuperAccount", back_populates="user", cascade="all, delete-orphan")
+    super_contributions = relationship("SuperContribution", back_populates="user", cascade="all, delete-orphan")
+    super_contribution_caps = relationship("SuperContributionCap", back_populates="user", cascade="all, delete-orphan")
 
 
 class ApiKey(Base):

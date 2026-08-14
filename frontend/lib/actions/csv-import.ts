@@ -1,9 +1,19 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { desc, eq, and, inArray, sql } from "drizzle-orm";
+import { createHash } from "crypto";
 import { db } from "@/lib/db";
-import { csvImportProfiles, csvImports, accounts, transactions, type NewTransaction } from "@/lib/db/schema";
+import {
+  accountBalances,
+  accounts,
+  csvImportProfiles,
+  csvImports,
+  superAccounts,
+  superContributions,
+  transactions,
+  type NewTransaction,
+} from "@/lib/db/schema";
 import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
 import { deleteTransactions } from "@/lib/actions/transactions";
 import { storage } from "@/lib/storage";
@@ -27,6 +37,10 @@ import {
 } from "@/lib/import/csv-presets";
 import { detectDuplicates, markDuplicates } from "@/lib/utils/duplicate-detection";
 import { decryptWithFallback, encryptValue } from "@/lib/security/data-encryption";
+import {
+  isSuperContributionKind,
+  type SuperContributionKind,
+} from "@/lib/superannuation/cap-progress";
 import OpenAI from "openai";
 
 // Helper function to create date at midnight UTC to avoid timezone shifts
@@ -1765,6 +1779,318 @@ export async function getCsvImportSession(
     profileApplied: Boolean(importProfile),
     totalRows: importSession.totalRows,
   };
+}
+
+// ============================================================================
+// Superannuation statement imports
+// ============================================================================
+
+/**
+ * Mapping for a super fund statement. This deliberately remains separate from
+ * ColumnMapping so ordinary bank imports cannot accidentally create super data.
+ */
+export interface SuperStatementColumnMapping {
+  date: string | null;
+  amount: string | null;
+  eventType: string | null;
+  balance: string | null;
+  description: string | null;
+  typeConfig?: {
+    amountFormat?: AmountFormat;
+    dateFormat?: "DD-MM-YYYY" | "MM-DD-YYYY";
+  };
+}
+
+export interface SuperStatementImportResult {
+  success: boolean;
+  error?: string;
+  contributionsImported?: number;
+  balanceSnapshotsImported?: number;
+  duplicatesSkipped?: number;
+  rowsNeedingAttention?: number;
+}
+
+const SUPER_EVENT_TYPE_ALIASES: Record<string, SuperContributionKind> = {
+  "employer sg": "employer_sg",
+  "employer contribution": "employer_sg",
+  "employer contributions": "employer_sg",
+  "super guarantee": "employer_sg",
+  "salary sacrifice": "salary_sacrifice",
+  "salary sacrifice contribution": "salary_sacrifice",
+  "personal concessional": "personal_concessional",
+  "personal contribution concessional": "personal_concessional",
+  "personal non concessional": "personal_non_concessional",
+  "personal contribution non concessional": "personal_non_concessional",
+  fee: "fee",
+  fees: "fee",
+  "administration fee": "fee",
+  "investment fee": "fee",
+  insurance: "insurance",
+  "insurance premium": "insurance",
+};
+
+function superStatementColumnIndex(headers: string[], column: string | null): number {
+  return column ? headers.indexOf(column) : -1;
+}
+
+function parseSuperStatementDate(
+  raw: string | undefined,
+  dateFormat: "DD-MM-YYYY" | "MM-DD-YYYY" = "DD-MM-YYYY",
+): string | null {
+  const value = raw?.trim().replace(/[\"']/g, "");
+  if (!value) return null;
+
+  const iso = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(value);
+  const local = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(value);
+  const compact = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  let year: number;
+  let month: number;
+  let day: number;
+
+  if (iso) {
+    year = Number(iso[1]);
+    month = Number(iso[2]);
+    day = Number(iso[3]);
+  } else if (compact) {
+    year = Number(compact[1]);
+    month = Number(compact[2]);
+    day = Number(compact[3]);
+  } else if (local) {
+    const first = Number(local[1]);
+    const second = Number(local[2]);
+    year = Number(local[3]);
+    if (first > 12) {
+      day = first;
+      month = second;
+    } else if (second > 12) {
+      day = second;
+      month = first;
+    } else if (dateFormat === "MM-DD-YYYY") {
+      month = first;
+      day = second;
+    } else {
+      day = first;
+      month = second;
+    }
+  } else {
+    return null;
+  }
+
+  const parsed = createUTCDate(year, month - 1, day);
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeSuperEventType(raw: string | undefined): SuperContributionKind | null {
+  const normalized = raw?.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (!normalized) return null;
+  if (isSuperContributionKind(normalized)) return normalized;
+  return SUPER_EVENT_TYPE_ALIASES[normalized] ?? null;
+}
+
+export function createSuperStatementRowHash(
+  importId: string,
+  rowIndex: number,
+  row: string[],
+): string {
+  return createHash("sha256")
+    .update(`${importId}\u0000${rowIndex}\u0000${JSON.stringify(row)}`)
+    .digest("hex");
+}
+
+function parseSuperStatementNumber(
+  raw: string | undefined,
+  options: { amountFormat: AmountFormat; inferredFormat: InferredAmountFormat },
+): number | null {
+  return parseLocalizedNumber(raw, {
+    amountFormat: options.amountFormat,
+    inferredFormat: options.inferredFormat,
+    allowGroupedIntegersWhenAmbiguous: true,
+  });
+}
+
+/**
+ * Imports a super fund statement into the dedicated super tables. It never
+ * creates transactions, so the ordinary bank CSV workflow is unaffected.
+ */
+export async function importSuperStatement(
+  importId: string,
+  mapping: SuperStatementColumnMapping,
+): Promise<SuperStatementImportResult> {
+  const access = await getCsvImportAccess();
+  if ("error" in access) return { success: false, error: access.error };
+  const { userId } = access;
+
+  if (!mapping.date || (!mapping.balance && (!mapping.amount || !mapping.eventType))) {
+    return {
+      success: false,
+      error: "Map Date plus Balance, or Date, Amount, and Event Type before importing.",
+    };
+  }
+
+  try {
+    const importSession = await db.query.csvImports.findFirst({
+      where: and(eq(csvImports.id, importId), eq(csvImports.userId, userId)),
+    });
+    if (!importSession) return { success: false, error: "Import session not found" };
+
+    const [account, superAccount] = await Promise.all([
+      db.query.accounts.findFirst({
+        where: and(eq(accounts.id, importSession.accountId), eq(accounts.userId, userId)),
+      }),
+      db.query.superAccounts.findFirst({
+        where: and(eq(superAccounts.accountId, importSession.accountId), eq(superAccounts.userId, userId)),
+      }),
+    ]);
+    if (!account || account.accountType !== "superannuation" || !superAccount) {
+      return { success: false, error: "This import is not associated with a superannuation account" };
+    }
+
+    const filePath = resolveImportFilePath(importSession);
+    if (!filePath) return { success: false, error: "Import file path is unavailable" };
+
+    const fileContent = (await storage.download(filePath)).toString("utf-8");
+    const parsed = parseDelimitedText(fileContent, detectCsvDelimiter(fileContent));
+    const dateIndex = superStatementColumnIndex(parsed.headers, mapping.date);
+    const amountIndex = superStatementColumnIndex(parsed.headers, mapping.amount);
+    const eventTypeIndex = superStatementColumnIndex(parsed.headers, mapping.eventType);
+    const balanceIndex = superStatementColumnIndex(parsed.headers, mapping.balance);
+    const descriptionIndex = superStatementColumnIndex(parsed.headers, mapping.description);
+
+    if (
+      dateIndex < 0 ||
+      (balanceIndex < 0 && (amountIndex < 0 || eventTypeIndex < 0))
+    ) {
+      return { success: false, error: "One or more mapped columns could not be found in this file" };
+    }
+
+    const numericIndices = [amountIndex, balanceIndex].filter((index) => index >= 0);
+    const numberOptions = {
+      amountFormat: mapping.typeConfig?.amountFormat ?? "AUTO",
+      inferredFormat: inferAmountFormat(collectNumericSamples(parsed.rows, numericIndices)),
+    };
+    let contributionsImported = 0;
+    let balanceSnapshotsImported = 0;
+    let duplicatesSkipped = 0;
+    let rowsNeedingAttention = 0;
+    const lastBalanceRowByDate = new Map<string, number>();
+
+    // A statement may contain several activity rows on one day. The final
+    // balance on that date is the only authoritative snapshot.
+    if (balanceIndex >= 0) {
+      for (let rowIndex = 0; rowIndex < parsed.rows.length; rowIndex += 1) {
+        const row = parsed.rows[rowIndex];
+        if (!row[balanceIndex]?.trim()) continue;
+        const date = parseSuperStatementDate(row[dateIndex], mapping.typeConfig?.dateFormat);
+        if (date) lastBalanceRowByDate.set(date, rowIndex);
+      }
+    }
+
+    for (let rowIndex = 0; rowIndex < parsed.rows.length; rowIndex += 1) {
+      const row = parsed.rows[rowIndex];
+      const date = parseSuperStatementDate(row[dateIndex], mapping.typeConfig?.dateFormat);
+      if (!date) {
+        rowsNeedingAttention += 1;
+        continue;
+      }
+
+      let rowHasProblem = false;
+      const sourceRowHash = createSuperStatementRowHash(importId, rowIndex, row);
+
+      if (
+        balanceIndex >= 0 &&
+        row[balanceIndex]?.trim() &&
+        lastBalanceRowByDate.get(date) === rowIndex
+      ) {
+        const balance = parseSuperStatementNumber(row[balanceIndex], numberOptions);
+        if (balance === null || balance < 0) {
+          rowHasProblem = true;
+        } else {
+          const inserted = await db.insert(accountBalances).values({
+            accountId: account.id,
+            date: new Date(`${date}T12:00:00.000Z`),
+            balanceInAccountCurrency: balance.toFixed(2),
+            balanceInFunctionalCurrency: balance.toFixed(2),
+          }).onConflictDoNothing().returning({ id: accountBalances.id });
+          if (inserted.length > 0) {
+            balanceSnapshotsImported += 1;
+          } else {
+            duplicatesSkipped += 1;
+          }
+        }
+      }
+
+      const hasContributionData = amountIndex >= 0 && eventTypeIndex >= 0 &&
+        Boolean(row[amountIndex]?.trim() || row[eventTypeIndex]?.trim());
+      if (hasContributionData) {
+        const amount = parseSuperStatementNumber(row[amountIndex], numberOptions);
+        const kind = normalizeSuperEventType(row[eventTypeIndex]);
+        if (amount === null || amount === 0 || !kind) {
+          rowHasProblem = true;
+        } else {
+          const inserted = await db.insert(superContributions).values({
+            userId,
+            superAccountId: superAccount.id,
+            date,
+            amount: Math.abs(amount).toFixed(2),
+            currency: (account.currency || "AUD").toUpperCase(),
+            kind,
+            notes: descriptionIndex >= 0 ? row[descriptionIndex]?.trim() || null : null,
+            sourceImportId: importSession.id,
+            sourceRowHash,
+          }).onConflictDoNothing().returning({ id: superContributions.id });
+          if (inserted.length > 0) {
+            contributionsImported += 1;
+          } else {
+            duplicatesSkipped += 1;
+          }
+        }
+      }
+
+      if (rowHasProblem) rowsNeedingAttention += 1;
+    }
+
+    const latestBalance = await db.query.accountBalances.findFirst({
+      where: eq(accountBalances.accountId, account.id),
+      orderBy: [desc(accountBalances.date)],
+    });
+    if (latestBalance) {
+      await db.update(accounts).set({
+        functionalBalance: latestBalance.balanceInFunctionalCurrency,
+        updatedAt: new Date(),
+      }).where(and(eq(accounts.id, account.id), eq(accounts.userId, userId)));
+    }
+
+    await db.update(csvImports).set({
+      status: "completed",
+      importedRows: contributionsImported + balanceSnapshotsImported,
+      duplicatesFound: duplicatesSkipped,
+      rowsNeedingAttention,
+      completedAt: new Date(),
+    }).where(and(eq(csvImports.id, importSession.id), eq(csvImports.userId, userId)));
+
+    revalidatePath(`/accounts/${account.id}`);
+    revalidatePath("/");
+    revalidatePath("/assets");
+
+    return {
+      success: true,
+      contributionsImported,
+      balanceSnapshotsImported,
+      duplicatesSkipped,
+      rowsNeedingAttention,
+    };
+  } catch (error) {
+    console.error("Failed to import super statement:", error);
+    return { success: false, error: "Failed to import super statement" };
+  }
 }
 
 // ============================================================================

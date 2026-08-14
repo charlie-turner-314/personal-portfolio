@@ -1,4 +1,5 @@
 import type { AssetCategoryKey } from "@/lib/assets/asset-category";
+import type { NetWorthSuperannuation } from "@/lib/net-worth/calculation";
 
 export type { AssetCategoryKey };
 export {
@@ -47,6 +48,7 @@ export interface AssetsOverviewData {
   currency: string;
   categories: AssetCategory[];
   liabilities: AssetLiability[];
+  superannuation: NetWorthSuperannuation;
 }
 
 export const PROPERTY_TYPES = [

@@ -17,6 +17,8 @@ export interface NetWorthEntry {
   currency?: string | null;
   source: NetWorthEntrySource;
   accountType?: string | null;
+  isSuperannuation?: boolean;
+  includeInNetWorth?: boolean | null;
 }
 
 export interface NetWorthAssetAccount {
@@ -50,6 +52,13 @@ export interface NetWorthAssetCategory {
   accounts: NetWorthAssetAccount[];
 }
 
+export interface NetWorthSuperannuation {
+  includedValue: number;
+  excludedValue: number;
+  includedAccounts: NetWorthAssetAccount[];
+  excludedAccounts: NetWorthAssetAccount[];
+}
+
 export interface NetWorthOverview {
   total: number;
   grossAssets: number;
@@ -58,6 +67,7 @@ export interface NetWorthOverview {
   currency: string;
   categories: NetWorthAssetCategory[];
   liabilities: NetWorthLiability[];
+  superannuation: NetWorthSuperannuation;
 }
 
 function parseAmount(value: NetWorthEntry["value"]): number {
@@ -88,6 +98,15 @@ function buildEmptyCategories(): NetWorthAssetCategory[] {
   }));
 }
 
+function buildEmptySuperannuation(): NetWorthSuperannuation {
+  return {
+    includedValue: 0,
+    excludedValue: 0,
+    includedAccounts: [],
+    excludedAccounts: [],
+  };
+}
+
 export function emptyNetWorthOverview(currency = "EUR"): NetWorthOverview {
   return {
     total: 0,
@@ -97,6 +116,7 @@ export function emptyNetWorthOverview(currency = "EUR"): NetWorthOverview {
     currency,
     categories: buildEmptyCategories(),
     liabilities: [],
+    superannuation: buildEmptySuperannuation(),
   };
 }
 
@@ -106,12 +126,29 @@ export function calculateNetWorthOverview(
 ): NetWorthOverview {
   const categoryMap = new Map<AssetCategoryKey, NetWorthAssetAccount[]>();
   const liabilities: NetWorthLiability[] = [];
+  const superannuation = buildEmptySuperannuation();
   let grossAssets = 0;
   let totalLiabilities = 0;
 
   for (const entry of entries) {
     const value = parseAmount(entry.value);
     if (value === 0) continue;
+
+    const isExcludedSuper = entry.isSuperannuation && entry.includeInNetWorth === false;
+    if (isExcludedSuper) {
+      const account = {
+        id: entry.id,
+        name: entry.name,
+        institution: entry.institution,
+        value,
+        percentage: 0,
+        currency: entry.currency || currency,
+        initial: getInitial(entry.name),
+      };
+      superannuation.excludedValue += value;
+      superannuation.excludedAccounts.push(account);
+      continue;
+    }
 
     const liability = value < 0 || (
       entry.source === "account" &&
@@ -135,6 +172,22 @@ export function calculateNetWorthOverview(
     }
 
     if (value > 0) {
+      if (entry.isSuperannuation) {
+        const account = {
+          id: entry.id,
+          name: entry.name,
+          institution: entry.institution,
+          value,
+          percentage: 0,
+          currency: entry.currency || currency,
+          initial: getInitial(entry.name),
+        };
+        superannuation.includedValue += value;
+        superannuation.includedAccounts.push(account);
+        grossAssets += value;
+        continue;
+      }
+
       const category = getEntryAssetCategory(entry);
       grossAssets += value;
 
@@ -175,6 +228,23 @@ export function calculateNetWorthOverview(
     };
   });
 
+  const superAccountsWithPercentages = (accounts: NetWorthAssetAccount[], total: number) =>
+    accounts
+      .map((account) => ({
+        ...account,
+        percentage: total > 0 ? (account.value / total) * 100 : 0,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+  superannuation.includedAccounts = superAccountsWithPercentages(
+    superannuation.includedAccounts,
+    superannuation.includedValue,
+  );
+  superannuation.excludedAccounts = superAccountsWithPercentages(
+    superannuation.excludedAccounts,
+    superannuation.excludedValue,
+  );
+
   liabilities.sort((a, b) => b.value - a.value);
 
   const netWorth = grossAssets - totalLiabilities;
@@ -186,5 +256,6 @@ export function calculateNetWorthOverview(
     currency,
     categories,
     liabilities,
+    superannuation,
   };
 }

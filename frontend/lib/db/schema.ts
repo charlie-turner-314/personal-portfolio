@@ -264,6 +264,83 @@ export const accounts = pgTable(
   ]
 );
 
+/** Australian superannuation-specific metadata for an account. */
+export const superAccounts = pgTable(
+  "super_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    fundName: varchar("fund_name", { length: 255 }).notNull(),
+    investmentOption: varchar("investment_option", { length: 255 }),
+    includeInNetWorth: boolean("include_in_net_worth").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("super_accounts_account_unique").on(table.accountId),
+    index("idx_super_accounts_user").on(table.userId),
+  ],
+);
+
+export const superContributions = pgTable(
+  "super_contributions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    superAccountId: uuid("super_account_id")
+      .references(() => superAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    date: date("date").notNull(),
+    amount: decimal("amount", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull().default("AUD"),
+    kind: varchar("kind", { length: 40 }).notNull(),
+    notes: text("notes"),
+    sourceImportId: uuid("source_import_id").references(() => csvImports.id, { onDelete: "set null" }),
+    sourceRowHash: varchar("source_row_hash", { length: 64 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_super_contributions_user_date").on(table.userId, table.date),
+    index("idx_super_contributions_account_date").on(table.superAccountId, table.date),
+    uniqueIndex("super_contributions_import_row_unique")
+      .on(table.sourceImportId, table.sourceRowHash)
+      .where(sql`${table.sourceImportId} IS NOT NULL AND ${table.sourceRowHash} IS NOT NULL`),
+    check("super_contributions_amount_positive", sql`${table.amount} > 0`),
+    check(
+      "super_contributions_kind_check",
+      sql`${table.kind} IN ('employer_sg', 'salary_sacrifice', 'personal_concessional', 'personal_non_concessional', 'fee', 'insurance')`,
+    ),
+  ],
+);
+
+export const superContributionCaps = pgTable(
+  "super_contribution_caps",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    financialYearStart: integer("financial_year_start").notNull(),
+    concessionalCap: decimal("concessional_cap", { precision: 15, scale: 2 }),
+    nonConcessionalCap: decimal("non_concessional_cap", { precision: 15, scale: 2 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("super_contribution_caps_user_fy_unique").on(table.userId, table.financialYearStart),
+    check("super_contribution_caps_fy_check", sql`${table.financialYearStart} BETWEEN 1900 AND 9998`),
+    check("super_contribution_caps_concessional_positive", sql`${table.concessionalCap} IS NULL OR ${table.concessionalCap} >= 0`),
+    check("super_contribution_caps_non_concessional_positive", sql`${table.nonConcessionalCap} IS NULL OR ${table.nonConcessionalCap} >= 0`),
+  ],
+);
+
 export const bankConnections = pgTable(
   "bank_connections",
   {
@@ -1045,7 +1122,7 @@ export const vehicleOwners = pgTable(
 // Relations
 // ============================================================================
 
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   sessions: many(sessions),
   authAccounts: many(authAccounts),
   accounts: many(accounts),
@@ -1059,6 +1136,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   categorizationRules: many(categorizationRules),
   csvImports: many(csvImports),
   csvImportProfiles: many(csvImportProfiles),
+  superAccount: one(superAccounts),
   properties: many(properties),
   propertyLiabilityLinks: many(propertyLiabilityLinks),
   propertyValuations: many(propertyValuations),
@@ -1068,6 +1146,40 @@ export const usersRelations = relations(users, ({ many }) => ({
   transactionLinks: many(transactionLinks),
   bankConnections: many(bankConnections),
   people: many(people),
+}));
+
+export const superAccountsRelations = relations(superAccounts, ({ one, many }) => ({
+  account: one(accounts, {
+    fields: [superAccounts.accountId],
+    references: [accounts.id],
+  }),
+  user: one(users, {
+    fields: [superAccounts.userId],
+    references: [users.id],
+  }),
+  contributions: many(superContributions),
+}));
+
+export const superContributionsRelations = relations(superContributions, ({ one }) => ({
+  superAccount: one(superAccounts, {
+    fields: [superContributions.superAccountId],
+    references: [superAccounts.id],
+  }),
+  user: one(users, {
+    fields: [superContributions.userId],
+    references: [users.id],
+  }),
+  sourceImport: one(csvImports, {
+    fields: [superContributions.sourceImportId],
+    references: [csvImports.id],
+  }),
+}));
+
+export const superContributionCapsRelations = relations(superContributionCaps, ({ one }) => ({
+  user: one(users, {
+    fields: [superContributionCaps.userId],
+    references: [users.id],
+  }),
 }));
 
 export const apiKeysRelations = relations(apiKeys, ({ one }) => ({

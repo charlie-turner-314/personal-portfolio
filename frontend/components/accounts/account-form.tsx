@@ -63,6 +63,9 @@ export function AccountForm({
   const [liabilitySecured, setLiabilitySecured] = useState("unknown");
   const [isPocket, setIsPocket] = useState(false);
   const [iban, setIban] = useState("");
+  const [superFundName, setSuperFundName] = useState("");
+  const [superInvestmentOption, setSuperInvestmentOption] = useState("");
+  const [includeSuperInNetWorth, setIncludeSuperInNetWorth] = useState(true);
 
   // Ownership state
   const [people, setPeople] = useState<Person[]>([]);
@@ -88,6 +91,7 @@ export function AccountForm({
 
   const accountIsLiability = isLiabilityAccountType(accountType);
   const isAustralianProfile = countryCode === "AU";
+  const isSuperAccount = accountType === "superannuation";
 
   useEffect(() => {
     if (accountIsLiability && isPocket) {
@@ -109,6 +113,9 @@ export function AccountForm({
     setLiabilitySecured("unknown");
     setIsPocket(false);
     setIban("");
+    setSuperFundName("");
+    setSuperInvestmentOption("");
+    setIncludeSuperInNetWorth(true);
     setOwnersError(null);
     // Re-seed owners to self
     const self = people.find((p) => p.kind === "self");
@@ -166,6 +173,10 @@ export function AccountForm({
     }
     if (!currency) {
       toast.error("Please select a currency");
+      return;
+    }
+    if (isSuperAccount && !superFundName.trim()) {
+      toast.error("Please enter the super fund or provider");
       return;
     }
 
@@ -235,6 +246,9 @@ export function AccountForm({
             liabilitySecured: accountIsLiability && liabilitySecured !== "unknown"
               ? liabilitySecured === "secured"
               : undefined,
+            superFundName: isSuperAccount ? superFundName.trim() : undefined,
+            superInvestmentOption: isSuperAccount ? superInvestmentOption.trim() || null : undefined,
+            includeSuperInNetWorth: isSuperAccount ? includeSuperInNetWorth : undefined,
           });
 
       if (result.success) {
@@ -280,6 +294,27 @@ export function AccountForm({
             onChange={(e) => setName(e.target.value)}
           />
         </div>
+
+        {isSuperAccount && (
+          <div className="grid gap-4 rounded border p-3">
+            <div>
+              <p className="text-sm font-medium">Super fund details</p>
+              <p className="text-xs text-muted-foreground">Super is tracked as a long-term asset, separate from cash accounts.</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="super-fund-name">Fund or provider</Label>
+              <Input id="super-fund-name" placeholder="e.g., AustralianSuper" value={superFundName} onChange={(e) => setSuperFundName(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="super-investment-option">Investment option (optional)</Label>
+              <Input id="super-investment-option" placeholder="e.g., Balanced" value={superInvestmentOption} onChange={(e) => setSuperInvestmentOption(e.target.value)} />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="include-super-net-worth">Include in net worth</Label>
+              <Switch id="include-super-net-worth" checked={includeSuperInNetWorth} onCheckedChange={setIncludeSuperInNetWorth} />
+            </div>
+          </div>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="account-type">Account Type</Label>

@@ -5,11 +5,13 @@ import { RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
 import { cn, formatCurrency } from "@/lib/utils";
 import { WeightBarVisualizer } from "./weight-bar-visualizer";
 import type { AssetCategory, AssetAccount, AssetCategoryKey, AssetLiability } from "./types";
+import type { NetWorthSuperannuation } from "@/lib/net-worth/calculation";
 
 interface AssetsTableProps {
   categories: AssetCategory[];
   currency: string;
   liabilities?: AssetLiability[];
+  superannuation: NetWorthSuperannuation;
 }
 
 // Asset categories that are bank accounts (navigable to account detail)
@@ -211,10 +213,76 @@ function LiabilitiesSection({
   );
 }
 
+function SuperannuationSection({
+  superannuation,
+  currency,
+}: {
+  superannuation: NetWorthSuperannuation;
+  currency: string;
+}) {
+  const hasIncluded = superannuation.includedAccounts.length > 0;
+  const hasExcluded = superannuation.excludedAccounts.length > 0;
+
+  if (!hasIncluded && !hasExcluded) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="border-t bg-muted/30 px-4 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Superannuation
+      </div>
+      {hasIncluded && (
+        <>
+          <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-3 border-t px-4 py-2 text-xs text-muted-foreground sm:grid-cols-[minmax(0,1fr)_9rem_7rem]">
+            <span>Included in net worth</span>
+            <span className="hidden sm:block" />
+            <span className="text-right tabular-nums">{formatCurrency(superannuation.includedValue, currency)}</span>
+          </div>
+          {superannuation.includedAccounts.map((account) => (
+            <AccountRow
+              key={account.id}
+              account={account}
+              currency={currency}
+              color="#14B8A6"
+              isLinkable
+              categoryKey="other"
+              showWeight={false}
+              descriptor="Included"
+            />
+          ))}
+        </>
+      )}
+      {hasExcluded && (
+        <>
+          <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-3 border-t px-4 py-2 text-xs text-muted-foreground sm:grid-cols-[minmax(0,1fr)_9rem_7rem]">
+            <span>Excluded from net worth</span>
+            <span className="hidden sm:block" />
+            <span className="text-right tabular-nums">{formatCurrency(superannuation.excludedValue, currency)}</span>
+          </div>
+          {superannuation.excludedAccounts.map((account) => (
+            <AccountRow
+              key={account.id}
+              account={account}
+              currency={currency}
+              color="#94A3B8"
+              isLinkable
+              categoryKey="other"
+              showWeight={false}
+              descriptor="Excluded"
+            />
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
 export function AssetsTable({
   categories,
   currency,
   liabilities = [],
+  superannuation,
 }: AssetsTableProps) {
   return (
     <div className="rounded-md border">
@@ -232,6 +300,7 @@ export function AssetsTable({
           defaultOpen={index === 0 && category.isActive}
         />
       ))}
+      <SuperannuationSection superannuation={superannuation} currency={currency} />
       <LiabilitiesSection liabilities={liabilities} currency={currency} />
     </div>
   );

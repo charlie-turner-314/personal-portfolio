@@ -64,6 +64,7 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
           categories={data.categories}
           currency={data.currency}
           liabilities={data.liabilities}
+          superannuation={data.superannuation}
         />
       </CardContent>
     </Card>

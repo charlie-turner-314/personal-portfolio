@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, accountBalances, transactionLinks, propertyLiabilityLinks } from "@/lib/db/schema";
+import { accounts, transactions, categories, users, properties, vehicles, accountBalances, transactionLinks, propertyLiabilityLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getCachedUserAccounts } from "@/lib/data/cached";
 import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
@@ -760,8 +760,17 @@ export async function getAssetsOverview(): Promise<NetWorthOverview> {
         functionalBalance: accounts.functionalBalance,
         startingBalance: accounts.startingBalance,
         currency: accounts.currency,
+        superAccountId: superAccounts.id,
+        includeSuperInNetWorth: superAccounts.includeInNetWorth,
       })
       .from(accounts)
+      .leftJoin(
+        superAccounts,
+        and(
+          eq(superAccounts.accountId, accounts.id),
+          eq(superAccounts.userId, session.user.id),
+        ),
+      )
       .where(and(eq(accounts.userId, session.user.id), eq(accounts.isActive, true))),
     db
       .select({
@@ -810,6 +819,8 @@ export async function getAssetsOverview(): Promise<NetWorthOverview> {
         currency: account.currency || currency,
         source: "account" as const,
         accountType: account.accountType,
+        isSuperannuation: account.superAccountId !== null,
+        includeInNetWorth: account.includeSuperInNetWorth,
       })),
     ...userProperties.map((property) => {
       const addressParts = property.address?.split(",").map((part) => part.trim()) || [];
