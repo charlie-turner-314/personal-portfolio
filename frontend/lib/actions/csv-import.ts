@@ -211,11 +211,11 @@ export interface CsvImportSession {
   parsedData?: ParsedCsvData;
 }
 
-export type AiColumnMappingOutcome = "success" | "failed" | "timed_out";
+export type AiColumnMappingOutcome = "ai" | "deterministic" | "failed" | "timed_out";
 
 export type AiColumnMappingResult =
   | {
-      outcome: "success";
+      outcome: "ai" | "deterministic";
       success: true;
       mapping: ColumnMapping;
     }
@@ -384,7 +384,7 @@ export async function getAiColumnMapping(
       })
       .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
 
-    return { outcome: "success", success: true, mapping: suggestedMapping };
+    return { outcome: "deterministic", success: true, mapping: suggestedMapping };
   }
 
   try {
@@ -501,7 +501,7 @@ Use null for columns that don't exist or can't be determined. Australian bank CS
       })
       .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
 
-    return { outcome: "success", success: true, mapping };
+    return { outcome: "ai", success: true, mapping };
   } catch (error) {
     console.error("Failed to get AI column mapping:", error);
     if (

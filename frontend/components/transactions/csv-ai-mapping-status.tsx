@@ -8,7 +8,15 @@ import {
 } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 
-export type AiMappingStatus = "idle" | "analyzing" | "succeeded" | "failed" | "timed_out";
+export type AiMappingStatus =
+  | "idle"
+  | "analyzing"
+  | "ai_succeeded"
+  | "deterministic"
+  | "reused"
+  | "manual"
+  | "failed"
+  | "timed_out";
 
 interface CsvAiMappingStatusProps {
   status: AiMappingStatus;
@@ -38,13 +46,18 @@ export function CsvAiMappingStatus({
     );
   }
 
-  if (status === "succeeded") {
+  const messages = {
+    ai_succeeded: "AI mapping applied. Review the suggested fields before previewing transactions.",
+    deterministic: "Suggested mapping applied from CSV headers; AI analysis was not used.",
+    reused: "Saved mapping applied for this account; AI analysis was not used.",
+    manual: "Manual mapping selected. Choose the columns that match your CSV.",
+  };
+
+  if (status in messages) {
     return (
       <div className="mb-4 flex items-center gap-2 rounded-lg border bg-muted/50 px-4 py-3" role="status">
         <RiCheckboxCircleLine className="h-4 w-4 text-primary" />
-        <span className="text-sm">
-          AI mapping applied. Review the suggested fields before previewing transactions.
-        </span>
+        <span className="text-sm">{messages[status as keyof typeof messages]}</span>
       </div>
     );
   }

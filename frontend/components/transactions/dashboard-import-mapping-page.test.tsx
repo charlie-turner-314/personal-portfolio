@@ -55,7 +55,7 @@ const MAPPING: ColumnMapping = {
 };
 
 const SUCCESS: AiColumnMappingResult = {
-  outcome: "success",
+  outcome: "ai",
   success: true,
   mapping: MAPPING,
 };
@@ -115,6 +115,21 @@ describe("dashboard CSV import mapping page", () => {
     render(<MappingPage />);
 
     expect(await screen.findByText(/AI mapping applied/i)).toBeInTheDocument();
+    expect(previewButton()).toBeEnabled();
+  });
+
+  it("does not claim AI was used for an immediately completed deterministic mapping", async () => {
+    vi.mocked(getAiColumnMapping).mockResolvedValue({
+      outcome: "deterministic",
+      success: true,
+      mapping: MAPPING,
+    });
+
+    render(<MappingPage />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Suggested mapping applied from CSV headers; AI analysis was not used."
+    );
     expect(previewButton()).toBeEnabled();
   });
 
