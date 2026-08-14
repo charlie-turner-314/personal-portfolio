@@ -19,9 +19,7 @@ export async function TransactionsSection({
     getProperties(),
   ]);
 
-  const canImportCsv =
-    !!process.env.OPENAI_API_KEY &&
-    !isDemoRestrictedUserEmail(session?.user.email);
+  const canImportCsv = !isDemoRestrictedUserEmail(session?.user.email);
   const canDelete = !isDemoRestrictedUserEmail(session?.user.email);
 
   return (

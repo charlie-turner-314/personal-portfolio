@@ -729,9 +729,7 @@ export function TransactionFilters({
             </PopoverContent>
           </Popover>
         </div>
-        <div data-walkthrough="walkthrough-import">
-        {action}
-        </div>
+        <div>{action}</div>
       </div>
 
       {filterTags.length > 0 && (

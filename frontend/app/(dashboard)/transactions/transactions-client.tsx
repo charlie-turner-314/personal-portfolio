@@ -7,6 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { TransactionTable } from "@/components/transactions/transaction-table";
 import { AddTransactionButton } from "@/components/transactions/add-transaction-button";
 import { AddTransactionDialog } from "@/components/transactions/add-transaction-dialog";
+import { ImportTransactionsButton } from "@/components/transactions/import-transactions-button";
 import { useRegisterCommandPaletteCallbacks } from "@/components/command-palette-context";
 import { exportTransactionsToCSV } from "@/lib/utils/csv-export";
 import {
@@ -280,9 +281,9 @@ export function TransactionsClient({
     {
       onAddTransaction: handleAddManual,
       onExportCSV: handleExportCSV,
-      onImportCsv: canImportCsv ? handleImportCsv : undefined,
+      onImportCsv: handleImportCsv,
     },
-    [handleAddManual, handleExportCSV, handleImportCsv, canImportCsv]
+    [handleAddManual, handleExportCSV, handleImportCsv]
   );
 
   return (
@@ -326,8 +327,10 @@ export function TransactionsClient({
               )}
               <AddTransactionButton
                 onAddManual={handleAddManual}
-                allowCsvImport={canImportCsv}
               />
+              {canImportCsv && (
+                <ImportTransactionsButton onImport={handleImportCsv} />
+              )}
             </div>
           }
         />
