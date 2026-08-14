@@ -15,6 +15,7 @@ export type AiMappingStatus =
   | "deterministic"
   | "reused"
   | "manual"
+  | "existing"
   | "failed"
   | "timed_out";
 
@@ -51,6 +52,7 @@ export function CsvAiMappingStatus({
     deterministic: "Suggested mapping applied from CSV headers; AI analysis was not used.",
     reused: "Saved mapping applied for this account; AI analysis was not used.",
     manual: "Manual mapping selected. Choose the columns that match your CSV.",
+    existing: "Existing mapping applied. Its original source cannot be confirmed.",
   };
 
   if (status in messages) {

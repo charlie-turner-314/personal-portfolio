@@ -152,6 +152,7 @@ async function getCsvImportAccess() {
 }
 // Column mapping types
 export interface ColumnMapping {
+  mappingSource?: "ai" | "deterministic" | "profile" | "manual";
   date: string | null;
   amount: string | null;
   debitAmount: string | null;
@@ -279,7 +280,7 @@ export async function initializeCsvImport(
         filePathCiphertext: encryptedFilePath,
         status: savedProfile ? "mapping" : "pending",
         columnMapping: savedProfile
-          ? normalizeColumnMapping(savedProfile.columnMapping as ColumnMapping)
+          ? { ...normalizeColumnMapping(savedProfile.columnMapping as ColumnMapping), mappingSource: "profile" }
           : undefined,
         importProfileId: savedProfile?.id,
         totalRows,
@@ -376,15 +377,20 @@ export async function getAiColumnMapping(
   );
   const openaiApiKey = process.env.OPENAI_API_KEY;
   if (!openaiApiKey) {
+    const mapping = { ...suggestedMapping, mappingSource: "deterministic" as const };
     await db
       .update(csvImports)
       .set({
-        columnMapping: suggestedMapping,
+        columnMapping: mapping,
         status: "mapping",
       })
       .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
 
-    return { outcome: "deterministic", success: true, mapping: suggestedMapping };
+    return {
+      outcome: "deterministic",
+      success: true,
+      mapping,
+    };
   }
 
   try {
@@ -483,14 +489,17 @@ Use null for columns that don't exist or can't be determined. Australian bank CS
     }
 
     const aiMapping = normalizeColumnMapping(JSON.parse(jsonMatch[0]) as ColumnMapping);
-    const mapping = normalizeColumnMapping({
+    const mapping = {
+      ...normalizeColumnMapping({
       ...suggestedMapping,
       ...aiMapping,
       typeConfig: {
         ...suggestedMapping.typeConfig,
         ...aiMapping.typeConfig,
       },
-    });
+      }),
+      mappingSource: "ai" as const,
+    };
 
     // Update the import session with the mapping
     await db
@@ -501,7 +510,11 @@ Use null for columns that don't exist or can't be determined. Australian bank CS
       })
       .where(and(eq(csvImports.id, importId), eq(csvImports.userId, userId)));
 
-    return { outcome: "ai", success: true, mapping };
+    return {
+      outcome: "ai",
+      success: true,
+      mapping,
+    };
   } catch (error) {
     console.error("Failed to get AI column mapping:", error);
     if (
@@ -543,7 +556,10 @@ export async function saveColumnMapping(
       return { success: false, error: "Import session not found" };
     }
 
-    const normalizedMapping = normalizeColumnMapping(mapping);
+    const normalizedMapping = {
+      ...normalizeColumnMapping(mapping),
+      mappingSource: mapping.mappingSource ?? "manual" as const,
+    };
     let importProfileId = importSession.importProfileId;
 
     if (options.saveProfile) {

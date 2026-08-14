@@ -133,6 +133,32 @@ describe("dashboard CSV import mapping page", () => {
     expect(previewButton()).toBeEnabled();
   });
 
+  it("retains AI provenance after reloading a persisted mapping", async () => {
+    vi.mocked(getCsvImportSession).mockResolvedValue({
+      ...SESSION,
+      columnMapping: { ...MAPPING, mappingSource: "ai" },
+    });
+
+    render(<MappingPage />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("AI mapping applied");
+    expect(getAiColumnMapping).not.toHaveBeenCalled();
+  });
+
+  it("identifies a saved profile separately from an existing import mapping", async () => {
+    vi.mocked(getCsvImportSession).mockResolvedValue({
+      ...SESSION,
+      profileApplied: true,
+      importProfileName: "My bank CSV",
+      columnMapping: { ...MAPPING, mappingSource: "profile" },
+    });
+
+    render(<MappingPage />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved mapping applied");
+    expect(getAiColumnMapping).not.toHaveBeenCalled();
+  });
+
   it("shows recovery actions after failure, keeps Preview enabled, and retries AI analysis", async () => {
     vi.mocked(getAiColumnMapping).mockResolvedValue({
       outcome: "failed",

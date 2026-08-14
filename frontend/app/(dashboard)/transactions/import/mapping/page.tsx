@@ -131,7 +131,17 @@ function MappingPageContent() {
       if (hasExistingMapping) {
         setMapping(withMappingDefaults(session.columnMapping!));
         aiMappingTriggeredRef.current = true; // Don't trigger AI if mapping exists
-        setAiMappingStatus("reused");
+        setAiMappingStatus(
+          session.profileApplied || session.columnMapping?.mappingSource === "profile"
+            ? "reused"
+            : session.columnMapping?.mappingSource === "ai"
+              ? "ai_succeeded"
+              : session.columnMapping?.mappingSource === "deterministic"
+                ? "deterministic"
+                : session.columnMapping?.mappingSource === "manual"
+                  ? "manual"
+                  : "existing"
+        );
       }
 
       // Parse CSV headers

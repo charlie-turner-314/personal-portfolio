@@ -113,7 +113,17 @@ function MappingPageContent() {
       if (hasExistingMapping) {
         setMapping(session.columnMapping!);
         aiMappingTriggeredRef.current = true;
-        setAiMappingStatus("reused");
+        setAiMappingStatus(
+          session.profileApplied || session.columnMapping?.mappingSource === "profile"
+            ? "reused"
+            : session.columnMapping?.mappingSource === "ai"
+              ? "ai_succeeded"
+              : session.columnMapping?.mappingSource === "deterministic"
+                ? "deterministic"
+                : session.columnMapping?.mappingSource === "manual"
+                  ? "manual"
+                  : "existing"
+        );
       }
 
       const result = await parseCsvHeaders(importId);
