@@ -19,6 +19,7 @@ from app.models import (
     AccountBalance,
     BrokerConnection,
     BrokerTrade,
+    CgtAllocation,
     Holding,
     HoldingValuation,
     InvestmentIncomeEvent,
@@ -28,6 +29,8 @@ from app.schemas import (
     BrokerConnectionCreate,
     HoldingCreate,
     HoldingLot,
+    CgtAllocationResponse,
+    CgtFinancialYearSummary,
     HoldingTrade,
     HoldingUpdate,
     HoldingResponse,
@@ -989,6 +992,101 @@ def holding_lots(
             )
         )
     return out
+
+
+@router.get("/holdings/{holding_id}/cgt-allocations", response_model=list[CgtAllocationResponse])
+def holding_cgt_allocations(
+    holding_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return persisted FIFO allocation rows for disposals of this holding."""
+    user_id = get_user_id(user_id)
+    holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    return db.query(CgtAllocation).filter(
+        CgtAllocation.account_id == holding.account_id,
+        CgtAllocation.symbol == holding.symbol,
+    ).order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc()).all()
+
+
+@router.get("/cgt/allocations", response_model=list[CgtAllocationResponse])
+def cgt_allocations(
+    financial_year_start: Optional[int] = Query(None, ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return the user's persisted CGT allocation records, optionally for one FY/account."""
+    user_id = get_user_id(user_id)
+    query = db.query(CgtAllocation).join(Account, Account.id == CgtAllocation.account_id).filter(
+        Account.user_id == user_id,
+    )
+    if financial_year_start is not None:
+        start, end = _financial_year_bounds(financial_year_start)
+        query = query.filter(
+            CgtAllocation.disposal_date >= start,
+            CgtAllocation.disposal_date < end,
+        )
+    if account_id is not None:
+        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(CgtAllocation.account_id == account.id)
+    return query.order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc()).all()
+
+
+@router.get("/cgt/summary", response_model=CgtFinancialYearSummary)
+def cgt_financial_year_summary(
+    financial_year_start: int = Query(..., ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Summarise recorded Australian-dollar CGT allocations for an Australian FY.
+
+    This is a calculation record, not tax advice. Allocations lacking either
+    transaction-date FX rate are deliberately excluded from AUD totals.
+    """
+    user_id = get_user_id(user_id)
+    start, end = _financial_year_bounds(financial_year_start)
+    query = db.query(CgtAllocation).join(Account, Account.id == CgtAllocation.account_id).filter(
+        Account.user_id == user_id,
+        CgtAllocation.disposal_date >= start,
+        CgtAllocation.disposal_date < end,
+    )
+    if account_id is not None:
+        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(CgtAllocation.account_id == account.id)
+    rows = query.all()
+    known = [row for row in rows if not row.fx_missing and row.gain_aud is not None]
+    gross_gains = sum((max(Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
+    losses = sum((max(-Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
+    discounted = sum((Decimal(row.gain_aud) / 2 for row in known if row.discount_eligible and row.gain_aud > 0), Decimal("0"))
+    net_before_losses = sum((
+        Decimal(row.gain_aud) / 2 if row.discount_eligible and row.gain_aud > 0 else Decimal(row.gain_aud)
+        for row in known
+    ), Decimal("0"))
+    assumptions = [
+        "FIFO matching is calculated from recorded broker trades and their recorded fees.",
+        "Corporate actions, managed-fund cost-base adjustments, and other tax elections are not calculated.",
+    ]
+    missing = len(rows) - len(known)
+    if missing:
+        assumptions.append(f"{missing} allocation(s) excluded from AUD totals because transaction-date FX is missing.")
+    return CgtFinancialYearSummary(
+        financial_year_start=financial_year_start,
+        gross_gains_aud=gross_gains.quantize(Decimal("0.01")),
+        capital_losses_aud=losses.quantize(Decimal("0.01")),
+        discounted_gains_aud=discounted.quantize(Decimal("0.01")),
+        net_capital_gain_before_losses_aud=net_before_losses.quantize(Decimal("0.01")),
+        allocation_count=len(rows),
+        missing_fx_allocation_count=missing,
+        assumptions=assumptions,
+    )
 
 
 # ---------------------------------------------------------------------------

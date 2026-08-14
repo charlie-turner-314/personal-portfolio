@@ -25,6 +25,7 @@ from app.models import (
     Account,
     AccountBalance,
     BrokerTrade,
+    CgtAllocation,
     Holding,
     HoldingValuation,
     PriceSnapshot,
@@ -34,6 +35,7 @@ from app.services.pnl_service import (
     Trade,
     compute_fifo,
     compute_open_quantity_series,
+    is_cgt_discount_eligible,
 )
 
 
@@ -41,6 +43,11 @@ logger = logging.getLogger(__name__)
 
 
 VALID_SIDES = ("buy", "sell")
+CGT_CALCULATION_VERSION = "fifo-v1"
+CGT_ASSUMPTIONS = [
+    "FIFO matching is calculated from recorded broker trades and their recorded fees.",
+    "Corporate actions, managed-fund cost-base adjustments, and other tax elections are not calculated.",
+]
 
 
 def _normalize_quantity(q: Decimal) -> str:
@@ -293,6 +300,10 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
         .all()
     )
     if not trades:
+        db.query(CgtAllocation).filter(
+            CgtAllocation.account_id == account.id,
+            CgtAllocation.symbol == symbol,
+        ).delete(synchronize_session=False)
         holding = (
             db.query(Holding)
             .filter(Holding.account_id == account.id, Holding.symbol == symbol, Holding.instrument_type == "equity")
@@ -361,6 +372,82 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
         holding.source = "trade_import"
         if not holding.currency:
             holding.currency = currency
+
+    _recompute_cgt_allocations(db, account, symbol, trades)
+
+
+def _recompute_cgt_allocations(
+    db: Session,
+    account: Account,
+    symbol: str,
+    trades: list[BrokerTrade],
+) -> None:
+    """Replace one symbol's derived CGT allocations from the authoritative trade ledger."""
+    db.query(CgtAllocation).filter(
+        CgtAllocation.account_id == account.id,
+        CgtAllocation.symbol == symbol,
+    ).delete(synchronize_session=False)
+    if not trades:
+        return
+
+    fifo = compute_fifo([
+        Trade(
+            symbol=trade.symbol,
+            trade_date=trade.trade_date,
+            side=trade.side,
+            quantity=Decimal(trade.quantity),
+            price=Decimal(trade.price),
+            currency=trade.currency,
+            fees=Decimal(trade.fees or 0),
+            trade_id=str(trade.id),
+            sort_key=str(trade.id),
+        )
+        for trade in trades
+    ])
+
+    # CGT must convert cost and proceeds at their respective transaction dates.
+    from app.services.exchange_rate_service import ExchangeRateService
+    try:
+        fx_service = ExchangeRateService(db=db)
+    except ImportError:
+        fx_service = None
+
+    def aud_amount(amount: Decimal, currency: str, on: date) -> Decimal | None:
+        if currency.upper() == "AUD":
+            return amount.quantize(Decimal("0.01"))
+        if fx_service is None:
+            return None
+        rate = fx_service.get_exchange_rate(currency.upper(), "AUD", on)
+        return (amount * Decimal(rate)).quantize(Decimal("0.01")) if rate is not None else None
+
+    for lot in fifo.realized:
+        # These IDs are populated for BrokerTrade-derived FIFO inputs. Guarding
+        # avoids persisting an incomplete audit row if this service is reused.
+        if not lot.acquisition_trade_id or not lot.disposal_trade_id:
+            continue
+        cost_aud = aud_amount(lot.cost_native, lot.currency, lot.open_date)
+        proceeds_aud = aud_amount(lot.proceeds_native, lot.currency, lot.close_date)
+        missing_fx = cost_aud is None or proceeds_aud is None
+        db.add(CgtAllocation(
+            account_id=account.id,
+            acquisition_trade_id=lot.acquisition_trade_id,
+            disposal_trade_id=lot.disposal_trade_id,
+            symbol=lot.symbol,
+            acquisition_date=lot.open_date,
+            disposal_date=lot.close_date,
+            quantity=lot.quantity,
+            currency=lot.currency,
+            cost_base_native=lot.cost_native,
+            proceeds_native=lot.proceeds_native,
+            gain_native=lot.pnl_native,
+            cost_base_aud=None if missing_fx else cost_aud,
+            proceeds_aud=None if missing_fx else proceeds_aud,
+            gain_aud=None if missing_fx else proceeds_aud - cost_aud,
+            fx_missing=missing_fx,
+            discount_eligible=is_cgt_discount_eligible(lot.open_date, lot.close_date),
+            calculation_version=CGT_CALCULATION_VERSION,
+            assumptions=list(CGT_ASSUMPTIONS),
+        ))
 
 
 def remove_trade(

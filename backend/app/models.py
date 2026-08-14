@@ -1155,6 +1155,39 @@ class BrokerTrade(Base):
     )
 
 
+class CgtAllocation(Base):
+    """One auditable FIFO acquisition-to-disposal allocation for Australian CGT reporting."""
+
+    __tablename__ = "cgt_allocations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    acquisition_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
+    disposal_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
+    symbol = Column(String(64), nullable=False)
+    acquisition_date = Column(Date, nullable=False)
+    disposal_date = Column(Date, nullable=False)
+    quantity = Column(Numeric(28, 8), nullable=False)
+    currency = Column(String(3), nullable=False)
+    cost_base_native = Column(Numeric(28, 8), nullable=False)
+    proceeds_native = Column(Numeric(28, 8), nullable=False)
+    gain_native = Column(Numeric(28, 8), nullable=False)
+    cost_base_aud = Column(Numeric(28, 8), nullable=True)
+    proceeds_aud = Column(Numeric(28, 8), nullable=True)
+    gain_aud = Column(Numeric(28, 8), nullable=True)
+    fx_missing = Column(Boolean, nullable=False, default=False)
+    discount_eligible = Column(Boolean, nullable=False, default=False)
+    calculation_version = Column(String(32), nullable=False, default="fifo-v1")
+    assumptions = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("acquisition_trade_id", "disposal_trade_id", name="cgt_allocations_trade_pair_uq"),
+        Index("idx_cgt_allocations_account_disposal", "account_id", "disposal_date"),
+    )
+
+
 class InvestmentIncomeEvent(Base):
     __tablename__ = "investment_income_events"
 

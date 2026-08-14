@@ -383,6 +383,40 @@ class HoldingLot(BaseModel):
     currency: str
 
 
+class CgtAllocationResponse(BaseModel):
+    id: UUID
+    acquisition_trade_id: UUID
+    disposal_trade_id: UUID
+    symbol: str
+    acquisition_date: _date_date
+    disposal_date: _date_date
+    quantity: Decimal
+    currency: str
+    cost_base_native: Decimal
+    proceeds_native: Decimal
+    gain_native: Decimal
+    cost_base_aud: Optional[Decimal] = None
+    proceeds_aud: Optional[Decimal] = None
+    gain_aud: Optional[Decimal] = None
+    fx_missing: bool
+    discount_eligible: bool
+    calculation_version: str
+    assumptions: list[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CgtFinancialYearSummary(BaseModel):
+    financial_year_start: int
+    gross_gains_aud: Decimal
+    capital_losses_aud: Decimal
+    discounted_gains_aud: Decimal
+    net_capital_gain_before_losses_aud: Decimal
+    allocation_count: int
+    missing_fx_allocation_count: int
+    assumptions: list[str]
+
+
 class InvestmentIncomeEventCreate(BaseModel):
     account_id: UUID
     holding_id: UUID

@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.services.pnl_service import compute_fifo, OverSellError, Trade
+from app.services.pnl_service import compute_fifo, is_cgt_discount_eligible, OverSellError, Trade
 
 
 def _t(symbol, d, side, qty, price, currency="USD", fees="0"):
@@ -209,3 +209,23 @@ def test_compute_fifo_separates_lots_by_currency():
     assert set(open_by_currency.keys()) == {"USD", "EUR"}
     assert open_by_currency["USD"].quantity_remaining == Decimal("5")
     assert open_by_currency["EUR"].quantity_remaining == Decimal("10")
+
+
+def test_compute_fifo_retains_trade_identity_and_stable_same_day_ordering():
+    trades = [
+        Trade("AAPL", date(2024, 1, 10), "buy", Decimal("1"), Decimal("100"), "AUD", trade_id="buy-b", sort_key="b"),
+        Trade("AAPL", date(2024, 1, 10), "buy", Decimal("1"), Decimal("90"), "AUD", trade_id="buy-a", sort_key="a"),
+        Trade("AAPL", date(2024, 2, 1), "sell", Decimal("1"), Decimal("120"), "AUD", trade_id="sell-a"),
+    ]
+
+    result = compute_fifo(trades)
+
+    assert result.realized[0].acquisition_trade_id == "buy-a"
+    assert result.realized[0].disposal_trade_id == "sell-a"
+    assert result.realized[0].cost_native == Decimal("90")
+
+
+def test_cgt_discount_uses_calendar_year_anniversary_including_leap_day():
+    assert not is_cgt_discount_eligible(date(2024, 1, 10), date(2025, 1, 9))
+    assert is_cgt_discount_eligible(date(2024, 1, 10), date(2025, 1, 10))
+    assert is_cgt_discount_eligible(date(2024, 2, 29), date(2025, 2, 28))

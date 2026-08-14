@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Iterable
+from typing import Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,8 @@ class Trade:
     price: Decimal
     currency: str
     fees: Decimal = Decimal("0")  # native currency, non-negative
+    trade_id: Optional[str] = None
+    sort_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class ClosedLot:
     cost_native: Decimal
     proceeds_native: Decimal
     pnl_native: Decimal
+    acquisition_trade_id: Optional[str] = None
+    disposal_trade_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,7 @@ class _MutableLot:
     quantity_remaining: Decimal
     cost_per_share_native: Decimal
     currency: str
+    trade_id: Optional[str]
 
 
 def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
@@ -84,7 +89,10 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
     they are still matched (currency redenomination is out of scope for the
     pure engine — caller decides whether to split).
     """
-    sorted_trades = sorted(trades, key=lambda t: (t.trade_date, 0 if t.side == "buy" else 1))
+    sorted_trades = sorted(
+        trades,
+        key=lambda t: (t.trade_date, 0 if t.side == "buy" else 1, t.sort_key or t.trade_id or ""),
+    )
 
     open_by_key: dict[tuple[str, str], list[_MutableLot]] = {}
     realized: list[ClosedLot] = []
@@ -103,6 +111,7 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
                 quantity_remaining=t.quantity,
                 cost_per_share_native=cost_per_share,
                 currency=t.currency,
+                trade_id=t.trade_id,
             ))
             continue
 
@@ -128,6 +137,8 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
                 cost_native=cost,
                 proceeds_native=proceeds,
                 pnl_native=proceeds - cost,
+                acquisition_trade_id=lot.trade_id,
+                disposal_trade_id=t.trade_id,
             ))
             lot.quantity_remaining -= consumed
             remaining -= consumed
@@ -146,6 +157,15 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
             ))
 
     return FifoResult(realized=realized, open_lots=open_lots)
+
+
+def is_cgt_discount_eligible(acquisition_date: date, disposal_date: date) -> bool:
+    """Return whether a disposal is on or after the acquisition's calendar-year anniversary."""
+    try:
+        anniversary = acquisition_date.replace(year=acquisition_date.year + 1)
+    except ValueError:  # 29 February has no anniversary in a non-leap year.
+        anniversary = acquisition_date.replace(year=acquisition_date.year + 1, day=28)
+    return disposal_date >= anniversary
 
 
 def compute_open_quantity_series(
