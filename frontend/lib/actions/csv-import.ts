@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { desc, eq, and, inArray, sql } from "drizzle-orm";
-import { createHash } from "crypto";
 import { db } from "@/lib/db";
 import {
   accountBalances,
@@ -41,6 +40,7 @@ import {
   isSuperContributionKind,
   type SuperContributionKind,
 } from "@/lib/superannuation/cap-progress";
+import { createSuperStatementRowHash } from "@/lib/import/super-statement";
 import OpenAI from "openai";
 
 // Helper function to create date at midnight UTC to avoid timezone shifts
@@ -1893,16 +1893,6 @@ function normalizeSuperEventType(raw: string | undefined): SuperContributionKind
   if (!normalized) return null;
   if (isSuperContributionKind(normalized)) return normalized;
   return SUPER_EVENT_TYPE_ALIASES[normalized] ?? null;
-}
-
-export function createSuperStatementRowHash(
-  importId: string,
-  rowIndex: number,
-  row: string[],
-): string {
-  return createHash("sha256")
-    .update(`${importId}\u0000${rowIndex}\u0000${JSON.stringify(row)}`)
-    .digest("hex");
 }
 
 function parseSuperStatementNumber(

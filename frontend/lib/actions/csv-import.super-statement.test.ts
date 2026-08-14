@@ -69,11 +69,11 @@ vi.mock("@/lib/actions/transactions", () => ({ deleteTransactions: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
 
 import {
-  createSuperStatementRowHash,
   importSuperStatement,
   initializeCsvImport,
   type SuperStatementColumnMapping,
 } from "./csv-import";
+import { createSuperStatementRowHash } from "@/lib/import/super-statement";
 import {
   accountBalances,
   csvImports,
