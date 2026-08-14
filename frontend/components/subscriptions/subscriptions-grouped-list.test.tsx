@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { SubscriptionsGroupedList } from "./subscriptions-grouped-list";
 
@@ -44,6 +44,11 @@ describe("SubscriptionsGroupedList", () => {
       />,
     );
 
-    expect(screen.getAllByText(expected).length).toBeGreaterThanOrEqual(2);
+    const subscriptionRow = screen
+      .getByText("Netflix")
+      .closest("div.flex.items-center.gap-4");
+
+    expect(subscriptionRow).not.toBeNull();
+    expect(within(subscriptionRow!).getByText(expected)).toBeInTheDocument();
   });
 });
