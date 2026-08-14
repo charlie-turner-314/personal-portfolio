@@ -253,7 +253,7 @@ export function AccountForm({
 
       if (result.success) {
         // PUT owners after entity creation
-        if (result.accountId) {
+        if (result.accountId && owners.length > 0) {
           await putOwners(result.accountId);
         }
 
