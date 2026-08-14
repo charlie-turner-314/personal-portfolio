@@ -213,6 +213,21 @@ export type CgtFinancialYearSummary = {
   assumptions: string[];
 };
 
+export type AustralianTaxReport = {
+  financial_year_start: number;
+  financial_year_end: number;
+  period: { start: string; end_exclusive: string };
+  investment_income: Record<string, unknown>;
+  cgt: Record<string, unknown>;
+  transactions: Record<string, unknown>;
+  assumptions: string[];
+};
+
+export async function getAustralianTaxReport(financialYearStart: number): Promise<AustralianTaxReport> {
+  const resp = await signedFetch("GET", `/api/tax-reports/australian/${financialYearStart}`);
+  return readJsonOrThrow<AustralianTaxReport>(resp);
+}
+
 export async function getHoldingCgtAllocations(holdingId: string): Promise<CgtAllocation[]> {
   const resp = await signedFetch("GET", `/api/investments/holdings/${holdingId}/cgt-allocations`);
   return readJsonOrThrow<CgtAllocation[]>(resp);

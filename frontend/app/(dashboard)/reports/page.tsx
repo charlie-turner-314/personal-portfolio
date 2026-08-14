@@ -31,9 +31,10 @@ export default function ReportsPage() {
     <div className="p-6 text-foreground">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Reports</h1>
-        <Link href="/reports/new" className={buttonVariants({ size: "sm" })}>
-          New report
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/reports/tax-year" className={buttonVariants({ size: "sm", variant: "outline" })}>Tax-year report</Link>
+          <Link href="/reports/new" className={buttonVariants({ size: "sm" })}>New report</Link>
+        </div>
       </div>
 
       {deleteError && <p className="text-sm text-destructive mb-4">{deleteError}</p>}
