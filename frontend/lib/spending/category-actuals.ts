@@ -25,6 +25,10 @@ interface LinkedExpenseAmountSqlOptions {
   aggregate?: boolean;
 }
 
+function toSqlTimestamp(value: Date): string {
+  return value.toISOString();
+}
+
 export function buildLinkedExpenseAmountSql({
   userId,
   startDate,
@@ -32,14 +36,19 @@ export function buildLinkedExpenseAmountSql({
   accountIds,
   aggregate = true,
 }: LinkedExpenseAmountSqlOptions): SQL<string> {
+  // SQL fragments referring to the aliased `t2.booked_at` column do not carry
+  // Drizzle's timestamp encoder. Pass a serializable timestamp rather than a
+  // Date object, which the postgres driver rejects in raw SQL parameters.
+  const startTimestamp = toSqlTimestamp(startDate);
+  const endTimestamp = toSqlTimestamp(endDate);
   const linkedGroupConditions = [
     sql`tl2.group_id = ${transactionLinks.groupId}`,
     sql`tl2.group_id IS NOT NULL`,
     sql`t2.user_id = ${userId}`,
     sql`t2.include_in_analytics = true`,
     sql`t2.internal_transfer_id IS NULL`,
-    sql`t2.booked_at >= ${startDate}`,
-    sql`t2.booked_at <= ${endDate}`,
+    sql`t2.booked_at >= ${startTimestamp}`,
+    sql`t2.booked_at <= ${endTimestamp}`,
   ];
 
   if (accountIds.length > 0) {
