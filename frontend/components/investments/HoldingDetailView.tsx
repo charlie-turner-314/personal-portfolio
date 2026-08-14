@@ -31,6 +31,8 @@ import { PortfolioChart } from "./PortfolioChart";
 import { TypeBadge } from "./HoldingsTableHF";
 import { EditHoldingDialog } from "./EditHoldingDialog";
 import { InvestmentIncomePanel } from "./InvestmentIncomePanel";
+import { RealisedCgtDisposals } from "./RealisedCgtDisposals";
+import type { RealisedCgtDisposal } from "./cgt-types";
 import type {
   CreateInvestmentIncomeEvent,
   InvestmentIncomeEvent,
@@ -55,6 +57,7 @@ export function HoldingDetailView({
   incomeEvents = [],
   incomeTotals,
   onCreateIncomeEvent,
+  realisedCgtDisposals = [],
   isDemoRestricted = false,
 }: {
   holding: Holding;
@@ -65,6 +68,7 @@ export function HoldingDetailView({
   incomeEvents?: InvestmentIncomeEvent[];
   incomeTotals?: InvestmentIncomeTotals;
   onCreateIncomeEvent?: (event: Omit<CreateInvestmentIncomeEvent, "account_id" | "holding_id">) => Promise<unknown>;
+  realisedCgtDisposals?: RealisedCgtDisposal[];
   isDemoRestricted?: boolean;
 }) {
   const router = useRouter();
@@ -241,6 +245,7 @@ export function HoldingDetailView({
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
           <TabsTrigger value="income">Income</TabsTrigger>
+          <TabsTrigger value="capital-gains">Capital gains</TabsTrigger>
           <TabsTrigger value="about">About</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
@@ -379,6 +384,9 @@ export function HoldingDetailView({
             defaultCurrency={holding.currency}
             onCreate={isDemoRestricted ? undefined : onCreateIncomeEvent}
           />
+        </TabsContent>
+        <TabsContent value="capital-gains">
+          <RealisedCgtDisposals disposals={realisedCgtDisposals} />
         </TabsContent>
         <TabsContent value="about">
           <Card>

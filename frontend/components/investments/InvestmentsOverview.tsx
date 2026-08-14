@@ -23,6 +23,8 @@ import { PortfolioStatsStrip, computeBestDay } from "./PortfolioStatsStrip";
 import { AllocationRow } from "./AllocationRow";
 import { HoldingsTableHF } from "./HoldingsTableHF";
 import { PortfolioIncomeSummary } from "./PortfolioIncomeSummary";
+import { PortfolioCgtSummary } from "./PortfolioCgtSummary";
+import type { CgtFinancialYearSummary } from "./cgt-types";
 import type { PortfolioIncomeSummary as IncomeSummary } from "./income-types";
 
 export function InvestmentsOverview({
@@ -31,6 +33,7 @@ export function InvestmentsOverview({
   initialHistory,
   initialRange = "1M",
   incomeSummaries = [],
+  cgtSummaries = [],
   isDemoRestricted = false,
 }: {
   portfolio: PortfolioSummary;
@@ -38,6 +41,7 @@ export function InvestmentsOverview({
   initialHistory: ValuationPoint[];
   initialRange?: Range;
   incomeSummaries?: IncomeSummary[];
+  cgtSummaries?: CgtFinancialYearSummary[];
   isDemoRestricted?: boolean;
 }) {
   const router = useRouter();
@@ -200,6 +204,7 @@ export function InvestmentsOverview({
         byCurrency={portfolio.allocation_by_currency}
       />
       <PortfolioIncomeSummary summaries={incomeSummaries} />
+      <PortfolioCgtSummary summaries={cgtSummaries} />
       <HoldingsTableHF
         holdings={holdings}
         accountNames={accountNames}
