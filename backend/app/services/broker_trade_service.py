@@ -149,6 +149,8 @@ def import_trades(
     account_id: str,
     trades: list[dict[str, Any]],
     dry_run: bool,
+    *,
+    commit: bool = True,
 ) -> dict[str, Any]:
     """Import a batch of broker trades. See spec §"New MCP tools"."""
     account = (
@@ -257,7 +259,7 @@ def import_trades(
 
     if dry_run:
         db.rollback()
-    else:
+    elif commit:
         db.commit()
         # Best-effort: backfill historical valuations so the chart on the
         # holding detail and the portfolio chart have data going back to the
@@ -291,6 +293,14 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
         .all()
     )
     if not trades:
+        holding = (
+            db.query(Holding)
+            .filter(Holding.account_id == account.id, Holding.symbol == symbol, Holding.instrument_type == "equity")
+            .first()
+        )
+        if holding is not None and holding.source == "trade_import":
+            holding.quantity = Decimal("0")
+            holding.avg_cost = None
         return
 
     fifo_trades = [
@@ -351,6 +361,30 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
         holding.source = "trade_import"
         if not holding.currency:
             holding.currency = currency
+
+
+def remove_trade(
+    db: Session,
+    user_id: str,
+    account_id: str,
+    trade_id: str,
+    *,
+    commit: bool = True,
+) -> bool:
+    """Delete an owned trade and rebuild its holding through the same FIFO path."""
+    account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+    if account is None:
+        raise ImportError(f"account not found or not owned by user: {account_id}")
+    trade = db.query(BrokerTrade).filter(BrokerTrade.id == trade_id, BrokerTrade.account_id == account.id).first()
+    if trade is None:
+        return False
+    symbol = trade.symbol
+    db.delete(trade)
+    db.flush()
+    _recompute_holding(db, account, symbol)
+    if commit:
+        db.commit()
+    return True
 
 
 def backfill_history(
@@ -621,4 +655,3 @@ def backfill_history(
 
     db.commit()
     return {"valuations_upserted": val_count, "balances_upserted": bal_count}
-

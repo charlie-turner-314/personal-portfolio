@@ -1011,6 +1011,41 @@ export const brokerTrades = pgTable("broker_trades", {
   uniqTrade: uniqueIndex("broker_trades_account_external_uq").on(t.accountId, t.externalId),
 }));
 
+// Statement-supplied dividend and distribution details. Monetary component
+// columns remain nullable: absent statement values must never be inferred.
+export const investmentIncomeEvents = pgTable("investment_income_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  holdingId: uuid("holding_id").notNull().references(() => holdings.id, { onDelete: "cascade" }),
+  eventType: varchar("event_type", { length: 20 }).notNull(),
+  payDate: date("pay_date").notNull(),
+  exDate: date("ex_date"),
+  currency: char("currency", { length: 3 }).notNull(),
+  cashReceived: numeric("cash_received", { precision: 18, scale: 2 }).notNull(),
+  frankedAmount: numeric("franked_amount", { precision: 18, scale: 2 }),
+  unfrankedAmount: numeric("unfranked_amount", { precision: 18, scale: 2 }),
+  frankingCredit: numeric("franking_credit", { precision: 18, scale: 2 }),
+  foreignIncome: numeric("foreign_income", { precision: 18, scale: 2 }),
+  foreignTaxPaid: numeric("foreign_tax_paid", { precision: 18, scale: 2 }),
+  amitAmmaComponents: jsonb("amit_amma_components"),
+  isDrp: boolean("is_drp").default(false).notNull(),
+  drpQuantity: numeric("drp_quantity", { precision: 28, scale: 8 }),
+  drpPrice: numeric("drp_price", { precision: 28, scale: 8 }),
+  reinvestmentTradeId: uuid("reinvestment_trade_id").references(() => brokerTrades.id, { onDelete: "set null" }),
+  sourceId: varchar("source_id", { length: 255 }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  byUserPayDate: index("idx_investment_income_events_user_pay_date").on(t.userId, t.payDate),
+  byHoldingPayDate: index("idx_investment_income_events_holding_pay_date").on(t.holdingId, t.payDate),
+  sourceUnique: uniqueIndex("investment_income_events_account_source_uq").on(t.accountId, t.sourceId),
+  eventTypeCheck: check("investment_income_events_type_check", sql`${t.eventType} in ('dividend', 'distribution')`),
+  cashReceivedCheck: check("investment_income_events_cash_received_check", sql`${t.cashReceived} >= 0`),
+  drpCheck: check("investment_income_events_drp_check", sql`(${t.isDrp} = false) OR (${t.drpQuantity} > 0 AND ${t.drpPrice} >= 0)`),
+}));
+
 export const priceSnapshots = pgTable("price_snapshots", {
   id: uuid("id").primaryKey().defaultRandom(),
   symbol: text("symbol").notNull(),

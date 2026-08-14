@@ -5,6 +5,8 @@ import {
   getHoldingLots,
   getHoldingTrades,
   getPortfolio,
+  listHoldingIncomeEvents,
+  createHoldingIncomeEvent,
 } from "@/lib/api/investments";
 import { Header } from "@/components/layout/header";
 import { HoldingDetailView } from "@/components/investments/HoldingDetailView";
@@ -28,10 +30,11 @@ export default async function HoldingDetailPage({
   const [holdings, portfolio] = await Promise.all([listHoldings(), getPortfolio()]);
   const holding = holdings.find((h) => h.id === holdingId);
   if (!holding) return notFound();
-  const [history, trades, lots, session] = await Promise.all([
+  const [history, trades, lots, incomeEvents, session] = await Promise.all([
     getHoldingHistory(holdingId, from, to),
     getHoldingTrades(holdingId).catch(() => []),
     getHoldingLots(holdingId).catch(() => []),
+    listHoldingIncomeEvents(holdingId).catch(() => []),
     getAuthenticatedSession(),
   ]);
   const isDemoRestricted = isDemoRestrictedUserEmail(session?.user?.email);
@@ -45,6 +48,8 @@ export default async function HoldingDetailPage({
           initialHistory={history}
           trades={trades}
           lots={lots}
+          incomeEvents={incomeEvents}
+          onCreateIncomeEvent={createHoldingIncomeEvent.bind(null, holding.account_id, holding.id)}
           isDemoRestricted={isDemoRestricted}
         />
       </div>

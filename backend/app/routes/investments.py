@@ -7,7 +7,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from app.models import (
     BrokerTrade,
     Holding,
     HoldingValuation,
+    InvestmentIncomeEvent,
     User,
 )
 from app.schemas import (
@@ -30,12 +31,16 @@ from app.schemas import (
     HoldingTrade,
     HoldingUpdate,
     HoldingResponse,
+    InvestmentIncomeEventCreate,
+    InvestmentIncomeEventResponse,
+    InvestmentIncomeSummary,
     ManualAccountCreate,
     PortfolioSummary,
     SymbolSearchResult,
     ValuationPoint,
 )
 from app.services.pnl_service import Trade as _FifoTrade, compute_fifo
+from app.services.broker_trade_service import ImportError as BrokerTradeImportError, import_trades, remove_trade
 from app.services import credentials_crypto
 
 logger = __import__("logging").getLogger(__name__)
@@ -83,6 +88,207 @@ def _run_sync_in_process(account_id: UUID) -> None:
 
 
 router = APIRouter()
+
+
+def _owned_income_event_context(db: Session, user_id: str, payload: InvestmentIncomeEventCreate):
+    account = db.query(Account).filter(Account.id == payload.account_id, Account.user_id == user_id).first()
+    if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+        raise HTTPException(status_code=404, detail="Investment account not found")
+    holding = db.query(Holding).filter(
+        Holding.id == payload.holding_id,
+        Holding.user_id == user_id,
+        Holding.account_id == account.id,
+    ).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found in this investment account")
+    return account, holding
+
+
+def _save_income_event(
+    db: Session,
+    user_id: str,
+    payload: InvestmentIncomeEventCreate,
+    event: InvestmentIncomeEvent | None = None,
+) -> InvestmentIncomeEvent:
+    account, holding = _owned_income_event_context(db, user_id, payload)
+    if payload.source_id:
+        existing = db.query(InvestmentIncomeEvent).filter(
+            InvestmentIncomeEvent.account_id == account.id,
+            InvestmentIncomeEvent.source_id == payload.source_id,
+        ).first()
+        if existing and event is None:
+            return existing
+        if existing and existing.id != event.id:
+            raise HTTPException(status_code=409, detail="An income event already uses this import source ID")
+    if event is not None and event.reinvestment_trade_id:
+        remove_trade(db, user_id, str(event.account_id), str(event.reinvestment_trade_id), commit=False)
+        event.reinvestment_trade_id = None
+    values = payload.model_dump()
+    if event is None:
+        event = InvestmentIncomeEvent(user_id=user_id, **values)
+        db.add(event)
+    else:
+        for key, value in values.items():
+            setattr(event, key, value)
+    db.flush()
+    if payload.is_drp:
+        try:
+            import_trades(db, user_id, str(account.id), [{
+                "symbol": holding.symbol,
+                "trade_date": payload.pay_date.isoformat(),
+                "side": "buy",
+                "quantity": payload.drp_quantity,
+                "price": payload.drp_price,
+                "currency": payload.currency,
+                "fees": Decimal("0"),
+                "external_id": f"income-event-drp:{event.id}",
+            }], dry_run=False, commit=False)
+        except BrokerTradeImportError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        trade = db.query(BrokerTrade).filter(
+            BrokerTrade.account_id == account.id,
+            BrokerTrade.external_id == f"income-event-drp:{event.id}",
+        ).first()
+        event.reinvestment_trade_id = trade.id if trade else None
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def _owned_income_event(db: Session, user_id: str, event_id: UUID) -> InvestmentIncomeEvent:
+    event = (
+        db.query(InvestmentIncomeEvent)
+        .filter(InvestmentIncomeEvent.id == event_id, InvestmentIncomeEvent.user_id == user_id)
+        .first()
+    )
+    if not event:
+        raise HTTPException(status_code=404, detail="Investment income event not found")
+    return event
+
+
+def _financial_year_bounds(financial_year_start: int) -> tuple[date, date]:
+    """Return the inclusive/exclusive Australian FY date range for a start year."""
+    return date(financial_year_start, 7, 1), date(financial_year_start + 1, 7, 1)
+
+
+# ---------------------------------------------------------------------------
+# Investment income events
+# ---------------------------------------------------------------------------
+
+
+@router.post("/income-events", response_model=InvestmentIncomeEventResponse)
+def create_investment_income_event(
+    payload: InvestmentIncomeEventCreate,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Create an owned dividend/distribution event.
+
+    A caller-supplied source_id makes imports idempotent per investment
+    account. Tax fields are persisted exactly as supplied and never derived.
+    """
+    user_id = get_user_id(user_id)
+    return _save_income_event(db, user_id, payload)
+
+
+@router.get("/income-events", response_model=list[InvestmentIncomeEventResponse])
+def list_investment_income_events(
+    account_id: Optional[UUID] = None,
+    holding_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.user_id == user_id)
+    if account_id is not None:
+        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(InvestmentIncomeEvent.account_id == account.id)
+    if holding_id is not None:
+        holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+        if not holding or (account_id is not None and holding.account_id != account_id):
+            raise HTTPException(status_code=404, detail="Holding not found in this investment account")
+        query = query.filter(InvestmentIncomeEvent.holding_id == holding.id)
+    return query.order_by(InvestmentIncomeEvent.pay_date.desc(), InvestmentIncomeEvent.created_at.desc()).all()
+
+
+@router.put("/income-events/{event_id:uuid}", response_model=InvestmentIncomeEventResponse)
+def update_investment_income_event(
+    event_id: UUID,
+    payload: InvestmentIncomeEventCreate,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Replace an income event and rebuild its linked DRP trade when needed."""
+    user_id = get_user_id(user_id)
+    event = _owned_income_event(db, user_id, event_id)
+    return _save_income_event(db, user_id, payload, event)
+
+
+@router.delete("/income-events/{event_id:uuid}", status_code=204)
+def delete_investment_income_event(
+    event_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    event = _owned_income_event(db, user_id, event_id)
+    if event.reinvestment_trade_id:
+        try:
+            remove_trade(db, user_id, str(event.account_id), str(event.reinvestment_trade_id), commit=False)
+        except BrokerTradeImportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.delete(event)
+    db.commit()
+    return None
+
+
+@router.get("/income-events/summary", response_model=list[InvestmentIncomeSummary])
+def investment_income_summary(
+    financial_year_start: int = Query(..., ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    holding_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Summarise statement-supplied income components by Australian FY/currency."""
+    user_id = get_user_id(user_id)
+    start, end = _financial_year_bounds(financial_year_start)
+    query = db.query(
+        InvestmentIncomeEvent.currency,
+        func.coalesce(func.sum(InvestmentIncomeEvent.cash_received), 0).label("cash_income"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.franking_credit), 0).label("franking_credits"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.foreign_income), 0).label("foreign_income"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.foreign_tax_paid), 0).label("foreign_tax_paid"),
+    ).filter(
+        InvestmentIncomeEvent.user_id == user_id,
+        InvestmentIncomeEvent.pay_date >= start,
+        InvestmentIncomeEvent.pay_date < end,
+    )
+    if account_id is not None:
+        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(InvestmentIncomeEvent.account_id == account.id)
+    if holding_id is not None:
+        holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+        if not holding or (account_id is not None and holding.account_id != account_id):
+            raise HTTPException(status_code=404, detail="Holding not found in this investment account")
+        query = query.filter(InvestmentIncomeEvent.holding_id == holding.id)
+    rows = query.group_by(InvestmentIncomeEvent.currency).order_by(InvestmentIncomeEvent.currency).all()
+    return [
+        InvestmentIncomeSummary(
+            financial_year_start=financial_year_start,
+            currency=row.currency,
+            cash_income=Decimal(row.cash_income),
+            franking_credits=Decimal(row.franking_credits),
+            foreign_income=Decimal(row.foreign_income),
+            foreign_tax_paid=Decimal(row.foreign_tax_paid),
+        )
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------

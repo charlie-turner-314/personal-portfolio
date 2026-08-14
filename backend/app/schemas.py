@@ -383,6 +383,77 @@ class HoldingLot(BaseModel):
     currency: str
 
 
+class InvestmentIncomeEventCreate(BaseModel):
+    account_id: UUID
+    holding_id: UUID
+    event_type: str
+    pay_date: _date_date
+    ex_date: Optional[_date_date] = None
+    currency: str
+    cash_received: Decimal
+    franked_amount: Optional[Decimal] = None
+    unfranked_amount: Optional[Decimal] = None
+    franking_credit: Optional[Decimal] = None
+    foreign_income: Optional[Decimal] = None
+    foreign_tax_paid: Optional[Decimal] = None
+    amit_amma_components: Optional[dict] = None
+    is_drp: bool = False
+    drp_quantity: Optional[Decimal] = None
+    drp_price: Optional[Decimal] = None
+    source_id: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("event_type")
+    @classmethod
+    def _income_event_type(cls, value: str) -> str:
+        value = value.lower().strip()
+        if value not in {"dividend", "distribution"}:
+            raise ValueError("must be dividend or distribution")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def _income_currency(cls, value: str) -> str:
+        value = value.upper().strip()
+        if len(value) != 3:
+            raise ValueError("must be a 3-letter ISO code")
+        return value
+
+    @field_validator("cash_received", "franked_amount", "unfranked_amount", "franking_credit", "foreign_income", "foreign_tax_paid")
+    @classmethod
+    def _income_amounts(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and value < 0:
+            raise ValueError("must be non-negative")
+        return value
+
+    @model_validator(mode="after")
+    def _drp_fields(self):
+        if self.is_drp and (self.drp_quantity is None or self.drp_quantity <= 0 or self.drp_price is None or self.drp_price < 0):
+            raise ValueError("DRP events require a positive quantity and non-negative price")
+        if not self.is_drp and (self.drp_quantity is not None or self.drp_price is not None):
+            raise ValueError("DRP quantity and price are only valid for DRP events")
+        return self
+
+
+class InvestmentIncomeEventResponse(InvestmentIncomeEventCreate):
+    id: UUID
+    user_id: str
+    reinvestment_trade_id: Optional[UUID] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InvestmentIncomeSummary(BaseModel):
+    financial_year_start: int
+    currency: str
+    cash_income: Decimal
+    franking_credits: Decimal
+    foreign_income: Decimal
+    foreign_tax_paid: Decimal
+
+
 class SymbolSearchResult(BaseModel):
     symbol: str
     name: str

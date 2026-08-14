@@ -1155,6 +1155,43 @@ class BrokerTrade(Base):
     )
 
 
+class InvestmentIncomeEvent(Base):
+    __tablename__ = "investment_income_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    holding_id = Column(UUID(as_uuid=True), ForeignKey("holdings.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String(20), nullable=False)
+    pay_date = Column(Date, nullable=False)
+    ex_date = Column(Date, nullable=True)
+    currency = Column(String(3), nullable=False)
+    cash_received = Column(Numeric(18, 2), nullable=False)
+    franked_amount = Column(Numeric(18, 2), nullable=True)
+    unfranked_amount = Column(Numeric(18, 2), nullable=True)
+    franking_credit = Column(Numeric(18, 2), nullable=True)
+    foreign_income = Column(Numeric(18, 2), nullable=True)
+    foreign_tax_paid = Column(Numeric(18, 2), nullable=True)
+    amit_amma_components = Column(JSON, nullable=True)
+    is_drp = Column(Boolean, nullable=False, default=False)
+    drp_quantity = Column(Numeric(28, 8), nullable=True)
+    drp_price = Column(Numeric(28, 8), nullable=True)
+    reinvestment_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="SET NULL"), nullable=True)
+    source_id = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "source_id", name="investment_income_events_account_source_uq"),
+        CheckConstraint("event_type IN ('dividend', 'distribution')", name="investment_income_events_type_check"),
+        CheckConstraint("cash_received >= 0", name="investment_income_events_cash_received_check"),
+        CheckConstraint("is_drp = false OR (drp_quantity > 0 AND drp_price >= 0)", name="investment_income_events_drp_check"),
+        Index("idx_investment_income_events_user_pay_date", "user_id", "pay_date"),
+        Index("idx_investment_income_events_holding_pay_date", "holding_id", "pay_date"),
+    )
+
+
 class PriceSnapshot(Base):
     __tablename__ = "price_snapshots"
 

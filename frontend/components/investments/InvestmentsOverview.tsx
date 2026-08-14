@@ -22,18 +22,22 @@ import { PortfolioChart } from "./PortfolioChart";
 import { PortfolioStatsStrip, computeBestDay } from "./PortfolioStatsStrip";
 import { AllocationRow } from "./AllocationRow";
 import { HoldingsTableHF } from "./HoldingsTableHF";
+import { PortfolioIncomeSummary } from "./PortfolioIncomeSummary";
+import type { PortfolioIncomeSummary as IncomeSummary } from "./income-types";
 
 export function InvestmentsOverview({
   portfolio,
   holdings,
   initialHistory,
   initialRange = "1M",
+  incomeSummaries = [],
   isDemoRestricted = false,
 }: {
   portfolio: PortfolioSummary;
   holdings: Holding[];
   initialHistory: ValuationPoint[];
   initialRange?: Range;
+  incomeSummaries?: IncomeSummary[];
   isDemoRestricted?: boolean;
 }) {
   const router = useRouter();
@@ -195,6 +199,7 @@ export function InvestmentsOverview({
         byInstrument={portfolio.allocation_by_type}
         byCurrency={portfolio.allocation_by_currency}
       />
+      <PortfolioIncomeSummary summaries={incomeSummaries} />
       <HoldingsTableHF
         holdings={holdings}
         accountNames={accountNames}

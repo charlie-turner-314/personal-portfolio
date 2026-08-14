@@ -181,6 +181,83 @@ export type HoldingLot = {
   currency: string;
 };
 
+export type InvestmentIncomeEvent = {
+  id: string;
+  account_id: string;
+  holding_id: string;
+  event_type: "dividend" | "distribution";
+  pay_date: string;
+  ex_date?: string | null;
+  currency: string;
+  cash_received: string;
+  franked_amount?: string | null;
+  unfranked_amount?: string | null;
+  franking_credit?: string | null;
+  foreign_income?: string | null;
+  foreign_tax_paid?: string | null;
+  amit_amma_components?: Record<string, string | null> | null;
+  is_drp: boolean;
+  drp_quantity?: string | null;
+  drp_price?: string | null;
+  source_id?: string | null;
+  notes?: string | null;
+  reinvestment_trade_id?: string | null;
+};
+
+export type InvestmentIncomeSummary = {
+  financial_year_start: number;
+  currency: string;
+  cash_income: string;
+  franking_credits: string;
+  foreign_income: string;
+  foreign_tax_paid: string;
+};
+
+export type CreateInvestmentIncomeEvent = Omit<
+  InvestmentIncomeEvent,
+  "id" | "reinvestment_trade_id"
+>;
+
+export async function listHoldingIncomeEvents(holdingId: string): Promise<InvestmentIncomeEvent[]> {
+  const resp = await signedFetch("GET", "/api/investments/income-events", {
+    query: { holding_id: holdingId },
+  });
+  return readJsonOrThrow<InvestmentIncomeEvent[]>(resp);
+}
+
+export async function getInvestmentIncomeSummary(
+  financialYearStart: number,
+  holdingId?: string,
+): Promise<InvestmentIncomeSummary[]> {
+  const resp = await signedFetch("GET", "/api/investments/income-events/summary", {
+    query: {
+      financial_year_start: String(financialYearStart),
+      holding_id: holdingId,
+    },
+  });
+  return readJsonOrThrow<InvestmentIncomeSummary[]>(resp);
+}
+
+export async function createInvestmentIncomeEvent(
+  payload: CreateInvestmentIncomeEvent,
+): Promise<InvestmentIncomeEvent> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", "/api/investments/income-events", { body: payload });
+  return readJsonOrThrow<InvestmentIncomeEvent>(resp);
+}
+
+export async function createHoldingIncomeEvent(
+  accountId: string,
+  holdingId: string,
+  payload: Omit<CreateInvestmentIncomeEvent, "account_id" | "holding_id">,
+): Promise<InvestmentIncomeEvent> {
+  return createInvestmentIncomeEvent({
+    ...payload,
+    account_id: accountId,
+    holding_id: holdingId,
+  });
+}
+
 export async function getHoldingTrades(
   holdingId: string,
 ): Promise<HoldingTrade[]> {
