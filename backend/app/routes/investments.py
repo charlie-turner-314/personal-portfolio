@@ -1,12 +1,15 @@
 """REST endpoints for investment connections, holdings, and portfolio."""
 from __future__ import annotations
 
+import csv
+from io import StringIO
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1011,15 +1014,12 @@ def holding_cgt_allocations(
     ).order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc()).all()
 
 
-@router.get("/cgt/allocations", response_model=list[CgtAllocationResponse])
-def cgt_allocations(
-    financial_year_start: Optional[int] = Query(None, ge=1900, le=2200),
+def _cgt_allocations_query(
+    db: Session,
+    user_id: str,
+    financial_year_start: Optional[int] = None,
     account_id: Optional[UUID] = None,
-    user_id: Optional[str] = None,
-    db: Session = Depends(get_db),
 ):
-    """Return the user's persisted CGT allocation records, optionally for one FY/account."""
-    user_id = get_user_id(user_id)
     query = db.query(CgtAllocation).join(Account, Account.id == CgtAllocation.account_id).filter(
         Account.user_id == user_id,
     )
@@ -1034,7 +1034,73 @@ def cgt_allocations(
         if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
             raise HTTPException(status_code=404, detail="Investment account not found")
         query = query.filter(CgtAllocation.account_id == account.id)
-    return query.order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc()).all()
+    return query.order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc())
+
+
+def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
+    """Serialize persisted allocations without deriving or hiding tax-relevant values."""
+    fields = [
+        "allocation_id", "account_id", "acquisition_trade_id", "disposal_trade_id", "symbol",
+        "acquisition_date", "disposal_date", "quantity", "currency", "cost_base_native",
+        "proceeds_native", "gain_native", "cost_base_aud", "proceeds_aud", "gain_aud",
+        "fx_missing", "discount_eligible", "calculation_version", "assumptions",
+    ]
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({
+            "allocation_id": row.id,
+            "account_id": row.account_id,
+            "acquisition_trade_id": row.acquisition_trade_id,
+            "disposal_trade_id": row.disposal_trade_id,
+            "symbol": row.symbol,
+            "acquisition_date": row.acquisition_date.isoformat(),
+            "disposal_date": row.disposal_date.isoformat(),
+            "quantity": row.quantity,
+            "currency": row.currency,
+            "cost_base_native": row.cost_base_native,
+            "proceeds_native": row.proceeds_native,
+            "gain_native": row.gain_native,
+            "cost_base_aud": row.cost_base_aud if row.cost_base_aud is not None else "",
+            "proceeds_aud": row.proceeds_aud if row.proceeds_aud is not None else "",
+            "gain_aud": row.gain_aud if row.gain_aud is not None else "",
+            "fx_missing": str(bool(row.fx_missing)).lower(),
+            "discount_eligible": str(bool(row.discount_eligible)).lower(),
+            "calculation_version": row.calculation_version,
+            "assumptions": " | ".join(row.assumptions or []),
+        })
+    return output.getvalue()
+
+
+@router.get("/cgt/allocations", response_model=list[CgtAllocationResponse])
+def cgt_allocations(
+    financial_year_start: Optional[int] = Query(None, ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return the user's persisted CGT allocation records, optionally for one FY/account."""
+    user_id = get_user_id(user_id)
+    return _cgt_allocations_query(db, user_id, financial_year_start, account_id).all()
+
+
+@router.get("/cgt/export.csv")
+def export_cgt_allocations_csv(
+    financial_year_start: int = Query(..., ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Download the authenticated user's Australian-FY CGT allocation audit trail."""
+    user_id = get_user_id(user_id)
+    rows = _cgt_allocations_query(db, user_id, financial_year_start, account_id).all()
+    filename = f"cgt-allocations-fy{financial_year_start}-{financial_year_start + 1}.csv"
+    return StreamingResponse(
+        iter([_cgt_export_csv(rows)]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/cgt/summary", response_model=CgtFinancialYearSummary)
@@ -1050,18 +1116,7 @@ def cgt_financial_year_summary(
     transaction-date FX rate are deliberately excluded from AUD totals.
     """
     user_id = get_user_id(user_id)
-    start, end = _financial_year_bounds(financial_year_start)
-    query = db.query(CgtAllocation).join(Account, Account.id == CgtAllocation.account_id).filter(
-        Account.user_id == user_id,
-        CgtAllocation.disposal_date >= start,
-        CgtAllocation.disposal_date < end,
-    )
-    if account_id is not None:
-        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
-        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
-            raise HTTPException(status_code=404, detail="Investment account not found")
-        query = query.filter(CgtAllocation.account_id == account.id)
-    rows = query.all()
+    rows = _cgt_allocations_query(db, user_id, financial_year_start, account_id).all()
     known = [row for row in rows if not row.fx_missing and row.gain_aud is not None]
     gross_gains = sum((max(Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
     losses = sum((max(-Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
