@@ -421,6 +421,7 @@ describe("budget actions", () => {
 
   describe("future budget plans", () => {
     it("previews the exact forward range and existing target months without writing", async () => {
+      vi.setSystemTime(new Date("2026-04-16T12:00:00Z"));
       mocks.requireAuth.mockResolvedValue("user-1");
       mocks.queryResults.futureRows = [
         { month: "2026-05-01" },
@@ -445,6 +446,7 @@ describe("budget actions", () => {
     });
 
     it("requires confirmation before replacing existing future budgets", async () => {
+      vi.setSystemTime(new Date("2026-04-16T12:00:00Z"));
       mocks.requireAuth.mockResolvedValue("user-1");
       mocks.queryResults.ownedCategories = [{ id: "category-food" }];
       mocks.queryResults.futureRows = [{ month: "2026-05-01" }];
