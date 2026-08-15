@@ -900,7 +900,11 @@ export function AssetManagement({
               <div className="space-y-2">
                 <Label htmlFor="edit-account-type">Account Type</Label>
                 <Select value={editAccountType} onValueChange={(v) => v && setEditAccountType(v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue>
+                      {(value) => value ? getAccountTypeLabel(value) : "Select account type"}
+                    </SelectValue>
+                  </SelectTrigger>
                   <SelectContent>
                     {ACCOUNT_TYPES.map((type) => (
                       <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>

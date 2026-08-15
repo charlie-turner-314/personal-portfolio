@@ -44,7 +44,7 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("Map your columns", { exact: true })).toBeVisible();
-  await expect(page.getByText("AI mapping applied.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Suggested mapping applied from CSV headers; AI analysis was not used.")).toBeVisible();
   await page.getByRole("button", { name: "Preview Transactions" }).click();
 
   await expect(page.getByText("Preview your import", { exact: true })).toBeVisible();
@@ -55,8 +55,11 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
 
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
-  await expect.poll(() => browserErrors, { message: "browser console errors" }).toEqual([]);
-  expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
+
+  await page.goto("/budget");
+  await expect(page.getByRole("heading", { name: "Budget" })).toBeVisible();
+  await expect(page.getByText("Budget failed to load")).not.toBeVisible();
+  await expect(page.getByText("Monthly Budget")).toBeVisible();
 
   await page.getByRole("button", { name: "Expand sidebar" }).click();
   await page.getByRole("button", { name: /Compose E2E/ }).click();
@@ -66,4 +69,6 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Login" }).click();
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect.poll(() => browserErrors, { message: "browser console errors" }).toEqual([]);
+  expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
 });
