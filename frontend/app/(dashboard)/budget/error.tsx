@@ -1,16 +1,24 @@
 "use client";
 
+import { useEffect } from "react";
 import { RiErrorWarningLine, RiRefreshLine } from "@remixicon/react";
 import { Header } from "@/components/layout/header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function Error({
+  error,
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  useEffect(() => {
+    console.error("[budget] Failed to load budget page", {
+      digest: error.digest ?? null,
+    });
+  }, [error]);
+
   return (
     <>
       <Header title="Budget" />
@@ -29,6 +37,11 @@ export default function Error({
             <p className="text-muted-foreground">
               Refresh the budget data and try again.
             </p>
+            {error.digest && (
+              <p className="text-xs text-muted-foreground">
+                Reference: {error.digest}
+              </p>
+            )}
             <Button type="button" onClick={reset}>
               <RiRefreshLine aria-hidden="true" />
               Retry

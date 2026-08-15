@@ -55,8 +55,11 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
 
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
-  await expect.poll(() => browserErrors, { message: "browser console errors" }).toEqual([]);
-  expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
+
+  await page.goto("/budget");
+  await expect(page.getByRole("heading", { name: "Budget" })).toBeVisible();
+  await expect(page.getByText("Budget failed to load")).not.toBeVisible();
+  await expect(page.getByText("Monthly Budget")).toBeVisible();
 
   await page.getByRole("button", { name: "Expand sidebar" }).click();
   await page.getByRole("button", { name: /Compose E2E/ }).click();
@@ -66,4 +69,6 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Login" }).click();
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect.poll(() => browserErrors, { message: "browser console errors" }).toEqual([]);
+  expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
 });

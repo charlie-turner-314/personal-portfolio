@@ -38,8 +38,11 @@ export function buildLinkedExpenseAmountSql({
     sql`t2.user_id = ${userId}`,
     sql`t2.include_in_analytics = true`,
     sql`t2.internal_transfer_id IS NULL`,
-    sql`t2.booked_at >= ${startDate}`,
-    sql`t2.booked_at <= ${endDate}`,
+    // `t2` is an SQL alias, so Drizzle cannot infer the timestamp encoder
+    // from a column reference. Preserve it explicitly to avoid passing a
+    // raw Date object to postgres-js.
+    sql`t2.booked_at >= ${sql.param(startDate, transactions.bookedAt)}`,
+    sql`t2.booked_at <= ${sql.param(endDate, transactions.bookedAt)}`,
   ];
 
   if (accountIds.length > 0) {

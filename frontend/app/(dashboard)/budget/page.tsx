@@ -61,12 +61,26 @@ async function BudgetSection({
   month?: string;
   accountIds: string[];
 }) {
-  const [data, accounts, plannedExpenses, plannedExpenseOptions] = await Promise.all([
-    getBudgetData(month, { accountIds }),
-    getUserAccounts(),
-    getBudgetPlannedExpenseSummary(month, { accountIds }),
-    getPlannedExpenseFormOptions(),
-  ]);
+  let data;
+  let accounts;
+  let plannedExpenses;
+  let plannedExpenseOptions;
+
+  try {
+    [data, accounts, plannedExpenses, plannedExpenseOptions] = await Promise.all([
+      getBudgetData(month, { accountIds }),
+      getUserAccounts(),
+      getBudgetPlannedExpenseSummary(month, { accountIds }),
+      getPlannedExpenseFormOptions(),
+    ]);
+  } catch (error) {
+    console.error("[budget] Failed to load budget data", {
+      month: month ?? "current",
+      accountCount: accountIds.length,
+      error,
+    });
+    throw error;
+  }
 
   return (
     <BudgetClient
