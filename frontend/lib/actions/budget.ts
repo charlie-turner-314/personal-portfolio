@@ -24,6 +24,7 @@ export interface BudgetLine {
   categoryIcon: string | null;
   plannedAmount: number;
   actualAmount: number;
+  previousMonthActualAmount: number;
   remainingAmount: number;
   varianceAmount: number;
   usedPct: number;
@@ -53,10 +54,6 @@ interface BudgetDataOptions {
 export interface BudgetActionResult {
   success: boolean;
   error?: string;
-}
-
-export interface CopyPreviousMonthBudgetResult extends BudgetActionResult {
-  copiedCount?: number;
 }
 
 function currentMonthKey(): string {
@@ -158,9 +155,11 @@ export async function getBudgetData(
   }
 
   const { start, end } = budgetMonthRange(monthKey);
+  const previousMonth = previousMonthKey(monthKey);
+  const { start: previousStart, end: previousEnd } = budgetMonthRange(previousMonth);
   const month = budgetMonthDate(monthKey);
 
-  const [expenseCategories, budgetRows, actualRows, currency] = await Promise.all([
+  const [expenseCategories, budgetRows, actualRows, previousActualRows, currency] = await Promise.all([
     db
       .select({
         id: categories.id,
@@ -191,6 +190,12 @@ export async function getBudgetData(
       accountIds,
       includeUncategorized: false,
     }),
+    fetchCategoryActualAmounts(userId, {
+      startDate: previousStart,
+      endDate: previousEnd,
+      accountIds,
+      includeUncategorized: false,
+    }),
     getUserCurrency(userId),
   ]);
 
@@ -205,6 +210,9 @@ export async function getBudgetData(
   );
   const actualByCategory = new Map(
     actualRows.map((row) => [row.id, parseMoney(row.amount)])
+  );
+  const previousActualByCategory = new Map(
+    previousActualRows.map((row) => [row.id, parseMoney(row.amount)])
   );
 
   const lines = expenseCategories.map((category) => {
@@ -221,6 +229,7 @@ export async function getBudgetData(
       categoryIcon: category.icon,
       plannedAmount,
       actualAmount,
+      previousMonthActualAmount: roundMoney(previousActualByCategory.get(category.id) ?? 0),
       remainingAmount,
       varianceAmount: roundMoney(actualAmount - plannedAmount),
       usedPct,
@@ -372,63 +381,5 @@ export async function saveBudgetLines(
   } catch (error) {
     console.error("Failed to save budget lines:", error);
     return { success: false, error: "Failed to save budget" };
-  }
-}
-
-export async function copyPreviousMonthBudget(
-  monthKeyInput: string
-): Promise<CopyPreviousMonthBudgetResult> {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return { success: false, error: "Not authenticated" };
-  }
-
-  const monthKey = normalizeBudgetMonthKey(monthKeyInput);
-  const sourceMonth = budgetMonthDate(previousMonthKey(monthKey));
-  const targetMonth = budgetMonthDate(monthKey);
-
-  const sourceRows = await db
-    .select({
-      categoryId: budgetLimits.categoryId,
-      plannedAmount: budgetLimits.plannedAmount,
-      notes: budgetLimits.notes,
-    })
-    .from(budgetLimits)
-    .innerJoin(categories, eq(budgetLimits.categoryId, categories.id))
-    .where(
-      and(
-        eq(budgetLimits.userId, userId),
-        eq(budgetLimits.month, sourceMonth),
-        eq(categories.userId, userId),
-        eq(categories.categoryType, "expense"),
-        or(eq(categories.hideFromSelection, false), isNull(categories.hideFromSelection))
-      )
-    );
-
-  try {
-    await db.transaction(async (tx) => {
-      await tx
-        .delete(budgetLimits)
-        .where(and(eq(budgetLimits.userId, userId), eq(budgetLimits.month, targetMonth)));
-
-      for (const row of sourceRows) {
-        await tx.insert(budgetLimits).values({
-          userId,
-          categoryId: row.categoryId,
-          month: targetMonth,
-          plannedAmount: parseMoney(row.plannedAmount).toFixed(2),
-          notes: row.notes,
-          updatedAt: new Date(),
-        });
-      }
-    });
-
-    revalidatePath("/budget");
-    revalidatePath("/");
-    return { success: true, copiedCount: sourceRows.length };
-  } catch (error) {
-    console.error("Failed to copy previous budget:", error);
-    return { success: false, error: "Failed to copy previous budget" };
   }
 }
