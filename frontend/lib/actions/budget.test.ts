@@ -240,6 +240,28 @@ describe("budget actions", () => {
     });
   });
 
+  it("getBudgetData returns an empty budget when the user has no expense categories", async () => {
+    mocks.requireAuth.mockResolvedValue("user-1");
+    mocks.queryResults.currencyRows = [{ functionalCurrency: "AUD" }];
+    mocks.fetchCategoryActualAmounts.mockResolvedValue([]);
+    mocks.fetchBudgetInsights.mockResolvedValue([]);
+
+    await expect(getBudgetData("2026-04")).resolves.toEqual({
+      monthKey: "2026-04",
+      currency: "AUD",
+      accountIds: [],
+      totals: {
+        plannedAmount: 0,
+        actualAmount: 0,
+        remainingAmount: 0,
+        varianceAmount: 0,
+        usedPct: 0,
+        categoriesOverBudget: 0,
+      },
+      lines: [],
+    });
+  });
+
   it("getBudgetData maps category, budget, and actual rows into month totals", async () => {
     mocks.requireAuth.mockResolvedValue("user-1");
     mocks.queryResults.categories = [
