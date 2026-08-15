@@ -173,6 +173,25 @@ export const PAGE_CONFIGS: Record<string, PageConfig> = {
       { id: "vehicles", title: "Vehicles Section", content: "Vehicle values.", target: "walkthrough-vehicles" },
     ],
   },
+  budget: {
+    page: "budget",
+    overview:
+      "Set a plan for each spending category, then compare it with what you spend during the month.",
+    steps: [
+      {
+        id: "plan",
+        title: "Plan your month",
+        content: "Enter the amount you expect to spend in each category, then save your plan.",
+        target: "walkthrough-budget-plan",
+      },
+      {
+        id: "future",
+        title: "Use your plan again",
+        content: "Apply this plan to the next few months when it is a good starting point.",
+        target: "walkthrough-budget-future",
+      },
+    ],
+  },
   settings: {
     page: "settings",
     overview:
@@ -191,6 +210,7 @@ export function getPageConfig(pathname: string): PageConfig | null {
     "/transactions": "transactions",
     "/subscriptions": "subscriptions",
     "/assets": "assets",
+    "/budget": "budget",
     "/settings": "settings",
   };
   const pageKey = routeMap[pathname];

@@ -60,6 +60,8 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await expect(page.getByRole("heading", { name: "Budget" })).toBeVisible();
   await expect(page.getByText("Budget failed to load")).not.toBeVisible();
   await expect(page.getByText("Monthly Budget")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close walkthrough" })).toBeVisible();
+  await page.getByRole("button", { name: "Close walkthrough" }).click();
 
   await page.getByRole("button", { name: "Expand sidebar" }).click();
   await page.getByRole("button", { name: /Compose E2E/ }).click();
