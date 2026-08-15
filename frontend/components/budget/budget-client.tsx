@@ -11,7 +11,6 @@ import {
   RiDeleteBinLine,
   RiEditLine,
   RiExternalLinkLine,
-  RiFileCopyLine,
   RiInformationLine,
   RiLink,
   RiSaveLine,
@@ -36,11 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  copyPreviousMonthBudget,
-  saveBudgetLines,
-  type BudgetData,
-} from "@/lib/actions/budget";
+import { saveBudgetLines, type BudgetData } from "@/lib/actions/budget";
 import {
   createPlannedExpense,
   deletePlannedExpense,
@@ -468,51 +463,19 @@ export function BudgetClient({
     });
   };
 
-  const handleCopyPreviousMonth = () => {
-    const hasCurrentPlan = lines.some(
-      (line) => parseAmount(line.plannedInput) > 0 || line.notesInput.trim()
-    );
-
-    if (
-      hasCurrentPlan &&
-      !window.confirm("Copying last month's budget will replace this month's plan.")
-    ) {
+  const useLastMonthsSpending = () => {
+    if (!lines.some((line) => line.previousMonthActualAmount > 0)) {
+      toast.info("No spending found last month");
       return;
     }
 
-    startTransition(async () => {
-      const result = await copyPreviousMonthBudget(data.monthKey);
-
-      if (result.success) {
-        if (result.copiedCount) {
-          toast.success("Copied last month's budget");
-        } else {
-          toast.info("No previous budget found");
-        }
-        router.refresh();
-      } else {
-        toast.error(result.error || "Failed to copy previous budget");
-      }
-    });
-  };
-
-  const resetAllToActual = () => {
     setLines((current) =>
       current.map((line) => ({
         ...line,
-        plannedInput: amountToInput(line.actualAmount),
+        plannedInput: amountToInput(line.previousMonthActualAmount),
       }))
     );
-  };
-
-  const resetLineToActual = (categoryId: string) => {
-    setLines((current) =>
-      current.map((line) =>
-        line.categoryId === categoryId
-          ? { ...line, plannedInput: amountToInput(line.actualAmount) }
-          : line
-      )
-    );
+    toast.info("Last month's spending added to your plan. Save when you're ready.");
   };
 
   const resetPlannedExpenseForm = () => {
@@ -690,20 +653,11 @@ export function BudgetClient({
           <Button
             type="button"
             variant="outline"
-            onClick={handleCopyPreviousMonth}
-            disabled={isPending}
-          >
-            <RiFileCopyLine />
-            Copy Last
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={resetAllToActual}
+            onClick={useLastMonthsSpending}
             disabled={isPending || lines.length === 0}
           >
             <RiArrowGoBackLine />
-            Reset Actual
+            Use last month&apos;s spending
           </Button>
         </div>
       </div>
@@ -853,7 +807,7 @@ export function BudgetClient({
                         </div>
                       </div>
 
-                      <div className="mt-3 flex gap-2">
+                      <div className="mt-3">
                         <Input
                           value={line.notesInput}
                           onChange={(event) =>
@@ -864,15 +818,6 @@ export function BudgetClient({
                           placeholder="Optional note"
                           aria-label={`${line.categoryName} notes`}
                         />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          aria-label={`Reset ${line.categoryName} to actual amount`}
-                          onClick={() => resetLineToActual(line.categoryId)}
-                        >
-                          <RiArrowGoBackLine />
-                        </Button>
                       </div>
 
                       {line.insight && (
@@ -901,7 +846,6 @@ export function BudgetClient({
                       <TableHead className="w-36">Used</TableHead>
                       <TableHead className="w-32 text-right">Remaining</TableHead>
                       <TableHead className="min-w-48">Notes</TableHead>
-                      <TableHead className="w-20 text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -984,21 +928,10 @@ export function BudgetClient({
                                 aria-label={`${line.categoryName} notes`}
                               />
                             </TableCell>
-                            <TableCell className="text-right">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="icon-sm"
-                                aria-label={`Reset ${line.categoryName} to actual amount`}
-                                onClick={() => resetLineToActual(line.categoryId)}
-                              >
-                                <RiArrowGoBackLine />
-                              </Button>
-                            </TableCell>
                           </TableRow>
                           {line.insight && (
                             <TableRow>
-                              <TableCell colSpan={7} className="p-0">
+                              <TableCell colSpan={6} className="p-0">
                                 <BudgetInsightContent
                                   insight={line.insight}
                                   currency={data.currency}
