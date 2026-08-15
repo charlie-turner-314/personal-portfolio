@@ -2,10 +2,8 @@ name: Build & Publish Docker Images
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags: ["v*.*.*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch: {}
 
 jobs:
@@ -52,8 +50,8 @@ jobs:
         with:
           context: ./${{ matrix.service }}
           file: ./${{ matrix.service }}/Dockerfile
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name != 'pull_request' }}
+          platforms: linux/amd64,linux/arm64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # backend/Dockerfile's frontend-deps stage renders report

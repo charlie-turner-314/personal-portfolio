@@ -34,6 +34,7 @@ export function SubscriptionsKpiGrid({ kpis }: SubscriptionsKpiGridProps) {
               {formatCurrency(kpis.monthlyTotal, kpis.currency, {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
+                locale: kpis.locale,
               })}
             </p>
           </div>
@@ -50,6 +51,7 @@ export function SubscriptionsKpiGrid({ kpis }: SubscriptionsKpiGridProps) {
               {formatCurrency(kpis.allTimeTotal, kpis.currency, {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
+                locale: kpis.locale,
               })}
             </p>
           </div>

@@ -26,6 +26,7 @@ import {
   getLinkedTransactions,
   matchTransactionsToSubscription,
 } from "@/lib/actions/subscriptions";
+import { formatCurrency } from "@/lib/utils";
 
 interface SubscriptionWithCategory extends RecurringTransaction {
   account?: {
@@ -56,6 +57,8 @@ interface SubscriptionDetailSheetProps {
   onOpenChange: (open: boolean) => void;
   onEdit: (subscription: SubscriptionWithCategory) => void;
   onRefresh: () => void;
+  displayCurrency: string;
+  locale: string;
 }
 
 const frequencyColors: Record<string, string> = {
@@ -80,6 +83,8 @@ export function SubscriptionDetailSheet({
   onOpenChange,
   onEdit,
   onRefresh,
+  displayCurrency,
+  locale,
 }: SubscriptionDetailSheetProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isMatching, setIsMatching] = useState(false);
@@ -162,8 +167,6 @@ export function SubscriptionDetailSheet({
 
   if (!subscription) return null;
 
-  const currency = subscription.currency || "EUR";
-
   // Cap importance at 3 for display
   const importance = Math.min(subscription.importance, 3);
 
@@ -195,7 +198,11 @@ export function SubscriptionDetailSheet({
           <SheetTitle className="text-xl">{subscription.name}</SheetTitle>
           <div className="flex items-center justify-between">
             <SheetDescription className="text-base font-mono">
-              {parseFloat(subscription.amount).toFixed(2)} {currency}
+              {formatCurrency(
+                parseFloat(subscription.amount),
+                displayCurrency,
+                { minimumFractionDigits: 2, maximumFractionDigits: 2, locale }
+              )}
             </SheetDescription>
             {/* Importance blocks */}
             <div
@@ -229,7 +236,11 @@ export function SubscriptionDetailSheet({
                   This Year
                 </div>
                 <div className="text-xl font-mono font-medium">
-                  {costAggregations.thisYear.toFixed(2)} {currency}
+                  {formatCurrency(costAggregations.thisYear, displayCurrency, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                    locale,
+                  })}
                 </div>
               </div>
               <div className="bg-muted/50 p-4 space-y-1">
@@ -237,7 +248,11 @@ export function SubscriptionDetailSheet({
                   All Time
                 </div>
                 <div className="text-xl font-mono font-medium">
-                  {costAggregations.allTime.toFixed(2)} {currency}
+                  {formatCurrency(costAggregations.allTime, displayCurrency, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                    locale,
+                  })}
                 </div>
               </div>
             </div>
@@ -290,7 +305,15 @@ export function SubscriptionDetailSheet({
                           </div>
                         </div>
                         <div className="text-sm font-mono shrink-0 ml-4">
-                          {Math.abs(parseFloat(txn.amount)).toFixed(2)} {currency}
+                          {formatCurrency(
+                            Math.abs(parseFloat(txn.amount)),
+                            displayCurrency,
+                            {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                              locale,
+                            }
+                          )}
                         </div>
                       </div>
                     ))}

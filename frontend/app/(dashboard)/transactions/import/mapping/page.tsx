@@ -85,7 +85,7 @@ function MappingPageContent() {
       const result = await getAiColumnMapping(id, data.headers, data.sampleRows);
       if (result.success) {
         setMapping(withMappingDefaults(result.mapping));
-        setAiMappingStatus("succeeded");
+        setAiMappingStatus(result.outcome === "ai" ? "ai_succeeded" : "deterministic");
       } else {
         setAiMappingStatus(result.outcome);
         setAiMappingError(result.error);
@@ -131,6 +131,17 @@ function MappingPageContent() {
       if (hasExistingMapping) {
         setMapping(withMappingDefaults(session.columnMapping!));
         aiMappingTriggeredRef.current = true; // Don't trigger AI if mapping exists
+        setAiMappingStatus(
+          session.profileApplied || session.columnMapping?.mappingSource === "profile"
+            ? "reused"
+            : session.columnMapping?.mappingSource === "ai"
+              ? "ai_succeeded"
+              : session.columnMapping?.mappingSource === "deterministic"
+                ? "deterministic"
+                : session.columnMapping?.mappingSource === "manual"
+                  ? "manual"
+                  : "existing"
+        );
       }
 
       // Parse CSV headers
@@ -166,7 +177,7 @@ function MappingPageContent() {
   };
 
   const handleMapManually = () => {
-    setAiMappingStatus("idle");
+    setAiMappingStatus("manual");
     requestAnimationFrame(() => mappingSectionRef.current?.focus());
   };
 

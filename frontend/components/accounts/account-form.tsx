@@ -17,6 +17,7 @@ import {
   ACCOUNT_TYPES,
   CURRENCIES,
   LIABILITY_REPAYMENT_FREQUENCIES,
+  getAccountTypeLabel,
   isLiabilityAccountType,
 } from "@/lib/constants";
 import { createAccount, createPocketAccount } from "@/lib/actions/accounts";
@@ -253,7 +254,7 @@ export function AccountForm({
 
       if (result.success) {
         // PUT owners after entity creation
-        if (result.accountId) {
+        if (result.accountId && owners.length > 0) {
           await putOwners(result.accountId);
         }
 
@@ -320,7 +321,9 @@ export function AccountForm({
           <Label htmlFor="account-type">Account Type</Label>
           <Select value={accountType} onValueChange={(v) => v && setAccountType(v)}>
             <SelectTrigger>
-              <SelectValue placeholder="Select account type" />
+              <SelectValue>
+                {(value) => value ? getAccountTypeLabel(value) : "Select account type"}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {ACCOUNT_TYPES.map((type) => (

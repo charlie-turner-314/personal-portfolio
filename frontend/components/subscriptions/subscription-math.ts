@@ -21,10 +21,3 @@ export function calculateMonthlyEquivalent(
   const multiplier = frequencyMultipliers[item.frequency] || 1;
   return amount * multiplier;
 }
-
-export function getCurrencyFallback(
-  items: SubscriptionOrSuggestion[],
-  fallback = "EUR"
-): string {
-  return items.find((item) => item.currency)?.currency || fallback;
-}

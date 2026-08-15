@@ -24,6 +24,7 @@ export interface BudgetLine {
   categoryIcon: string | null;
   plannedAmount: number;
   actualAmount: number;
+  previousMonthActualAmount: number;
   remainingAmount: number;
   varianceAmount: number;
   usedPct: number;
@@ -55,8 +56,17 @@ export interface BudgetActionResult {
   error?: string;
 }
 
-export interface CopyPreviousMonthBudgetResult extends BudgetActionResult {
-  copiedCount?: number;
+export interface FutureBudgetPlanPreview {
+  startMonthKey: string;
+  endMonthKey: string;
+  monthCount: number;
+  existingMonthCount: number;
+}
+
+export interface FutureBudgetPlanResult extends BudgetActionResult {
+  preview?: FutureBudgetPlanPreview;
+  appliedMonthCount?: number;
+  requiresConfirmation?: boolean;
 }
 
 function currentMonthKey(): string {
@@ -103,6 +113,26 @@ function previousMonthKey(monthKey: string): string {
   const monthIndex = Number(monthKey.slice(5, 7)) - 1;
   const date = new Date(year, monthIndex - 1, 1);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function nextMonthKeys(monthKey: string, monthCount: number): string[] {
+  const year = Number(monthKey.slice(0, 4));
+  const monthIndex = Number(monthKey.slice(5, 7)) - 1;
+
+  return Array.from({ length: monthCount }, (_, index) => {
+    const date = new Date(year, monthIndex + index + 1, 1);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  });
+}
+
+function normalizeFutureMonthCount(monthCount: number): number | null {
+  return Number.isInteger(monthCount) && monthCount >= 1 && monthCount <= 12
+    ? monthCount
+    : null;
+}
+
+function canApplyBudgetForward(monthKey: string): boolean {
+  return monthKey >= currentMonthKey();
 }
 
 function parseMoney(value: unknown): number {
@@ -158,9 +188,11 @@ export async function getBudgetData(
   }
 
   const { start, end } = budgetMonthRange(monthKey);
+  const previousMonth = previousMonthKey(monthKey);
+  const { start: previousStart, end: previousEnd } = budgetMonthRange(previousMonth);
   const month = budgetMonthDate(monthKey);
 
-  const [expenseCategories, budgetRows, actualRows, currency] = await Promise.all([
+  const [expenseCategories, budgetRows, actualRows, previousActualRows, currency] = await Promise.all([
     db
       .select({
         id: categories.id,
@@ -191,6 +223,12 @@ export async function getBudgetData(
       accountIds,
       includeUncategorized: false,
     }),
+    fetchCategoryActualAmounts(userId, {
+      startDate: previousStart,
+      endDate: previousEnd,
+      accountIds,
+      includeUncategorized: false,
+    }),
     getUserCurrency(userId),
   ]);
 
@@ -205,6 +243,9 @@ export async function getBudgetData(
   );
   const actualByCategory = new Map(
     actualRows.map((row) => [row.id, parseMoney(row.amount)])
+  );
+  const previousActualByCategory = new Map(
+    previousActualRows.map((row) => [row.id, parseMoney(row.amount)])
   );
 
   const lines = expenseCategories.map((category) => {
@@ -221,6 +262,7 @@ export async function getBudgetData(
       categoryIcon: category.icon,
       plannedAmount,
       actualAmount,
+      previousMonthActualAmount: roundMoney(previousActualByCategory.get(category.id) ?? 0),
       remainingAmount,
       varianceAmount: roundMoney(actualAmount - plannedAmount),
       usedPct,
@@ -375,60 +417,138 @@ export async function saveBudgetLines(
   }
 }
 
-export async function copyPreviousMonthBudget(
-  monthKeyInput: string
-): Promise<CopyPreviousMonthBudgetResult> {
+export async function previewFutureBudgetPlan(
+  monthKeyInput: string,
+  monthCountInput: number
+): Promise<FutureBudgetPlanResult> {
   const userId = await requireAuth();
+  const monthCount = normalizeFutureMonthCount(monthCountInput);
 
-  if (!userId) {
-    return { success: false, error: "Not authenticated" };
-  }
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (!monthCount) return { success: false, error: "Choose between 1 and 12 months" };
 
   const monthKey = normalizeBudgetMonthKey(monthKeyInput);
-  const sourceMonth = budgetMonthDate(previousMonthKey(monthKey));
-  const targetMonth = budgetMonthDate(monthKey);
+  if (!canApplyBudgetForward(monthKey)) {
+    return {
+      success: false,
+      error: "Choose the current month or a future month to apply a budget forward",
+    };
+  }
 
-  const sourceRows = await db
-    .select({
-      categoryId: budgetLimits.categoryId,
-      plannedAmount: budgetLimits.plannedAmount,
-      notes: budgetLimits.notes,
-    })
+  const targetMonthKeys = nextMonthKeys(monthKey, monthCount);
+  const existingRows = await db
+    .select({ month: budgetLimits.month })
     .from(budgetLimits)
-    .innerJoin(categories, eq(budgetLimits.categoryId, categories.id))
     .where(
       and(
         eq(budgetLimits.userId, userId),
-        eq(budgetLimits.month, sourceMonth),
-        eq(categories.userId, userId),
-        eq(categories.categoryType, "expense"),
-        or(eq(categories.hideFromSelection, false), isNull(categories.hideFromSelection))
+        inArray(budgetLimits.month, targetMonthKeys.map(budgetMonthDate))
       )
     );
 
-  try {
-    await db.transaction(async (tx) => {
-      await tx
-        .delete(budgetLimits)
-        .where(and(eq(budgetLimits.userId, userId), eq(budgetLimits.month, targetMonth)));
+  return {
+    success: true,
+    preview: {
+      startMonthKey: targetMonthKeys[0],
+      endMonthKey: targetMonthKeys[targetMonthKeys.length - 1],
+      monthCount,
+      existingMonthCount: new Set(existingRows.map((row) => String(row.month))).size,
+    },
+  };
+}
 
-      for (const row of sourceRows) {
-        await tx.insert(budgetLimits).values({
-          userId,
-          categoryId: row.categoryId,
-          month: targetMonth,
-          plannedAmount: parseMoney(row.plannedAmount).toFixed(2),
-          notes: row.notes,
-          updatedAt: new Date(),
-        });
+/** Replaces future planned budgets only; actuals and transactions are never read or changed. */
+export async function applyBudgetToFutureMonths(
+  monthKeyInput: string,
+  monthCountInput: number,
+  lines: Array<Pick<BudgetLineInput, "categoryId" | "plannedAmount">>,
+  confirmOverwrite = false
+): Promise<FutureBudgetPlanResult> {
+  const userId = await requireAuth();
+  const monthCount = normalizeFutureMonthCount(monthCountInput);
+
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (!monthCount) return { success: false, error: "Choose between 1 and 12 months" };
+
+  const monthKey = normalizeBudgetMonthKey(monthKeyInput);
+  if (!canApplyBudgetForward(monthKey)) {
+    return {
+      success: false,
+      error: "Choose the current month or a future month to apply a budget forward",
+    };
+  }
+
+  const targetMonthKeys = nextMonthKeys(monthKey, monthCount);
+  const targetMonths = targetMonthKeys.map(budgetMonthDate);
+  const plannedByCategory = new Map<string, number>();
+  for (const line of lines) {
+    if (line.categoryId) {
+      plannedByCategory.set(
+        line.categoryId,
+        Math.max(0, Math.round(parseMoney(line.plannedAmount) * 100) / 100)
+      );
+    }
+  }
+  const categoryIds = [...plannedByCategory.keys()];
+
+  if (categoryIds.length > 0) {
+    const ownedCategories = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(
+        and(
+          eq(categories.userId, userId),
+          eq(categories.categoryType, "expense"),
+          inArray(categories.id, categoryIds)
+        )
+      );
+    if (ownedCategories.length !== categoryIds.length) {
+      return { success: false, error: "One or more budget categories could not be found" };
+    }
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const existingRows = await tx
+        .select({ month: budgetLimits.month })
+        .from(budgetLimits)
+        .where(and(eq(budgetLimits.userId, userId), inArray(budgetLimits.month, targetMonths)));
+      const preview: FutureBudgetPlanPreview = {
+        startMonthKey: targetMonthKeys[0],
+        endMonthKey: targetMonthKeys[targetMonthKeys.length - 1],
+        monthCount,
+        existingMonthCount: new Set(existingRows.map((row) => String(row.month))).size,
+      };
+
+      if (preview.existingMonthCount > 0 && !confirmOverwrite) {
+        return { success: false, requiresConfirmation: true, preview };
       }
+
+      for (const targetMonth of targetMonths) {
+        await tx
+          .delete(budgetLimits)
+          .where(and(eq(budgetLimits.userId, userId), eq(budgetLimits.month, targetMonth)));
+        for (const [categoryId, plannedAmount] of plannedByCategory) {
+          if (plannedAmount === 0) continue;
+          await tx.insert(budgetLimits).values({
+            userId,
+            categoryId,
+            month: targetMonth,
+            plannedAmount: plannedAmount.toFixed(2),
+            notes: null,
+            updatedAt: new Date(),
+          });
+        }
+      }
+      return { success: true, preview, appliedMonthCount: monthCount };
     });
 
+    if (!result.success) return result;
     revalidatePath("/budget");
     revalidatePath("/");
-    return { success: true, copiedCount: sourceRows.length };
+    return result;
   } catch (error) {
-    console.error("Failed to copy previous budget:", error);
-    return { success: false, error: "Failed to copy previous budget" };
+    console.error("Failed to apply budget to future months:", error);
+    return { success: false, error: "Failed to apply budget to future months" };
   }
 }

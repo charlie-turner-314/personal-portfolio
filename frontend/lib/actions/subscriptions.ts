@@ -9,6 +9,7 @@ import {
   categories,
   accounts,
   companyLogos,
+  users,
   type RecurringTransaction,
   type NewRecurringTransaction,
 } from "@/lib/db/schema";
@@ -26,6 +27,7 @@ export interface SubscriptionKpis {
   monthlyTotal: number;
   allTimeTotal: number;
   currency: string;
+  locale: string;
 }
 
 // ============================================================================
@@ -442,21 +444,29 @@ export async function getSubscriptionKpis(): Promise<SubscriptionKpis> {
   const userId = await requireAuth();
 
   if (!userId) {
-    return { activeCount: 0, monthlyTotal: 0, allTimeTotal: 0, currency: "EUR" };
+    return { activeCount: 0, monthlyTotal: 0, allTimeTotal: 0, currency: "EUR", locale: "en-US" };
   }
 
   try {
-    const activeSubscriptions = await db.query.recurringTransactions.findMany({
-      where: and(
-        eq(recurringTransactions.userId, userId),
-        eq(recurringTransactions.isActive, true)
-      ),
-      columns: {
-        amount: true,
-        currency: true,
-        frequency: true,
-      },
-    });
+    const [activeSubscriptions, userProfile] = await Promise.all([
+      db.query.recurringTransactions.findMany({
+        where: and(
+          eq(recurringTransactions.userId, userId),
+          eq(recurringTransactions.isActive, true)
+        ),
+        columns: {
+          amount: true,
+          frequency: true,
+        },
+      }),
+      db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: {
+          functionalCurrency: true,
+          locale: true,
+        },
+      }),
+    ]);
 
     const frequencyMultipliers: Record<string, number> = {
       weekly: 4,
@@ -472,7 +482,8 @@ export async function getSubscriptionKpis(): Promise<SubscriptionKpis> {
       return sumValue + amount * multiplier;
     }, 0);
 
-    const currency = activeSubscriptions.find((sub) => sub.currency)?.currency || "EUR";
+    const currency = userProfile?.functionalCurrency || "EUR";
+    const locale = userProfile?.locale || "en-US";
 
     const allTimeResult = await db
       .select({
@@ -493,10 +504,11 @@ export async function getSubscriptionKpis(): Promise<SubscriptionKpis> {
       monthlyTotal,
       allTimeTotal,
       currency,
+      locale,
     };
   } catch (error) {
     console.error("Failed to get subscription KPIs:", error);
-    return { activeCount: 0, monthlyTotal: 0, allTimeTotal: 0, currency: "EUR" };
+    return { activeCount: 0, monthlyTotal: 0, allTimeTotal: 0, currency: "EUR", locale: "en-US" };
   }
 }
 

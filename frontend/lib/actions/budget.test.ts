@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   type QueryCall = {
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
     budgetRows: [] as unknown[],
     currencyRows: [] as unknown[],
     sourceRows: [] as unknown[],
+    futureRows: [] as unknown[],
   };
   const queryCalls: QueryCall[] = [];
   const txOperations: TxOperation[] = [];
@@ -25,6 +26,9 @@ const mocks = vi.hoisted(() => {
 
     if (keys.includes("functionalCurrency")) {
       return queryResults.currencyRows;
+    }
+    if (keys.includes("month")) {
+      return queryResults.futureRows;
     }
     if (keys.includes("name")) {
       return queryResults.categories;
@@ -106,8 +110,11 @@ const mocks = vi.hoisted(() => {
     select: vi.fn((selection: unknown) =>
       createSelectBuilder(selection, resultForSelection(selection as Record<string, unknown>))
     ),
-    transaction: vi.fn(async (callback: (tx: unknown) => Promise<void>) => {
-      await callback({
+    transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+      return callback({
+        select: vi.fn((selection: unknown) =>
+          createSelectBuilder(selection, resultForSelection(selection as Record<string, unknown>))
+        ),
         delete: vi.fn(() => createDeleteBuilder()),
         insert: vi.fn(() => createInsertBuilder()),
       });
@@ -146,7 +153,12 @@ vi.mock("@/lib/spending/budget-insights", () => ({
   fetchBudgetInsights: mocks.fetchBudgetInsights,
 }));
 
-import { copyPreviousMonthBudget, getBudgetData, saveBudgetLines } from "./budget";
+import {
+  applyBudgetToFutureMonths,
+  getBudgetData,
+  previewFutureBudgetPlan,
+  saveBudgetLines,
+} from "./budget";
 
 describe("budget actions", () => {
   beforeEach(() => {
@@ -155,6 +167,7 @@ describe("budget actions", () => {
     mocks.queryResults.budgetRows = [];
     mocks.queryResults.currencyRows = [];
     mocks.queryResults.sourceRows = [];
+    mocks.queryResults.futureRows = [];
     mocks.queryCalls.length = 0;
     mocks.txOperations.length = 0;
     mocks.db.select.mockClear();
@@ -164,6 +177,8 @@ describe("budget actions", () => {
     mocks.fetchCategoryActualAmounts.mockReset();
     mocks.fetchBudgetInsights.mockReset();
   });
+
+  afterEach(() => vi.useRealTimers());
 
   describe("saveBudgetLines", () => {
     it("rejects categories that are invalid or not owned by the user", async () => {
@@ -240,6 +255,28 @@ describe("budget actions", () => {
     });
   });
 
+  it("getBudgetData returns an empty budget when the user has no expense categories", async () => {
+    mocks.requireAuth.mockResolvedValue("user-1");
+    mocks.queryResults.currencyRows = [{ functionalCurrency: "AUD" }];
+    mocks.fetchCategoryActualAmounts.mockResolvedValue([]);
+    mocks.fetchBudgetInsights.mockResolvedValue([]);
+
+    await expect(getBudgetData("2026-04")).resolves.toEqual({
+      monthKey: "2026-04",
+      currency: "AUD",
+      accountIds: [],
+      totals: {
+        plannedAmount: 0,
+        actualAmount: 0,
+        remainingAmount: 0,
+        varianceAmount: 0,
+        usedPct: 0,
+        categoriesOverBudget: 0,
+      },
+      lines: [],
+    });
+  });
+
   it("getBudgetData maps category, budget, and actual rows into month totals", async () => {
     mocks.requireAuth.mockResolvedValue("user-1");
     mocks.queryResults.categories = [
@@ -252,11 +289,16 @@ describe("budget actions", () => {
       { categoryId: "category-rent", plannedAmount: 1000, notes: null },
     ];
     mocks.queryResults.currencyRows = [{ functionalCurrency: "USD" }];
-    mocks.fetchCategoryActualAmounts.mockResolvedValue([
-      { id: "category-food", amount: "250.25" },
-      { id: "category-rent", amount: "750.10" },
-      { id: "category-ignored", amount: "999.00" },
-    ]);
+    mocks.fetchCategoryActualAmounts
+      .mockResolvedValueOnce([
+        { id: "category-food", amount: "250.25" },
+        { id: "category-rent", amount: "750.10" },
+        { id: "category-ignored", amount: "999.00" },
+      ])
+      .mockResolvedValueOnce([
+        { id: "category-food", amount: "180.45" },
+        { id: "category-travel", amount: "50.00" },
+      ]);
     mocks.fetchBudgetInsights.mockResolvedValue([
       {
         categoryId: "category-food",
@@ -281,6 +323,12 @@ describe("budget actions", () => {
     expect(mocks.fetchCategoryActualAmounts).toHaveBeenCalledWith("user-1", {
       startDate: new Date(2026, 3, 1),
       endDate: new Date(2026, 3, 30, 23, 59, 59, 999),
+      accountIds: ["account-1", "account-2"],
+      includeUncategorized: false,
+    });
+    expect(mocks.fetchCategoryActualAmounts).toHaveBeenCalledWith("user-1", {
+      startDate: new Date(2026, 2, 1),
+      endDate: new Date(2026, 2, 31, 23, 59, 59, 999),
       accountIds: ["account-1", "account-2"],
       includeUncategorized: false,
     });
@@ -319,6 +367,7 @@ describe("budget actions", () => {
           categoryIcon: "restaurant",
           plannedAmount: 200,
           actualAmount: 250.25,
+          previousMonthActualAmount: 180.45,
           remainingAmount: -50.25,
           varianceAmount: 50.25,
           usedPct: 125,
@@ -345,6 +394,7 @@ describe("budget actions", () => {
           categoryIcon: null,
           plannedAmount: 1000,
           actualAmount: 750.1,
+          previousMonthActualAmount: 0,
           remainingAmount: 249.9,
           varianceAmount: -249.9,
           usedPct: 75,
@@ -358,6 +408,7 @@ describe("budget actions", () => {
           categoryIcon: "plane",
           plannedAmount: 0,
           actualAmount: 0,
+          previousMonthActualAmount: 50,
           remainingAmount: 0,
           varianceAmount: 0,
           usedPct: 0,
@@ -368,39 +419,54 @@ describe("budget actions", () => {
     });
   });
 
-  it("copyPreviousMonthBudget replaces the selected month with prior-month rows and reports copiedCount", async () => {
-    mocks.requireAuth.mockResolvedValue("user-1");
-    mocks.queryResults.sourceRows = [
-      { categoryId: "category-food", plannedAmount: "123.40", notes: "groceries" },
-      { categoryId: "category-rent", plannedAmount: "1000", notes: null },
-    ];
-
-    const result = await copyPreviousMonthBudget("2026-04");
-
-    expect(result).toEqual({ success: true, copiedCount: 2 });
-    expect(mocks.txOperations).toHaveLength(3);
-    expect(mocks.txOperations[0]).toMatchObject({ type: "delete" });
-    expect(mocks.txOperations[1]).toMatchObject({
-      type: "insert",
-      values: {
-        userId: "user-1",
-        categoryId: "category-food",
-        month: "2026-04-01",
-        plannedAmount: "123.40",
-        notes: "groceries",
-      },
+  describe("future budget plans", () => {
+    it("previews the exact forward range and existing target months without writing", async () => {
+      vi.setSystemTime(new Date("2026-04-16T12:00:00Z"));
+      mocks.requireAuth.mockResolvedValue("user-1");
+      mocks.queryResults.futureRows = [
+        { month: "2026-05-01" },
+        { month: "2026-05-01" },
+        { month: "2026-07-01" },
+      ];
+      await expect(previewFutureBudgetPlan("2026-04", 3)).resolves.toEqual({
+        success: true,
+        preview: { startMonthKey: "2026-05", endMonthKey: "2026-07", monthCount: 3, existingMonthCount: 2 },
+      });
+      expect(mocks.db.transaction).not.toHaveBeenCalled();
     });
-    expect(mocks.txOperations[2]).toMatchObject({
-      type: "insert",
-      values: {
-        userId: "user-1",
-        categoryId: "category-rent",
-        month: "2026-04-01",
-        plannedAmount: "1000.00",
-        notes: null,
-      },
+
+    it("rejects invalid, unauthenticated, and historical plans before writing", async () => {
+      mocks.requireAuth.mockResolvedValue(null);
+      await expect(previewFutureBudgetPlan("2026-04", 3)).resolves.toEqual({ success: false, error: "Not authenticated" });
+      mocks.requireAuth.mockResolvedValue("user-1");
+      await expect(applyBudgetToFutureMonths("2026-04", 0, [])).resolves.toEqual({ success: false, error: "Choose between 1 and 12 months" });
+      vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));
+      await expect(previewFutureBudgetPlan("2026-04", 3)).resolves.toEqual({ success: false, error: "Choose the current month or a future month to apply a budget forward" });
+      expect(mocks.db.transaction).not.toHaveBeenCalled();
     });
-    expect(mocks.revalidatePath).toHaveBeenCalledWith("/budget");
-    expect(mocks.revalidatePath).toHaveBeenCalledWith("/");
+
+    it("requires confirmation before replacing existing future budgets", async () => {
+      vi.setSystemTime(new Date("2026-04-16T12:00:00Z"));
+      mocks.requireAuth.mockResolvedValue("user-1");
+      mocks.queryResults.ownedCategories = [{ id: "category-food" }];
+      mocks.queryResults.futureRows = [{ month: "2026-05-01" }];
+      await expect(applyBudgetToFutureMonths("2026-04", 1, [{ categoryId: "category-food", plannedAmount: 50 }])).resolves.toEqual({
+        success: false,
+        requiresConfirmation: true,
+        preview: { startMonthKey: "2026-05", endMonthKey: "2026-05", monthCount: 1, existingMonthCount: 1 },
+      });
+      expect(mocks.txOperations).toHaveLength(0);
+    });
+
+    it("copies only planned amounts into future months atomically", async () => {
+      mocks.requireAuth.mockResolvedValue("user-1");
+      mocks.queryResults.ownedCategories = [{ id: "category-food" }];
+      await expect(applyBudgetToFutureMonths("2026-12", 2, [{ categoryId: "category-food", plannedAmount: 123.456 }], true)).resolves.toMatchObject({ success: true, appliedMonthCount: 2 });
+      expect(mocks.txOperations).toHaveLength(4);
+      expect(mocks.txOperations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "insert", values: expect.objectContaining({ month: "2027-01-01", plannedAmount: "123.46", notes: null }) }),
+        expect.objectContaining({ type: "insert", values: expect.objectContaining({ month: "2027-02-01" }) }),
+      ]));
+    });
   });
 });
