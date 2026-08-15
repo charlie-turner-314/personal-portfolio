@@ -11,6 +11,7 @@ import {
   RiDeleteBinLine,
   RiEditLine,
   RiExternalLinkLine,
+  RiFileCopyLine,
   RiInformationLine,
   RiLink,
   RiSaveLine,
@@ -20,6 +21,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -28,6 +37,13 @@ import {
 } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -35,7 +51,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { saveBudgetLines, type BudgetData } from "@/lib/actions/budget";
+import {
+  applyBudgetToFutureMonths,
+  previewFutureBudgetPlan,
+  saveBudgetLines,
+  type BudgetData,
+  type FutureBudgetPlanPreview,
+} from "@/lib/actions/budget";
 import {
   createPlannedExpense,
   deletePlannedExpense,
@@ -349,6 +371,10 @@ export function BudgetClient({
   const [isPending, startTransition] = useTransition();
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [lines, setLines] = useState<EditableLine[]>(() => toEditableLines(data));
+  const [futureMonthCount, setFutureMonthCount] = useState("3");
+  const [futurePlanDialogOpen, setFuturePlanDialogOpen] = useState(false);
+  const [futurePlanPreview, setFuturePlanPreview] =
+    useState<FutureBudgetPlanPreview | null>(null);
   const [plannedExpenseForm, setPlannedExpenseForm] =
     useState<PlannedExpenseFormState>(() =>
       defaultPlannedExpenseForm(plannedExpenseOptions)
@@ -394,6 +420,7 @@ export function BudgetClient({
     [data.accountIds]
   );
   const isAllAccountsSelected = data.accountIds.length === 0;
+  const canApplyPlanForward = data.monthKey >= new Date().toISOString().slice(0, 7);
   const accountTriggerText = isAllAccountsSelected ? "All accounts" : "Accounts";
   const actualScopeText = isAllAccountsSelected
     ? "Actuals include all accounts."
@@ -476,6 +503,46 @@ export function BudgetClient({
       }))
     );
     toast.info("Last month's spending added to your plan. Save when you're ready.");
+  };
+
+  const handleOpenFuturePlan = () => {
+    startTransition(async () => {
+      const result = await previewFutureBudgetPlan(data.monthKey, Number(futureMonthCount));
+      if (result.success && result.preview) {
+        setFuturePlanPreview(result.preview);
+        setFuturePlanDialogOpen(true);
+      } else {
+        toast.error(result.error || "Could not prepare future budgets");
+      }
+    });
+  };
+
+  const handleApplyFuturePlan = () => {
+    if (!futurePlanPreview) return;
+
+    startTransition(async () => {
+      const result = await applyBudgetToFutureMonths(
+        data.monthKey,
+        futurePlanPreview.monthCount,
+        lines.map((line) => ({
+          categoryId: line.categoryId,
+          plannedAmount: parseAmount(line.plannedInput),
+        })),
+        futurePlanPreview.existingMonthCount > 0
+      );
+      if (result.success) {
+        setFuturePlanDialogOpen(false);
+        toast.success(
+          `Budget applied to ${result.appliedMonthCount} future month${result.appliedMonthCount === 1 ? "" : "s"}`
+        );
+        router.refresh();
+      } else if (result.requiresConfirmation && result.preview) {
+        setFuturePlanPreview(result.preview);
+        toast.info("Review the updated replacement details, then apply again.");
+      } else {
+        toast.error(result.error || "Failed to apply budget to future months");
+      }
+    });
   };
 
   const resetPlannedExpenseForm = () => {
@@ -659,8 +726,60 @@ export function BudgetClient({
             <RiArrowGoBackLine />
             Use last month&apos;s spending
           </Button>
+          <div className="flex items-center gap-1" data-walkthrough="walkthrough-budget-future">
+            <Select value={futureMonthCount} onValueChange={(value) => value && setFutureMonthCount(value)}>
+              <SelectTrigger aria-label="Months to apply budget" className="w-16">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[1, 3, 6, 12].map((monthCount) => (
+                  <SelectItem key={monthCount} value={String(monthCount)}>{monthCount}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleOpenFuturePlan}
+              disabled={isPending || lines.length === 0 || !canApplyPlanForward}
+              title={canApplyPlanForward ? undefined : "Past budget plans cannot be applied to future months"}
+            >
+              <RiFileCopyLine />
+              Apply to future months
+            </Button>
+          </div>
         </div>
       </div>
+
+      <div className="border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground" data-walkthrough="walkthrough-budget-plan">
+        <span className="font-medium text-foreground">Plan your month. </span>
+        Set what you expect to spend in each category, then compare it with actual spending as the month goes on. Use last month&apos;s spending to get started, or apply this plan to upcoming months.
+      </div>
+      {!canApplyPlanForward && (
+        <p className="text-xs text-muted-foreground">Past budget plans can&apos;t be applied to future months.</p>
+      )}
+
+      <Dialog open={futurePlanDialogOpen} onOpenChange={setFuturePlanDialogOpen}>
+        <DialogContent showCloseButton={!isPending}>
+          <DialogHeader>
+            <DialogTitle>Apply budget to future months</DialogTitle>
+            <DialogDescription>
+              {futurePlanPreview && <>This will copy planned amounts from {formatMonth(data.monthKey)} to {formatMonth(futurePlanPreview.startMonthKey)}{futurePlanPreview.monthCount > 1 ? ` through ${formatMonth(futurePlanPreview.endMonthKey)}` : ""}.</>}
+            </DialogDescription>
+          </DialogHeader>
+          {futurePlanPreview?.existingMonthCount ? (
+            <p className="text-xs text-destructive">{futurePlanPreview.existingMonthCount} existing future budget{futurePlanPreview.existingMonthCount === 1 ? " will" : "s will"} be replaced. Actual spending and transactions will not change.</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">No existing future budgets will be replaced. Actual spending and transactions will not change.</p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setFuturePlanDialogOpen(false)} disabled={isPending}>Cancel</Button>
+            <Button type="button" onClick={handleApplyFuturePlan} disabled={isPending}>
+              {isPending ? "Applying" : futurePlanPreview?.existingMonthCount ? "Replace and apply" : "Apply budget"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
