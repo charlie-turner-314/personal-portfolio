@@ -55,7 +55,7 @@ const MAPPING: ColumnMapping = {
 };
 
 const SUCCESS: AiColumnMappingResult = {
-  outcome: "success",
+  outcome: "ai",
   success: true,
   mapping: MAPPING,
 };
@@ -116,6 +116,47 @@ describe("dashboard CSV import mapping page", () => {
 
     expect(await screen.findByText(/AI mapping applied/i)).toBeInTheDocument();
     expect(previewButton()).toBeEnabled();
+  });
+
+  it("does not claim AI was used for an immediately completed deterministic mapping", async () => {
+    vi.mocked(getAiColumnMapping).mockResolvedValue({
+      outcome: "deterministic",
+      success: true,
+      mapping: MAPPING,
+    });
+
+    render(<MappingPage />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Suggested mapping applied from CSV headers; AI analysis was not used."
+    );
+    expect(previewButton()).toBeEnabled();
+  });
+
+  it("retains AI provenance after reloading a persisted mapping", async () => {
+    vi.mocked(getCsvImportSession).mockResolvedValue({
+      ...SESSION,
+      columnMapping: { ...MAPPING, mappingSource: "ai" },
+    });
+
+    render(<MappingPage />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("AI mapping applied");
+    expect(getAiColumnMapping).not.toHaveBeenCalled();
+  });
+
+  it("identifies a saved profile separately from an existing import mapping", async () => {
+    vi.mocked(getCsvImportSession).mockResolvedValue({
+      ...SESSION,
+      profileApplied: true,
+      importProfileName: "My bank CSV",
+      columnMapping: { ...MAPPING, mappingSource: "profile" },
+    });
+
+    render(<MappingPage />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved mapping applied");
+    expect(getAiColumnMapping).not.toHaveBeenCalled();
   });
 
   it("shows recovery actions after failure, keeps Preview enabled, and retries AI analysis", async () => {

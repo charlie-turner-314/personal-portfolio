@@ -44,7 +44,7 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("Map your columns", { exact: true })).toBeVisible();
-  await expect(page.getByText("AI mapping applied.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Suggested mapping applied from CSV headers; AI analysis was not used.")).toBeVisible();
   await page.getByRole("button", { name: "Preview Transactions" }).click();
 
   await expect(page.getByText("Preview your import", { exact: true })).toBeVisible();

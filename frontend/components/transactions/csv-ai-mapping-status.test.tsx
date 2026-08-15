@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CsvAiMappingStatus } from "./csv-ai-mapping-status";
 
-function renderStatus(status: "idle" | "analyzing" | "succeeded" | "failed" | "timed_out") {
+function renderStatus(status: "idle" | "analyzing" | "ai_succeeded" | "deterministic" | "reused" | "manual" | "existing" | "failed" | "timed_out") {
   const onRetry = vi.fn();
   const onMapManually = vi.fn();
 
@@ -27,11 +27,22 @@ describe("CsvAiMappingStatus", () => {
   });
 
   it("confirms that a successful AI mapping was applied", () => {
-    renderStatus("succeeded");
+    renderStatus("ai_succeeded");
 
     expect(screen.getByRole("status")).toHaveTextContent(
       "AI mapping applied. Review the suggested fields before previewing transactions."
     );
+  });
+
+  it.each([
+    ["deterministic", "Suggested mapping applied from CSV headers; AI analysis was not used."],
+    ["reused", "Saved mapping applied for this account; AI analysis was not used."],
+    ["manual", "Manual mapping selected. Choose the columns that match your CSV."],
+    ["existing", "Existing mapping applied. Its original source cannot be confirmed."],
+  ] as const)("identifies the %s mapping source", (status, message) => {
+    renderStatus(status);
+
+    expect(screen.getByRole("status")).toHaveTextContent(message);
   });
 
   it("offers retry and manual mapping after an AI failure", () => {
