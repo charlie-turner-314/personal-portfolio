@@ -87,6 +87,10 @@ export default function StepFourImportPage() {
     router.push("/step-3");
   };
 
+  const handleSkip = () => {
+    router.push("/?tour=1");
+  };
+
   return (
     <div className="space-y-8">
       <OnboardingProgress currentStep={4} />
@@ -94,8 +98,9 @@ export default function StepFourImportPage() {
         <CardHeader>
           <CardTitle>Import your transactions</CardTitle>
           <CardDescription>
-            Upload a CSV or Excel file. We&apos;ll help you map the columns to the
-            correct fields.
+            Upload a CSV or Excel file now, or finish setup and import
+            transactions later. We&apos;ll help you map the columns to the correct
+            fields when you&apos;re ready.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex-1 min-h-0 space-y-6">
@@ -136,18 +141,23 @@ export default function StepFourImportPage() {
             <CsvUploadDropzone onFileSelect={handleFileSelect} isUploading={isLoading} />
           </div>
         </CardContent>
-        <CardFooter className="justify-between">
+        <CardFooter className="justify-between gap-2">
           <Button type="button" variant="outline" onClick={handleBack}>
             <RiArrowLeftLine className="mr-2 h-4 w-4" />
             Back
           </Button>
-          <Button
-            onClick={handleContinue}
-            disabled={isLoading || !selectedFile || accounts.length === 0}
-          >
-            {isLoading ? "Processing..." : "Continue"}
-            <RiArrowRightLine className="ml-2 h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" onClick={handleSkip} disabled={isLoading}>
+              Do this later
+            </Button>
+            <Button
+              onClick={handleContinue}
+              disabled={isLoading || !selectedFile || accounts.length === 0}
+            >
+              {isLoading ? "Processing..." : "Continue"}
+              <RiArrowRightLine className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
         </CardFooter>
       </Card>
     </div>
