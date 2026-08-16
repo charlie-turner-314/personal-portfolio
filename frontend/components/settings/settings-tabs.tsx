@@ -8,6 +8,7 @@ import { ApiKeysManager } from "./api-keys-manager";
 import { ImportHistoryManager } from "./import-history-manager";
 import { BankConnectionsManager } from "./bank-connections-manager";
 import { HouseholdTab } from "./household-tab";
+import { HistoricalSnapshotImporter } from "./historical-snapshot-importer";
 import type { User, Category } from "@/lib/db/schema";
 import type { CsvImportWithStats } from "@/lib/actions/csv-import";
 
@@ -110,6 +111,9 @@ export function SettingsTabs({
       </TabsContent>
 
       <TabsContent value="import-history">
+        <div className="mb-4">
+          <HistoricalSnapshotImporter disabled={isDemoUser} />
+        </div>
         <ImportHistoryManager initialImports={csvImports} canDelete={canDelete} />
       </TabsContent>
 
