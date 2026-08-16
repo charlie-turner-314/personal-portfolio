@@ -637,7 +637,7 @@ export function BudgetClient({
             Planned spending compared with categorized transactions. {actualScopeText}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2" data-testid="budget-actions">
           {accounts.length > 0 && (
             <Popover open={accountsOpen} onOpenChange={setAccountsOpen}>
               <PopoverTrigger

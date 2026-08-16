@@ -24,6 +24,7 @@ import {
   getLinkedLiabilityAccountIds,
 } from "@/lib/properties/equity";
 import { getAustralianFinancialYearLabelForDateRange } from "@/lib/dates/australian-financial-year";
+import { getHistoricalSnapshotHistory } from "@/lib/actions/historical-snapshots";
 
 async function getUserCurrency(userId: string): Promise<string> {
   const result = await db
@@ -187,7 +188,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
     .where(and(...accountConditions));
 
   if (userAccounts.length === 0) {
-    return [];
+    return normalizedAccountIds?.length ? [] : getHistoricalSnapshotHistory(startDate, endDate);
   }
 
   const selectedAccountIds = userAccounts.map((a) => a.id);
@@ -207,10 +208,17 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
     .groupBy(sql`DATE(${accountBalances.date})`)
     .orderBy(sql`DATE(${accountBalances.date})`);
 
-  return result.map(row => ({
+  const calculated = result.map(row => ({
     date: row.date,
     value: parseFloat(row.value || "0"),
   }));
+  // Imported snapshots are complete reported net-worth points. Prefer them for
+  // matching dates so partial account balances cannot double-count assets.
+  if (normalizedAccountIds?.length) return calculated;
+  const imported = await getHistoricalSnapshotHistory(startDate, endDate);
+  const byDate = new Map(calculated.map((point) => [point.date.slice(0, 10), point]));
+  for (const point of imported) byDate.set(point.date, point);
+  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export async function getPeriodSpending(startDate: Date, endDate: Date, accountIds?: string[]) {

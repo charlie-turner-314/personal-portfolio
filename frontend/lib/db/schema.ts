@@ -629,6 +629,36 @@ export const csvImports = pgTable(
   ]
 );
 
+// A historical snapshot is deliberately separate from transaction imports: it
+// represents a reported point-in-time net worth and must never create cashflow.
+export const historicalSnapshotImports = pgTable(
+  "historical_snapshot_imports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    fileName: varchar("file_name", { length: 255 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("idx_historical_snapshot_imports_user").on(table.userId)],
+);
+
+export const historicalSnapshotValues = pgTable(
+  "historical_snapshot_values",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    importId: uuid("import_id").references(() => historicalSnapshotImports.id, { onDelete: "cascade" }).notNull(),
+    snapshotDate: date("snapshot_date").notNull(),
+    netWorth: decimal("net_worth", { precision: 15, scale: 2 }).notNull(),
+    metricValues: jsonb("metric_values").$type<Record<string, number>>().notNull().default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_historical_snapshot_values_user_date").on(table.userId, table.snapshotDate),
+    unique("historical_snapshot_values_user_date").on(table.userId, table.snapshotDate),
+  ],
+);
+
 export const transactions = pgTable(
   "transactions",
   {
