@@ -88,6 +88,12 @@ describe("BudgetClient", () => {
     mocks.toastInfo.mockReset();
   });
 
+  it("right-aligns wrapped header actions", () => {
+    render(<BudgetClient {...props} />);
+
+    expect(screen.getByTestId("budget-actions")).toHaveClass("justify-end");
+  });
+
   it("uses last month's category spending in editable planned amounts without saving", () => {
     render(<BudgetClient {...props} />);
 
