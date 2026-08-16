@@ -36,7 +36,7 @@ describe("AustralianTaxReport", () => {
     expect(screen.getByText("Capital gains")).toBeTruthy();
     expect(screen.getByText("Investment fees")).toBeTruthy();
     expect(screen.getByText("Unclassified expenses")).toBeTruthy();
-    expect(screen.getByText(/not tax advice/i)).toBeTruthy();
+    expect(screen.getByText(/Informational only — not tax advice/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "2 sources" })).toHaveAttribute("href", "/income");
     expect(screen.getByText(/Missing FX/i)).toBeTruthy();
     expect(screen.getByText(/Internal transfers and reimbursements are excluded/i)).toBeTruthy();
@@ -47,7 +47,7 @@ describe("AustralianTaxReport", () => {
     const onDownload = vi.fn();
     render(<AustralianTaxReport availableFinancialYears={[2024, 2025]} onDownload={onDownload} onFinancialYearChange={onFinancialYearChange} report={report} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Download tax-year report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download tax-year CSV pack" }));
     expect(onDownload).toHaveBeenCalledOnce();
     expect(screen.getByRole("combobox", { name: "Australian financial year" })).toBeTruthy();
     expect(onFinancialYearChange).not.toHaveBeenCalled();

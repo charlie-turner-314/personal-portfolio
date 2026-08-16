@@ -14,7 +14,7 @@ from io import BytesIO, StringIO
 from typing import Iterable
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import Account, CgtAllocation, InvestmentIncomeEvent, Transaction, TransactionLink
 
@@ -36,6 +36,31 @@ def _sum_by_currency(rows: Iterable[dict], field: str) -> list[dict]:
     return [
         {"currency": currency, "amount": _number(amount), "source_ids": source_ids[currency]}
         for currency, amount in sorted(totals.items())
+    ]
+
+
+def _absolute_sum_by_currency(rows: Iterable[dict], field: str) -> list[dict]:
+    """Sum recorded amounts as positive income/expense magnitudes by currency."""
+    normalized = []
+    for row in rows:
+        normalized.append({**row, field: _number(abs(Decimal(row.get(field) or "0")))})
+    return _sum_by_currency(normalized, field)
+
+
+def _expense_categories(rows: Iterable[dict]) -> list[dict]:
+    """Group recorded expense rows without inferring deductible tax treatment."""
+    groups: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        if row["transaction_type"] != "debit":
+            continue
+        name = row["category_name"] or "Uncategorized"
+        key = (name, row["currency"])
+        group = groups.setdefault(key, {"category_name": name, "currency": row["currency"], "amount": Decimal("0"), "source_ids": []})
+        group["amount"] += abs(Decimal(row["amount"] or "0"))
+        group["source_ids"].append(row["source_id"])
+    return [
+        {**group, "amount": _number(group["amount"])}
+        for _, group in sorted(groups.items())
     ]
 
 
@@ -85,6 +110,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     }
     transactions = (
         db.query(Transaction)
+        .options(joinedload(Transaction.property))
         .filter(Transaction.user_id == user_id, Transaction.booked_at >= start, Transaction.booked_at < end)
         .order_by(Transaction.booked_at, Transaction.id).all()
     )
@@ -100,6 +126,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             excluded.append({"source_id": str(transaction.id), "reason": "reimbursement_link"})
             continue
         category = transaction.category or transaction.category_system
+        is_rental = bool(transaction.property and transaction.property.is_rental)
         transaction_rows.append({
             "source_id": str(transaction.id), "account_id": str(transaction.account_id),
             "booked_at": transaction.booked_at.isoformat(), "transaction_type": transaction.transaction_type,
@@ -109,12 +136,16 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             "category_type": category.category_type if category else None,
             "property_id": str(transaction.property_id) if transaction.property_id else None,
             "tax_treatment": "unclassified", "interest_treatment": "unavailable",
-            "rental_treatment": "unavailable" if transaction.property_id else "not_property_linked",
+            "rental_treatment": "recorded_property_cashflow" if is_rental else ("unavailable" if transaction.property_id else "not_property_linked"),
+            "is_rental_property": is_rental,
         })
 
     cgt_known = [row for row in cgt_rows if not row["fx_missing"] and row["gain_aud"] is not None]
     gains = sum((max(Decimal(row["gain_aud"]), Decimal("0")) for row in cgt_known), Decimal("0"))
     losses = sum((max(-Decimal(row["gain_aud"]), Decimal("0")) for row in cgt_known), Decimal("0"))
+    rental_rows = [row for row in transaction_rows if row["is_rental_property"]]
+    rental_income_rows = [row for row in rental_rows if row["transaction_type"] == "credit"]
+    rental_expense_rows = [row for row in rental_rows if row["transaction_type"] == "debit"]
     return {
         "financial_year_start": financial_year_start,
         "financial_year_end": financial_year_start + 1,
@@ -132,11 +163,14 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
                 "missing_fx_source_ids": [row["source_id"] for row in cgt_rows if row["fx_missing"]]},
         "transactions": {"rows": transaction_rows, "excluded_rows": excluded,
                          "cashflow_by_currency": _sum_by_currency(transaction_rows, "amount"),
-                         "expense_by_currency": _sum_by_currency((row for row in transaction_rows if row["transaction_type"] == "debit"), "amount"),
-                         "income_by_currency": _sum_by_currency((row for row in transaction_rows if row["transaction_type"] == "credit"), "amount")},
+                         "expense_by_currency": _absolute_sum_by_currency((row for row in transaction_rows if row["transaction_type"] == "debit"), "amount"),
+                         "income_by_currency": _absolute_sum_by_currency((row for row in transaction_rows if row["transaction_type"] == "credit"), "amount"),
+                         "expense_categories": _expense_categories(transaction_rows),
+                         "rental_income_by_currency": _absolute_sum_by_currency(rental_income_rows, "amount"),
+                         "rental_expense_by_currency": _absolute_sum_by_currency(rental_expense_rows, "amount")},
         "assumptions": [
             "Informational report only; it does not calculate tax payable, deductions, offsets, or taxable income.",
-            "Transaction categories are labels only. Deductibility, interest, rental allocation, ownership, depreciation, and private-use treatment are unclassified or unavailable unless separately modelled.",
+            "Transaction categories are labels only. Deductibility and interest treatment are unclassified or unavailable unless separately modelled. Rental rows are recorded cashflow for properties marked as rental; allocation, ownership, depreciation, and private-use treatment are not calculated.",
             "Transfers, analytics-excluded transactions, and reimbursement-linked transactions are excluded by default.",
             "CGT rows with missing transaction-date FX are excluded from AUD gain/loss totals.",
         ],
