@@ -1,19 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 
-test("a new user can onboard, import transactions, and sign in again", async ({ page }) => {
-  const email = `compose-e2e-${Date.now()}@example.test`;
-  const password = "ComposeE2E!123";
-  const browserErrors: string[] = [];
-  const serverFailures: string[] = [];
-
-  page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(message.text());
-  });
-  page.on("response", (response) => {
-    if (response.status() >= 500) serverFailures.push(`${response.status()} ${response.url()}`);
-  });
-
+async function registerAndReachTransactionImport(page: Page, email: string, password: string) {
   await page.goto("/register");
   await page.getByLabel("Name").fill("Compose E2E");
   await page.getByLabel("Email").fill(email);
@@ -40,6 +28,22 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("Import your transactions", { exact: true })).toBeVisible();
+}
+
+test("a new user can onboard, import transactions, and sign in again", async ({ page }) => {
+  const email = `compose-e2e-${Date.now()}@example.test`;
+  const password = "ComposeE2E!123";
+  const browserErrors: string[] = [];
+  const serverFailures: string[] = [];
+
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 500) serverFailures.push(`${response.status()} ${response.url()}`);
+  });
+
+  await registerAndReachTransactionImport(page, email, password);
   await page.locator("#csv-file-input").setInputFiles(path.join(process.cwd(), "e2e/fixtures/transactions.csv"));
   await page.getByRole("button", { name: "Continue" }).click();
 
@@ -72,5 +76,23 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByRole("button", { name: "Login" }).click();
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await expect.poll(() => browserErrors, { message: "browser console errors" }).toEqual([]);
+  expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
+});
+
+test("a new user can finish onboarding without a transaction CSV", async ({ page }) => {
+  const email = `compose-e2e-no-csv-${Date.now()}@example.test`;
+  const password = "ComposeE2E!123";
+  const serverFailures: string[] = [];
+  page.on("response", (response) => {
+    if (response.status() >= 500) serverFailures.push(`${response.status()} ${response.url()}`);
+  });
+
+  await registerAndReachTransactionImport(page, email, password);
+  await expect(page.getByText(/import transactions later/i)).toBeVisible();
+  await page.getByRole("button", { name: "Do this later" }).click();
+
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close walkthrough" })).toBeVisible();
+  await page.getByRole("button", { name: "Close walkthrough" }).click();
   expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
 });
