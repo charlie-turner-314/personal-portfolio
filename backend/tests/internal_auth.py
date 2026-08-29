@@ -24,7 +24,7 @@ def build_internal_auth_headers(method: str, path_with_query: str, user_id: str)
     ).hexdigest()
 
     return {
-        "X-Personal Portfolio-User-Id": user_id,
-        "X-Personal Portfolio-Timestamp": timestamp,
-        "X-Personal Portfolio-Signature": signature,
+        "X-Personal-Portfolio-User-Id": user_id,
+        "X-Personal-Portfolio-Timestamp": timestamp,
+        "X-Personal-Portfolio-Signature": signature,
     }
