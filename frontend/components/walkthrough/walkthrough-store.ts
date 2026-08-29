@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-const STORAGE_KEY = "syllogic.walkthrough.completed";
+const STORAGE_KEY = "personal-portfolio.walkthrough.completed";
 
 export interface WalkthroughStep {
   id: string;
@@ -154,7 +154,7 @@ export const PAGE_CONFIGS: Record<string, PageConfig> = {
   subscriptions: {
     page: "subscriptions",
     overview:
-      "Track recurring expenses like streaming services and bills. Syllogic auto-detects subscriptions from your transactions.",
+      "Track recurring expenses like streaming services and bills. Personal Portfolio auto-detects subscriptions from your transactions.",
     steps: [
       { id: "kpis", title: "Subscription KPIs", content: "Monthly and annual recurring costs at a glance.", target: "walkthrough-kpis" },
       { id: "list", title: "Subscription List", content: "All your active recurring expenses.", target: "walkthrough-list" },

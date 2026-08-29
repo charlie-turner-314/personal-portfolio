@@ -5,7 +5,7 @@ const REASONS = [
     id: "01",
     title: "Own the stack",
     body:
-      "Run Syllogic on your own VPS, homelab, or NAS. Docker Compose is the default path, and Railway is there when you want a faster hosted setup.",
+      "Run Personal Portfolio on your own VPS, homelab, or NAS. Docker Compose is the default path, and Railway is there when you want a faster hosted setup.",
   },
   {
     id: "02",
@@ -17,7 +17,7 @@ const REASONS = [
     id: "03",
     title: "Use AI only when it helps",
     body:
-      "OpenAI-powered categorization is optional. If you do not set an API key, Syllogic still works with rule-based matching and manual cleanup.",
+      "OpenAI-powered categorization is optional. If you do not set an API key, Personal Portfolio still works with rule-based matching and manual cleanup.",
   },
 ];
 
@@ -53,7 +53,7 @@ export function WhySection() {
         className="max-w-3xl font-mono text-sm leading-relaxed mb-12"
         style={{ color: "var(--color-muted)" }}
       >
-        Syllogic is designed for people who want more control over their
+        Personal Portfolio is designed for people who want more control over their
         financial data than hosted budgeting products typically allow. The app
         is usable today, export-friendly, and deployable without a week of
         infrastructure work.

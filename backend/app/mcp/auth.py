@@ -132,21 +132,21 @@ except ImportError:  # pragma: no cover
     JWTVerifier = None  # type: ignore
 
 
-AS_ISSUER = os.environ.get("MCP_OAUTH_ISSUER", "https://app.syllogic.ai/api/auth")
+AS_ISSUER = os.environ.get("MCP_OAUTH_ISSUER", "http://localhost:8080/api/auth")
 AS_JWKS_URI = os.environ.get(
-    "MCP_OAUTH_JWKS_URI", "https://app.syllogic.ai/api/auth/jwks"
+    "MCP_OAUTH_JWKS_URI", "http://localhost:8080/api/auth/jwks"
 )
-MCP_AUDIENCE = os.environ.get("MCP_OAUTH_AUDIENCE", "https://mcp.syllogic.ai/mcp")
+MCP_AUDIENCE = os.environ.get("MCP_OAUTH_AUDIENCE", "http://localhost:8080/mcp")
 # Public server root (no path). RemoteAuthProvider uses this as base_url and
 # appends the MCP route on top when advertising the Protected Resource.
 # Keep it separate from MCP_AUDIENCE (which is the JWT `aud` claim value).
-MCP_PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "https://mcp.syllogic.ai")
+MCP_PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "http://localhost:8080")
 
 
 class CompositeAuthProvider(AuthProvider):
     """
     Accepts either a pf_ API key (existing DB-backed) or a JWT issued by
-    the Syllogic Authorization Server (better-auth on app.syllogic.ai).
+    the Personal Portfolio Authorization Server.
 
     Prefix-gating: tokens starting with 'pf_' go to ApiKeyAuthProvider;
     everything else is treated as a JWT. This keeps the two paths fully

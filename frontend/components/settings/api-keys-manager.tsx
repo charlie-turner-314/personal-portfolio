@@ -459,7 +459,7 @@ export function ApiKeysManager({
                 <code className="rounded bg-muted px-1 font-mono">
                   mcp-remote
                 </code>
-                {") "}to connect Claude Desktop to the remote Syllogic MCP
+                {") "}to connect Claude Desktop to the remote Personal Portfolio MCP
                 server.
               </p>
               <div className="relative min-w-0">

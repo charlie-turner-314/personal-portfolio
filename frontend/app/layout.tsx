@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Syllogic",
+  title: "Personal Portfolio",
   description: "Personal finance tracking, imports, and analytics",
 };
 

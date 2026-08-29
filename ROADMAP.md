@@ -1,6 +1,6 @@
-# Syllogic Roadmap
+# Personal Portfolio Roadmap
 
-Syllogic is already deployable. The near-term focus is trust, onboarding, and shipping the product improvements that unblock real self-hosted usage.
+Personal Portfolio is already deployable. The near-term focus is trust, onboarding, and shipping the product improvements that unblock real self-hosted usage.
 
 ## Working today
 
@@ -20,10 +20,10 @@ Syllogic is already deployable. The near-term focus is trust, onboarding, and sh
 
 ## Feedback channels
 
-- [Install help](https://github.com/syllogic-ai/syllogic/issues/new?template=install_help.yml)
-- [Demo feedback](https://github.com/syllogic-ai/syllogic/issues/new?template=demo_feedback.yml)
-- [Feature request](https://github.com/syllogic-ai/syllogic/issues/new?template=feature_request.yml)
-- [GitHub Discussions](https://github.com/syllogic-ai/syllogic/discussions)
+- [Install help](https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=install_help.yml)
+- [Demo feedback](https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=demo_feedback.yml)
+- [Feature request](https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=feature_request.yml)
+- [GitHub Discussions](https://github.com/charlie-turner-314/personal-portfolio/discussions)
 
 ## Release rhythm
 

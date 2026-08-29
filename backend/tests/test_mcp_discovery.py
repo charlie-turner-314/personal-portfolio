@@ -22,7 +22,7 @@ def test_protected_resource_metadata_exposed(client):
     body = resp.json()
     assert "authorization_servers" in body
     servers = body["authorization_servers"]
-    assert any("app.syllogic.ai" in str(s) for s in servers), body
+    assert any("localhost:8080" in str(s) for s in servers), body
 
 
 def test_unauthenticated_request_returns_401_with_www_authenticate(client):

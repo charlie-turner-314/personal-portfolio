@@ -247,7 +247,7 @@ export function AccountMappingWizard({
                 <div>
                   <p className="font-medium text-sm">Create new account</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Add this as a new account in Syllogic
+                    Add this as a new account in Personal Portfolio
                   </p>
                 </div>
                 {currentMapping.action === "create" && (
@@ -355,7 +355,7 @@ export function AccountMappingWizard({
           <div>
             <h2 className="text-lg font-semibold">Review your mappings</h2>
             <p className="text-sm text-muted-foreground mt-1">
-              Confirm how each bank account will be set up in Syllogic.
+              Confirm how each bank account will be set up in Personal Portfolio.
             </p>
           </div>
 

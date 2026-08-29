@@ -1,5 +1,5 @@
 """
-Entry point for the Syllogic MCP Server.
+Entry point for the Personal Portfolio MCP Server.
 
 Usage:
     stdio mode (for Claude Desktop):

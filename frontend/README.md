@@ -1,4 +1,4 @@
-# Syllogic — Frontend
+# Personal Portfolio — Frontend
 
 Next.js 16+ app with App Router, Server Components, and Server Actions.
 

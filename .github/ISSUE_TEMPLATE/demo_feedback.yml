@@ -40,6 +40,6 @@ body:
   - type: input
     id: comparison
     attributes:
-      label: What are you comparing Syllogic against?
+      label: What are you comparing Personal Portfolio against?
       placeholder: YNAB, Monarch, spreadsheets, custom scripts, etc.
 

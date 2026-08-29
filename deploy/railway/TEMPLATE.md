@@ -1,6 +1,6 @@
-# Authoring & Publishing the Syllogic Railway Template
+# Authoring & Publishing the Personal Portfolio Railway Template
 
-This guide is for **maintainers** publishing the official Syllogic template to the
+This guide is for **maintainers** publishing the official Personal Portfolio template to the
 Railway marketplace. Consumers who just want to deploy should use the one-click
 button in [`README.md`](README.md).
 
@@ -79,11 +79,11 @@ references so they self-wire on Railway's private network.
 |---|---|---|---|---|
 | `postgres` | `ghcr.io/railwayapp-templates/postgres-ssl:16` | Private | `/var/lib/postgresql/data` | **SSL-enabled** Postgres. The backend enforces TLS on `DATABASE_URL` for non-local hosts in production, so `sslmode=require` only works against an SSL-capable server — plain `postgres:16-alpine` (ssl=off) would reject it. Initialized with `POSTGRES_PASSWORD`. |
 | `redis` | `redis:7-alpine` | Private | `/data` | Celery broker + cache. |
-| `backend` | `ghcr.io/syllogic-ai/syllogic-backend` | Private | — | FastAPI API (default role, `PROCESS_TYPE` unset), healthcheck `/health`. |
+| `backend` | `ghcr.io/charlie-turner-314/personal-portfolio-backend` | Private | — | FastAPI API (default role, `PROCESS_TYPE` unset), healthcheck `/health`. |
 | `worker` | same backend image | Private | — | Celery worker. Set `PROCESS_TYPE=worker`. |
 | `beat` | same backend image | Private | — | Celery beat scheduler. Set `PROCESS_TYPE=beat`. |
 | `mcp` | same backend image | Optional public (TCP 8001) | — | FastMCP server. Set `PROCESS_TYPE=mcp` + `PORT=8001`, healthcheck `/health`. |
-| `app` | `ghcr.io/syllogic-ai/syllogic-frontend` | **Public (HTTP)** | `/data/uploads` | Next.js. Image CMD runs `node scripts/migrate.js` before start. `LOCAL_STORAGE_PATH=/data/uploads`. |
+| `app` | `ghcr.io/charlie-turner-314/personal-portfolio-frontend` | **Public (HTTP)** | `/data/uploads` | Next.js. Image CMD runs `node scripts/migrate.js` before start. `LOCAL_STORAGE_PATH=/data/uploads`. |
 
 > **Role selection without start commands:** the backend image's entrypoint dispatches
 > on `PROCESS_TYPE` (`worker`→celery worker, `beat`→celery beat, `mcp`→uvicorn, unset→gunicorn API).
@@ -173,7 +173,7 @@ are the source of truth you transcribe into the composer.
 This template ships in two channels — see [`README.md`](README.md) and
 [`V1_TO_V2_MIGRATION.md`](V1_TO_V2_MIGRATION.md):
 
-- **v1 (image):** services use pinned `ghcr.io/syllogic-ai/*` tags. Fast, no build.
+- **v1 (image):** services use pinned `ghcr.io/charlie-turner-314/*` tags. Fast, no build.
   Pin `vX.Y.Z` tags before publishing — never ship `edge`.
 - **v2 (source):** services build from this GitHub repo using the `railway.toml`
   files (`frontend/railway.toml`, `backend/railway.*.toml`). Use Railway's managed

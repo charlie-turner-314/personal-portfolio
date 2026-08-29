@@ -113,8 +113,8 @@ export function AppSidebar({ initialUser }: AppSidebarProps) {
   const isCollapsed = state === "collapsed";
   const brandImageSrc =
     isCollapsed && !hasMarkError
-      ? "/brand/syllogic-mark.png"
-      : "/brand/syllogic-logo.png";
+      ? "/brand/personal-portfolio-mark.png"
+      : "/brand/personal-portfolio-logo.png";
   const resolvedUser: SidebarUser | undefined =
     (session?.user as SidebarUser | undefined) ?? initialUser ?? undefined;
   const avatarSrc =
@@ -175,7 +175,7 @@ export function AppSidebar({ initialUser }: AppSidebarProps) {
                 <div className="bg-sidebar-accent border-sidebar-border flex aspect-square size-8 items-center justify-center overflow-hidden border shrink-0">
                   <img
                     src={brandImageSrc}
-                    alt="Syllogic"
+                    alt="Personal Portfolio"
                     className="h-full w-full object-contain"
                     onError={() => {
                       if (isCollapsed) {
@@ -186,7 +186,7 @@ export function AppSidebar({ initialUser }: AppSidebarProps) {
                 </div>
                 {!isCollapsed && (
                   <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-medium">Syllogic</span>
+                    <span className="truncate font-medium">Personal Portfolio</span>
                   </div>
                 )}
               </SidebarMenuButton>

@@ -267,7 +267,7 @@ def test_recent_mode_is_also_windowed():
 
 def test_account_logo_url_is_absolute_and_total_is_summed(monkeypatch):
     """Email clients need absolute URLs; logo_url in the DB is a relative path."""
-    monkeypatch.setenv("FRONTEND_URL", "https://app.syllogic.ai")
+    monkeypatch.setenv("FRONTEND_URL", "http://localhost:8080")
     db = SessionLocal()
     try:
         user = User(id=f"test-user-{uuid.uuid4()}", email=f"{uuid.uuid4()}@example.com", name="H")
@@ -298,7 +298,7 @@ def test_account_logo_url_is_absolute_and_total_is_summed(monkeypatch):
         payload = build_report_payload(db, report)
         by_name = {a["name"]: a for a in payload["accounts"]}
 
-        assert by_name["ABN"]["logo_url"] == "https://app.syllogic.ai/uploads/logos/abnamro.com.png"
+        assert by_name["ABN"]["logo_url"] == "http://localhost:8080/uploads/logos/abnamro.com.png"
         assert by_name["Manual"]["logo_url"] is None
         assert payload["total_balance"] == "150.00"
     finally:
