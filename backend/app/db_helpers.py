@@ -19,9 +19,9 @@ except ImportError:  # pragma: no cover - fallback when MCP SDK is unavailable
 from app.models import User
 from app.mcp.auth import validate_api_key
 
-INTERNAL_AUTH_USER_HEADER = "x-syllogic-user-id"
-INTERNAL_AUTH_TIMESTAMP_HEADER = "x-syllogic-timestamp"
-INTERNAL_AUTH_SIGNATURE_HEADER = "x-syllogic-signature"
+INTERNAL_AUTH_USER_HEADER = "x-personal-portfolio-user-id"
+INTERNAL_AUTH_TIMESTAMP_HEADER = "x-personal-portfolio-timestamp"
+INTERNAL_AUTH_SIGNATURE_HEADER = "x-personal-portfolio-signature"
 DEFAULT_INTERNAL_AUTH_MAX_AGE_SECONDS = 60
 
 _request_user_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(

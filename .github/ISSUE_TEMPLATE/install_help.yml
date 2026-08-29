@@ -27,7 +27,7 @@ body:
     id: summary
     attributes:
       label: What are you trying to do?
-      placeholder: I am trying to deploy Syllogic on...
+      placeholder: I am trying to deploy Personal Portfolio on...
     validations:
       required: true
 

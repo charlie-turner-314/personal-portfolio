@@ -16,9 +16,9 @@ def generate_key() -> str:
 
 
 def _fernet() -> Fernet:
-    key = os.getenv("SYLLOGIC_SECRET_KEY")
+    key = os.getenv("PERSONAL_PORTFOLIO_SECRET_KEY")
     if not key:
-        raise CredentialKeyMissing("SYLLOGIC_SECRET_KEY env var is required to encrypt/decrypt credentials")
+        raise CredentialKeyMissing("PERSONAL_PORTFOLIO_SECRET_KEY env var is required to encrypt/decrypt credentials")
     return Fernet(key.encode() if isinstance(key, str) else key)
 
 

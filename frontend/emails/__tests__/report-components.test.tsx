@@ -10,12 +10,12 @@ describe("BalancesSection", () => {
       BalancesSection({
         accounts: [{
           name: "ABN AMRO Giannis", institution: "ABN AMRO",
-          logoUrl: "https://app.syllogic.ai/uploads/logos/abnamro.com.png",
+          logoUrl: "http://localhost:8080/uploads/logos/abnamro.com.png",
           balance: "591.51", currency: "EUR",
         }],
       })
     );
-    expect(html).toContain("https://app.syllogic.ai/uploads/logos/abnamro.com.png");
+    expect(html).toContain("http://localhost:8080/uploads/logos/abnamro.com.png");
     expect(html).toContain("ABN AMRO Giannis");
   });
 

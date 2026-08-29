@@ -1,3 +1,3 @@
 """
-MCP tools for Syllogic.
+MCP tools for Personal Portfolio.
 """

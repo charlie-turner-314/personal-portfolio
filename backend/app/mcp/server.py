@@ -1,5 +1,5 @@
 """
-Main FastMCP server setup for Syllogic.
+Main FastMCP server setup for Personal Portfolio.
 Registers all tools from the tools modules.
 """
 from fastmcp import FastMCP
@@ -14,22 +14,22 @@ _auth = RemoteAuthProvider(
     token_verifier=CompositeAuthProvider(),
     authorization_servers=[AnyHttpUrl(AS_ISSUER)],
     # Server root (no /mcp path). FastMCP appends the route itself when
-    # advertising the Protected Resource, so passing "https://mcp.syllogic.ai/mcp"
-    # here produced a broken resource URL of "https://mcp.syllogic.ai/mcp/mcp".
+    # advertising the Protected Resource, so passing "http://localhost:8080/mcp"
+    # here produced a broken resource URL of "http://localhost:8080/mcp/mcp".
     base_url=MCP_PUBLIC_URL,
 )
 
 # Initialize FastMCP server
 mcp = FastMCP(
-    name="Syllogic MCP",
+    name="Personal Portfolio MCP",
     instructions="""
-Syllogic MCP Server - Access financial data and manage transactions.
+Personal Portfolio MCP Server - Access financial data and manage transactions.
 
 All requests require a bearer token in the Authorization header. Two token
 types are accepted:
 - API keys (`Authorization: Bearer pf_...`) for Claude Desktop / Code and
   other local clients.
-- OAuth 2.1 access tokens (JWTs) issued by the Syllogic authorization server
+- OAuth 2.1 access tokens (JWTs) issued by the Personal Portfolio authorization server
   for Claude on the web, iOS, Android, and any other custom connector.
 
 The `user_id` parameter is optional on all tools but must match the authenticated user.

@@ -1,4 +1,4 @@
-name: syllogic
+name: personal-portfolio
 
 services:
   postgres:
@@ -64,7 +64,7 @@ services:
     restart: "no"
 
   migrate:
-    image: ghcr.io/syllogic-ai/syllogic-frontend:${APP_VERSION:-edge}
+    image: ghcr.io/charlie-turner-314/personal-portfolio-frontend:${APP_VERSION:-edge}
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -76,7 +76,7 @@ services:
     restart: "no"
 
   backend:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -127,7 +127,7 @@ services:
             en_US: OpenAI API key (optional).
 
   mcp:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
     command: uvicorn mcp_server:app --host 0.0.0.0 --port 8001
     environment:
       PROCESS_TYPE: mcp
@@ -158,7 +158,7 @@ services:
             en_US: MCP external port (maps to internal 8001).
 
   worker:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
     command: celery -A celery_app worker --loglevel=info --concurrency=4
     environment:
       PUID: ${PUID:-1000}
@@ -180,7 +180,7 @@ services:
     restart: unless-stopped
 
   beat:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
     command: celery -A celery_app beat --loglevel=info
     environment:
       PUID: ${PUID:-1000}
@@ -202,7 +202,7 @@ services:
     restart: unless-stopped
 
   app:
-    image: ghcr.io/syllogic-ai/syllogic-frontend:${APP_VERSION:-edge}
+    image: ghcr.io/charlie-turner-314/personal-portfolio-frontend:${APP_VERSION:-edge}
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -236,7 +236,7 @@ services:
       envs:
         - container: APP_URL
           description:
-            en_US: Public URL where you access Syllogic.
+            en_US: Public URL where you access Personal Portfolio.
         - container: BETTER_AUTH_SECRET
           description:
             en_US: Secret used to sign auth sessions (required).
@@ -350,15 +350,15 @@ x-casaos:
   main: caddy
   port_map: "${WEBUI_PORT:-8080}"
   title:
-    en_US: Syllogic
+    en_US: Personal Portfolio
   description:
     en_US: Self-hosted personal finance management with a Next.js UI, FastAPI backend, and Postgres.
   tagline:
     en_US: Track spending, imports, balances, and analytics.
-  developer: syllogic-ai
-  author: syllogic-ai
+  developer: charlie-turner-314
+  author: charlie-turner-314
   category: Finance
-  website: https://github.com/syllogic-ai/syllogic
+  website: https://github.com/charlie-turner-314/personal-portfolio
   index: /
   tips:
     before_install:

@@ -1000,7 +1000,7 @@ class DemoSeedService:
                     provider=acct_spec.provider,
                     # Demo accounts are excluded from the real investment sync,
                     # so these credentials are never decrypted. A sentinel keeps
-                    # the NOT NULL column populated without SYLLOGIC_SECRET_KEY.
+                    # the NOT NULL column populated without PERSONAL_PORTFOLIO_SECRET_KEY.
                     credentials_encrypted="demo-disabled",
                     last_sync_status="ok",
                     last_sync_at=now,

@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────
-# Syllogic — Railway Docker Compose
+# Personal Portfolio — Railway Docker Compose
 # ──────────────────────────────────────────────────────────────
 #
 # Drag this file onto your Railway project canvas to import all
@@ -72,7 +72,7 @@ services:
   # ── Backend API (FastAPI) ─────────────────────────────────
   backend:
     # Template maintainers: this tag is auto-bumped by CI on each vX.Y.Z release.
-    image: ghcr.io/syllogic-ai/syllogic-backend:v1.0.1
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:v1.0.1
     environment:
       NODE_ENV: production
       PORT: "8080"
@@ -92,7 +92,7 @@ services:
   # Role is selected by PROCESS_TYPE (the backend image dispatches on it),
   # so no custom start command is needed on Railway.
   mcp:
-    image: ghcr.io/syllogic-ai/syllogic-backend:v1.0.1
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:v1.0.1
     healthcheck:
       test:
         [
@@ -117,7 +117,7 @@ services:
   # PROCESS_TYPE=worker makes the backend image run the Celery worker
   # (no custom start command required on Railway).
   worker:
-    image: ghcr.io/syllogic-ai/syllogic-backend:v1.0.1
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:v1.0.1
     environment:
       NODE_ENV: production
       PROCESS_TYPE: worker
@@ -136,7 +136,7 @@ services:
   # PROCESS_TYPE=beat makes the backend image run the Celery beat scheduler
   # (no custom start command required on Railway).
   beat:
-    image: ghcr.io/syllogic-ai/syllogic-backend:v1.0.1
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:v1.0.1
     environment:
       NODE_ENV: production
       PROCESS_TYPE: beat
@@ -155,7 +155,7 @@ services:
   # Migrations run automatically at startup before Next.js boot.
   # Keep PORT=3000 so Railway proxy routes traffic correctly.
   app:
-    image: ghcr.io/syllogic-ai/syllogic-frontend:v1.0.1
+    image: ghcr.io/charlie-turner-314/personal-portfolio-frontend:v1.0.1
     command: /bin/sh -lc "mkdir -p /data/uploads/profile /data/uploads/logos /data/uploads/imports /data/uploads/people && chmod -R u+rwX,g+rwX /data/uploads && node scripts/migrate.js && exec node_modules/.bin/next start -p 3000 -H 0.0.0.0"
     healthcheck:
       test:

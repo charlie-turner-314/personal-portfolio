@@ -16,7 +16,7 @@ type SearchParams = {
 
 const SCOPE_DESCRIPTIONS: Record<string, string> = {
   "mcp:access":
-    "View and update your financial data via the Syllogic MCP server",
+    "View and update your financial data via the Personal Portfolio MCP server",
 };
 
 export default async function ConsentPage({
@@ -62,11 +62,11 @@ export default async function ConsentPage({
     <main className="mx-auto max-w-md p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Authorize {clientName}</h1>
       <p className="text-sm text-muted-foreground">
-        <strong>{clientName}</strong> is requesting access to your Syllogic
+        <strong>{clientName}</strong> is requesting access to your Personal Portfolio
         account. If you approve, it will be able to:
       </p>
       <ul className="list-disc pl-6 text-sm">
-        {scopes.length === 0 && <li>Access your Syllogic data</li>}
+        {scopes.length === 0 && <li>Access your Personal Portfolio data</li>}
         {scopes.map((scope) => (
           <li key={scope}>
             {SCOPE_DESCRIPTIONS[scope] ?? (

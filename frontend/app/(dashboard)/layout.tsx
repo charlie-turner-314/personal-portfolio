@@ -13,7 +13,7 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const cookieStore = await cookies();
-  const sidebarCookie = cookieStore.get("syllogic.sidebar.open")?.value;
+  const sidebarCookie = cookieStore.get("personal-portfolio.sidebar.open")?.value;
   const defaultSidebarOpen = sidebarCookie === "true";
 
   const session = await getCachedSession();

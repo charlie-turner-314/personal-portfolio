@@ -25,9 +25,9 @@ export async function signedFetch(url: string, opts: SignedFetchOpts): Promise<R
   const signature = sign(opts.method, opts.path, opts.userId, ts, bodyHex);
   const headers = {
     ...opts.headers,
-    "x-syllogic-user-id": opts.userId,
-    "x-syllogic-timestamp": ts,
-    "x-syllogic-signature": signature,
+    "x-personal-portfolio-user-id": opts.userId,
+    "x-personal-portfolio-timestamp": ts,
+    "x-personal-portfolio-signature": signature,
   };
   return fetch(url, { method: opts.method, headers, body: opts.body });
 }

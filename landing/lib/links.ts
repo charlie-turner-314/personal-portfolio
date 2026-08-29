@@ -15,32 +15,32 @@ function withUtm(
 }
 
 export const LINKS = {
-  repo: "https://github.com/syllogic-ai/syllogic",
-  issues: "https://github.com/syllogic-ai/syllogic/issues",
-  discussions: "https://github.com/syllogic-ai/syllogic/discussions",
-  readme: "https://github.com/syllogic-ai/syllogic/blob/main/README.md",
-  roadmap: "https://github.com/syllogic-ai/syllogic/blob/main/ROADMAP.md",
+  repo: "https://github.com/charlie-turner-314/personal-portfolio",
+  issues: "https://github.com/charlie-turner-314/personal-portfolio/issues",
+  discussions: "https://github.com/charlie-turner-314/personal-portfolio/discussions",
+  readme: "https://github.com/charlie-turner-314/personal-portfolio/blob/main/README.md",
+  roadmap: "https://github.com/charlie-turner-314/personal-portfolio/blob/main/ROADMAP.md",
   contributing:
-    "https://github.com/syllogic-ai/syllogic/blob/main/CONTRIBUTING.md",
+    "https://github.com/charlie-turner-314/personal-portfolio/blob/main/CONTRIBUTING.md",
   startHere:
-    "https://github.com/syllogic-ai/syllogic/blob/main/START_HERE.md",
+    "https://github.com/charlie-turner-314/personal-portfolio/blob/main/START_HERE.md",
   release:
-    "https://github.com/syllogic-ai/syllogic/releases/tag/v1.0.0",
+    "https://github.com/charlie-turner-314/personal-portfolio/releases/tag/v1.0.0",
   demo: {
     hero: withUtm(
-      "https://app.syllogic.ai/login?demo=1",
+      "http://localhost:8080/login?demo=1",
       "hero_demo",
       "landing",
       "site"
     ),
     start: withUtm(
-      "https://app.syllogic.ai/login?demo=1",
+      "http://localhost:8080/login?demo=1",
       "start_page_demo",
       "landing",
       "site"
     ),
     feedback: withUtm(
-      "https://app.syllogic.ai/login?demo=1",
+      "http://localhost:8080/login?demo=1",
       "feedback_demo",
       "github",
       "issues"
@@ -48,19 +48,19 @@ export const LINKS = {
   },
   railway: {
     hero: withUtm(
-      "https://railway.com/deploy/syllogic?referralCode=25KFsK",
+      "https://railway.com/deploy/personal-portfolio?referralCode=25KFsK",
       "hero_railway",
       "landing",
       "site"
     ),
     install: withUtm(
-      "https://railway.com/deploy/syllogic?referralCode=25KFsK",
+      "https://railway.com/deploy/personal-portfolio?referralCode=25KFsK",
       "install_railway",
       "landing",
       "site"
     ),
     readme: withUtm(
-      "https://railway.com/deploy/syllogic?referralCode=25KFsK",
+      "https://railway.com/deploy/personal-portfolio?referralCode=25KFsK",
       "readme_railway",
       "github",
       "readme"
@@ -68,11 +68,11 @@ export const LINKS = {
   },
   issuesNew: {
     installHelp:
-      "https://github.com/syllogic-ai/syllogic/issues/new?template=install_help.yml",
+      "https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=install_help.yml",
     demoFeedback:
-      "https://github.com/syllogic-ai/syllogic/issues/new?template=demo_feedback.yml",
+      "https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=demo_feedback.yml",
     featureRequest:
-      "https://github.com/syllogic-ai/syllogic/issues/new?template=feature_request.yml",
+      "https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=feature_request.yml",
   },
   startPath: "/start",
 };

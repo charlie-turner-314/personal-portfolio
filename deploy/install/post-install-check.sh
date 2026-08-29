@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="${1:-/opt/syllogic}"
+INSTALL_DIR="${1:-/opt/personal-portfolio}"
 ENV_FILE="$INSTALL_DIR/.env"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
 
 if [ ! -f "$ENV_FILE" ] || [ ! -f "$COMPOSE_FILE" ]; then
   echo "Expected $ENV_FILE and $COMPOSE_FILE."
-  echo "Usage: $0 [/opt/syllogic]"
+  echo "Usage: $0 [/opt/personal-portfolio]"
   exit 1
 fi
 

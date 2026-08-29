@@ -9,7 +9,7 @@
 
 services:
   app:
-    image: syllogic-frontend:local
+    image: personal-portfolio-frontend:local
     pull_policy: never
     build:
       context: ../../frontend
@@ -17,11 +17,11 @@ services:
 
   migrate:
     # Use the locally-built frontend image
-    image: syllogic-frontend:local
+    image: personal-portfolio-frontend:local
     pull_policy: never
 
   backend:
-    image: syllogic-backend:local
+    image: personal-portfolio-backend:local
     pull_policy: never
     build:
       context: ../../backend
@@ -35,15 +35,15 @@ services:
 
   mcp:
     # Use the locally-built backend image
-    image: syllogic-backend:local
+    image: personal-portfolio-backend:local
     pull_policy: never
 
   worker:
     # Use the locally-built backend image
-    image: syllogic-backend:local
+    image: personal-portfolio-backend:local
     pull_policy: never
 
   beat:
     # Use the locally-built backend image
-    image: syllogic-backend:local
+    image: personal-portfolio-backend:local
     pull_policy: never

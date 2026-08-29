@@ -52,9 +52,9 @@ def _signed_headers(method: str, path_with_query: str, user_id: str) -> dict:
         hashlib.sha256,
     ).hexdigest()
     return {
-        "x-syllogic-user-id": user_id,
-        "x-syllogic-timestamp": timestamp,
-        "x-syllogic-signature": signature,
+        "x-personal-portfolio-user-id": user_id,
+        "x-personal-portfolio-timestamp": timestamp,
+        "x-personal-portfolio-signature": signature,
     }
 
 

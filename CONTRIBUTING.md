@@ -1,4 +1,4 @@
-# Contributing to Syllogic
+# Contributing to Personal Portfolio
 
 Thanks for your interest in contributing. This guide covers how to set up a development environment and submit changes.
 

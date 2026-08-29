@@ -205,7 +205,7 @@ export function AuthorsSection() {
             className="font-display text-2xl"
             style={{ color: "var(--color-fg)" }}
           >
-            SYLLOGIC
+            PERSONAL_PORTFOLIO
           </span>
           <span
             className="font-mono text-xs px-2 py-0.5"
