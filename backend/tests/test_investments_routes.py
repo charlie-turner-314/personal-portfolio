@@ -29,9 +29,9 @@ def _signed_headers(method: str, path_with_query: str, user_id: str = "u1") -> d
         hashlib.sha256,
     ).hexdigest()
     return {
-        "x-syllogic-user-id": user_id,
-        "x-syllogic-timestamp": timestamp,
-        "x-syllogic-signature": signature,
+        "x-personal-portfolio-user-id": user_id,
+        "x-personal-portfolio-timestamp": timestamp,
+        "x-personal-portfolio-signature": signature,
     }
 
 
@@ -76,7 +76,7 @@ def db():
 @pytest.fixture
 def client(db, monkeypatch):
     from app.services import credentials_crypto
-    monkeypatch.setenv("SYLLOGIC_SECRET_KEY", credentials_crypto.generate_key())
+    monkeypatch.setenv("PERSONAL_PORTFOLIO_SECRET_KEY", credentials_crypto.generate_key())
     monkeypatch.setenv("INTERNAL_AUTH_SECRET", INTERNAL_AUTH_SECRET)
     db.add(User(id="u1", email="u@example.com", functional_currency="EUR")); db.commit()
     app.dependency_overrides[get_db] = lambda: db

@@ -258,6 +258,8 @@ export function SubscriptionsClient({
       <SubscriptionsGroupedList
         data={tableData}
         kpis={kpis}
+        displayCurrency={kpis.currency}
+        locale={kpis.locale}
         onAdd={handleAdd}
         onEdit={(row) => {
           const subscription = subscriptions.find((s) => s.id === row.id);
@@ -292,6 +294,8 @@ export function SubscriptionsClient({
         onOpenChange={setDetailSheetOpen}
         onEdit={handleEditFromDetail}
         onRefresh={() => router.refresh()}
+        displayCurrency={kpis.currency}
+        locale={kpis.locale}
       />
     </>
   );

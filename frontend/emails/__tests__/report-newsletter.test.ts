@@ -3,19 +3,19 @@ import { describe, expect, it } from "vitest";
 import ReportNewsletter from "../report-newsletter";
 
 const props = {
-  reportName: "Syllogic | Weekly Digest",
+  reportName: "Personal Portfolio | Weekly Digest",
   generatedAt: "2026-07-20T08:00:00Z",
   periodLabel: "Last 7 days",
   totalBalance: "3394.04",
   totalCurrency: "EUR",
   accounts: [{
     name: "ABN AMRO Giannis", institution: "ABN AMRO",
-    logoUrl: "https://app.syllogic.ai/uploads/logos/abnamro.com.png",
+    logoUrl: "http://localhost:8080/uploads/logos/abnamro.com.png",
     balance: "591.51", currency: "EUR",
   }],
   transactionsModeLabel: "Top 8 expenses",
   transactions: [{ description: "British Airways Plc", date: "2026-07-16", amount: "829.94", currency: "EUR", direction: "out" as const }],
-  manageUrl: "https://app.syllogic.ai/reports/1",
+  manageUrl: "http://localhost:8080/reports/1",
 };
 
 describe("ReportNewsletter", () => {
@@ -50,6 +50,6 @@ describe("ReportNewsletter", () => {
 
   it("renders the report name through the full component tree", async () => {
     const html = await render(ReportNewsletter(props));
-    expect(html).toContain("Syllogic | Weekly Digest");
+    expect(html).toContain("Personal Portfolio | Weekly Digest");
   });
 });

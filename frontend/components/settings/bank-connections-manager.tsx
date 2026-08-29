@@ -39,6 +39,7 @@ type BankConnectionItem = {
 
 interface BankConnectionsManagerProps {
   connections: BankConnectionItem[];
+  countryCode?: string | null;
 }
 
 type SyncProgress = {
@@ -50,7 +51,7 @@ type SyncProgress = {
   started_at?: string;
 };
 
-export function BankConnectionsManager({ connections }: BankConnectionsManagerProps) {
+export function BankConnectionsManager({ connections, countryCode }: BankConnectionsManagerProps) {
   const router = useRouter();
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const [recategorizingIds, setRecategorizingIds] = useState<Set<string>>(new Set());
@@ -64,9 +65,11 @@ export function BankConnectionsManager({ connections }: BankConnectionsManagerPr
 
   // Cleanup all timers on unmount
   useEffect(() => {
+    const pollingTimersForCleanup = pollingTimers.current;
+    const elapsedTimersForCleanup = elapsedTimers.current;
     return () => {
-      pollingTimers.current.forEach((timer) => clearTimeout(timer));
-      elapsedTimers.current.forEach((timer) => clearInterval(timer));
+      pollingTimersForCleanup.forEach((timer) => clearTimeout(timer));
+      elapsedTimersForCleanup.forEach((timer) => clearInterval(timer));
     };
   }, []);
 
@@ -265,6 +268,7 @@ export function BankConnectionsManager({ connections }: BankConnectionsManagerPr
   };
 
   const activeConnections = connections.filter((c) => c.status !== "disconnected");
+  const isAustralianProfile = countryCode === "AU";
 
   return (
     <div className="space-y-6">
@@ -272,23 +276,45 @@ export function BankConnectionsManager({ connections }: BankConnectionsManagerPr
         <div>
           <h2 className="text-lg font-semibold">Bank Connections</h2>
           <p className="text-sm text-muted-foreground">
-            Connect your bank accounts via Open Banking to automatically sync transactions.
+            {isAustralianProfile
+              ? "Australian automatic bank sync is not available yet. Use CSV imports for now."
+              : "Connect your bank accounts via Open Banking to automatically sync transactions."}
           </p>
         </div>
-        <Link
-          href="/settings/connect-bank"
-          className={buttonVariants({ variant: "default", size: "default" })}
-        >
-          <RiAddLine className="mr-1.5 h-4 w-4" />
-          Connect Bank
-        </Link>
+        {isAustralianProfile ? (
+          <Link
+            href="/transactions/import"
+            className={buttonVariants({ variant: "default", size: "default" })}
+          >
+            <RiAddLine className="mr-1.5 h-4 w-4" />
+            Import CSV
+          </Link>
+        ) : (
+          <Link
+            href="/settings/connect-bank"
+            className={buttonVariants({ variant: "default", size: "default" })}
+          >
+            <RiAddLine className="mr-1.5 h-4 w-4" />
+            Connect Bank
+          </Link>
+        )}
       </div>
+
+      {isAustralianProfile && (
+        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+          Australian CDR bank connections are planned separately. Import bank CSVs from
+          CommBank, Westpac, NAB, ANZ, Macquarie, ING, and other providers from the
+          transactions import flow.
+        </div>
+      )}
 
       {activeConnections.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center">
           <RiBankLine className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
           <p className="text-sm text-muted-foreground">
-            No bank connections yet. Connect a bank to start syncing transactions automatically.
+            {isAustralianProfile
+              ? "No live Australian bank connections yet. Use CSV import to bring in transactions."
+              : "No bank connections yet. Connect a bank to start syncing transactions automatically."}
           </p>
         </div>
       ) : (

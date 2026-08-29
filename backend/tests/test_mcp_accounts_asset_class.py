@@ -48,6 +48,22 @@ def seeded_user(db_session):
             is_active=True,
             starting_balance=Decimal("0"),
         ),
+        Account(
+            user_id=user_id,
+            name="Home Loan",
+            account_type="mortgage",
+            institution="CBA",
+            currency="EUR",
+            provider="manual",
+            is_active=True,
+            starting_balance=Decimal("500000"),
+            functional_balance=Decimal("500000"),
+            liability_interest_rate=Decimal("6.4900"),
+            liability_repayment_amount=Decimal("3200"),
+            liability_repayment_frequency="monthly",
+            liability_loan_term_months=360,
+            liability_secured=True,
+        ),
     ]
     for r in rows:
         db_session.add(r)
@@ -66,6 +82,12 @@ def test_list_accounts_includes_asset_class(seeded_user):
     assert by_name["Op Checking"]["asset_class"] == "cash"
     assert by_name["Long Term Savings"]["asset_class"] == "savings"
     assert by_name["Brokerage"]["asset_class"] == "investment"
+    assert by_name["Home Loan"]["asset_class"] == "other"
+    assert by_name["Home Loan"]["liability_interest_rate"] == pytest.approx(6.49)
+    assert by_name["Home Loan"]["liability_repayment_amount"] == pytest.approx(3200.0)
+    assert by_name["Home Loan"]["liability_repayment_frequency"] == "monthly"
+    assert by_name["Home Loan"]["liability_loan_term_months"] == 360
+    assert by_name["Home Loan"]["liability_secured"] is True
 
 
 def test_list_accounts_filters_by_asset_class(seeded_user):

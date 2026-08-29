@@ -181,6 +181,142 @@ export type HoldingLot = {
   currency: string;
 };
 
+export type CgtAllocation = {
+  id: string;
+  acquisition_trade_id: string;
+  disposal_trade_id: string;
+  symbol: string;
+  acquisition_date: string;
+  disposal_date: string;
+  quantity: string;
+  currency: string;
+  cost_base_native: string;
+  proceeds_native: string;
+  gain_native: string;
+  cost_base_aud?: string | null;
+  proceeds_aud?: string | null;
+  gain_aud?: string | null;
+  fx_missing: boolean;
+  discount_eligible: boolean;
+  calculation_version: string;
+  assumptions: string[];
+};
+
+export type CgtFinancialYearSummary = {
+  financial_year_start: number;
+  gross_gains_aud: string;
+  capital_losses_aud: string;
+  discounted_gains_aud: string;
+  net_capital_gain_before_losses_aud: string;
+  allocation_count: number;
+  missing_fx_allocation_count: number;
+  assumptions: string[];
+};
+
+export type AustralianTaxReport = {
+  financial_year_start: number;
+  financial_year_end: number;
+  period: { start: string; end_exclusive: string };
+  investment_income: Record<string, unknown>;
+  cgt: Record<string, unknown>;
+  transactions: Record<string, unknown>;
+  assumptions: string[];
+};
+
+export async function getAustralianTaxReport(financialYearStart: number): Promise<AustralianTaxReport> {
+  const resp = await signedFetch("GET", `/api/tax-reports/australian/${financialYearStart}`);
+  return readJsonOrThrow<AustralianTaxReport>(resp);
+}
+
+export async function getHoldingCgtAllocations(holdingId: string): Promise<CgtAllocation[]> {
+  const resp = await signedFetch("GET", `/api/investments/holdings/${holdingId}/cgt-allocations`);
+  return readJsonOrThrow<CgtAllocation[]>(resp);
+}
+
+export async function getCgtFinancialYearSummary(financialYearStart: number): Promise<CgtFinancialYearSummary> {
+  const resp = await signedFetch("GET", "/api/investments/cgt/summary", {
+    query: { financial_year_start: String(financialYearStart) },
+  });
+  return readJsonOrThrow<CgtFinancialYearSummary>(resp);
+}
+
+export type InvestmentIncomeEvent = {
+  id: string;
+  account_id: string;
+  holding_id: string;
+  event_type: "dividend" | "distribution";
+  pay_date: string;
+  ex_date?: string | null;
+  currency: string;
+  cash_received: string;
+  franked_amount?: string | null;
+  unfranked_amount?: string | null;
+  franking_credit?: string | null;
+  foreign_income?: string | null;
+  foreign_tax_paid?: string | null;
+  amit_amma_components?: Record<string, string | null> | null;
+  is_drp: boolean;
+  drp_quantity?: string | null;
+  drp_price?: string | null;
+  source_id?: string | null;
+  notes?: string | null;
+  reinvestment_trade_id?: string | null;
+};
+
+export type InvestmentIncomeSummary = {
+  financial_year_start: number;
+  currency: string;
+  cash_income: string;
+  franking_credits: string;
+  foreign_income: string;
+  foreign_tax_paid: string;
+};
+
+export type CreateInvestmentIncomeEvent = Omit<
+  InvestmentIncomeEvent,
+  "id" | "reinvestment_trade_id"
+>;
+
+export async function listHoldingIncomeEvents(holdingId: string): Promise<InvestmentIncomeEvent[]> {
+  const resp = await signedFetch("GET", "/api/investments/income-events", {
+    query: { holding_id: holdingId },
+  });
+  return readJsonOrThrow<InvestmentIncomeEvent[]>(resp);
+}
+
+export async function getInvestmentIncomeSummary(
+  financialYearStart: number,
+  holdingId?: string,
+): Promise<InvestmentIncomeSummary[]> {
+  const resp = await signedFetch("GET", "/api/investments/income-events/summary", {
+    query: {
+      financial_year_start: String(financialYearStart),
+      holding_id: holdingId,
+    },
+  });
+  return readJsonOrThrow<InvestmentIncomeSummary[]>(resp);
+}
+
+export async function createInvestmentIncomeEvent(
+  payload: CreateInvestmentIncomeEvent,
+): Promise<InvestmentIncomeEvent> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", "/api/investments/income-events", { body: payload });
+  return readJsonOrThrow<InvestmentIncomeEvent>(resp);
+}
+
+export async function createHoldingIncomeEvent(
+  accountId: string,
+  holdingId: string,
+  payload: Omit<CreateInvestmentIncomeEvent, "account_id" | "holding_id">,
+): Promise<InvestmentIncomeEvent> {
+  return createInvestmentIncomeEvent({
+    ...payload,
+    account_id: accountId,
+    holding_id: holdingId,
+  });
+}
+
 export async function getHoldingTrades(
   holdingId: string,
 ): Promise<HoldingTrade[]> {

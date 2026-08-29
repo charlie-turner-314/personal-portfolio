@@ -5,9 +5,15 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { RiArrowLeftLine, RiArrowRightLine, RiSparklingLine } from "@remixicon/react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Header } from "@/components/layout/header";
+import { Label } from "@/components/ui/label";
 import { CsvMappingTable } from "@/components/transactions/csv-mapping-table";
 import { CsvSamplePreview } from "@/components/transactions/csv-sample-preview";
+import {
+  CsvAiMappingStatus,
+  type AiMappingStatus,
+} from "@/components/transactions/csv-ai-mapping-status";
 import {
   parseCsvHeaders,
   getAiColumnMapping,
@@ -17,6 +23,20 @@ import {
   type ParsedCsvData,
 } from "@/lib/actions/csv-import";
 
+function withMappingDefaults(mapping: ColumnMapping): ColumnMapping {
+  return {
+    ...mapping,
+    debitAmount: mapping.debitAmount ?? null,
+    creditAmount: mapping.creditAmount ?? null,
+    typeConfig: {
+      ...mapping.typeConfig,
+      isAmountSigned: mapping.typeConfig?.isAmountSigned ?? false,
+      amountFormat: mapping.typeConfig?.amountFormat ?? "AUTO",
+      dateFormat: mapping.typeConfig?.dateFormat ?? "DD-MM-YYYY",
+    },
+  };
+}
+
 function MappingPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -24,11 +44,16 @@ function MappingPageContent() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isAiMapping, setIsAiMapping] = useState(false);
+  const [aiMappingStatus, setAiMappingStatus] = useState<AiMappingStatus>("idle");
+  const [aiMappingError, setAiMappingError] = useState<string | undefined>();
   const [csvData, setCsvData] = useState<ParsedCsvData | null>(null);
+  const [saveProfile, setSaveProfile] = useState(true);
+  const [appliedProfileName, setAppliedProfileName] = useState<string | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({
     date: null,
     amount: null,
+    debitAmount: null,
+    creditAmount: null,
     description: null,
     merchant: null,
     transactionType: null,
@@ -44,32 +69,32 @@ function MappingPageContent() {
   });
 
   const aiMappingTriggeredRef = useRef(false);
-  const sanitizeMapping = useCallback(
-    (input: ColumnMapping): ColumnMapping => ({
-      ...input,
-      merchant: null,
-      transactionType: null,
-    }),
-    []
-  );
+  const mappingSectionRef = useRef<HTMLDivElement>(null);
 
-  const triggerAiMapping = useCallback(async (id: string, data: ParsedCsvData) => {
-    if (aiMappingTriggeredRef.current) return;
+  const triggerAiMapping = useCallback(async (
+    id: string,
+    data: ParsedCsvData,
+    options: { retry?: boolean } = {}
+  ) => {
+    if (aiMappingTriggeredRef.current && !options.retry) return;
     aiMappingTriggeredRef.current = true;
 
-    setIsAiMapping(true);
+    setAiMappingError(undefined);
+    setAiMappingStatus("analyzing");
     try {
       const result = await getAiColumnMapping(id, data.headers, data.sampleRows);
-      if (result.success && result.mapping) {
-        setMapping(sanitizeMapping(result.mapping));
-        toast.success("AI mapping applied automatically");
+      if (result.success) {
+        setMapping(withMappingDefaults(result.mapping));
+        setAiMappingStatus(result.outcome === "ai" ? "ai_succeeded" : "deterministic");
+      } else {
+        setAiMappingStatus(result.outcome);
+        setAiMappingError(result.error);
       }
     } catch {
-      // Silently fail - user can still manually map
-    } finally {
-      setIsAiMapping(false);
+      setAiMappingStatus("failed");
+      setAiMappingError("AI could not analyze this CSV. Try again or map the columns manually.");
     }
-  }, [sanitizeMapping]);
+  }, []);
 
   const loadData = useCallback(async () => {
     if (!importId) {
@@ -87,13 +112,36 @@ function MappingPageContent() {
         return;
       }
 
+      setAppliedProfileName(
+        session.profileApplied
+          ? session.importProfileName ?? "Saved mapping"
+          : null
+      );
+
       // If existing mapping available, use it and skip AI mapping
       const hasExistingMapping = session.columnMapping &&
-        (session.columnMapping.date || session.columnMapping.amount || session.columnMapping.description);
+        (
+          session.columnMapping.date ||
+          session.columnMapping.amount ||
+          session.columnMapping.debitAmount ||
+          session.columnMapping.creditAmount ||
+          session.columnMapping.description
+        );
 
       if (hasExistingMapping) {
-        setMapping(sanitizeMapping(session.columnMapping!));
+        setMapping(withMappingDefaults(session.columnMapping!));
         aiMappingTriggeredRef.current = true; // Don't trigger AI if mapping exists
+        setAiMappingStatus(
+          session.profileApplied || session.columnMapping?.mappingSource === "profile"
+            ? "reused"
+            : session.columnMapping?.mappingSource === "ai"
+              ? "ai_succeeded"
+              : session.columnMapping?.mappingSource === "deterministic"
+                ? "deterministic"
+                : session.columnMapping?.mappingSource === "manual"
+                  ? "manual"
+                  : "existing"
+        );
       }
 
       // Parse CSV headers
@@ -116,25 +164,36 @@ function MappingPageContent() {
     } finally {
       setIsLoading(false);
     }
-  }, [importId, router, triggerAiMapping, sanitizeMapping]);
+  }, [importId, router, triggerAiMapping]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
+  const handleRetryAiMapping = () => {
+    if (importId && csvData) {
+      void triggerAiMapping(importId, csvData, { retry: true });
+    }
+  };
+
+  const handleMapManually = () => {
+    setAiMappingStatus("manual");
+    requestAnimationFrame(() => mappingSectionRef.current?.focus());
+  };
+
   const handleContinue = async () => {
     if (!importId) return;
 
     // Validate required fields
-    if (!mapping.date || !mapping.amount || !mapping.description) {
-      toast.error("Please map all required fields");
+    const hasAmountMapping = Boolean(mapping.amount || mapping.debitAmount || mapping.creditAmount);
+    if (!mapping.date || !mapping.description || !hasAmountMapping) {
+      toast.error("Please map Date, Description, and at least one amount column");
       return;
     }
 
     setIsSaving(true);
     try {
-      const sanitizedMapping = sanitizeMapping(mapping);
-      const result = await saveColumnMapping(importId, sanitizedMapping);
+      const result = await saveColumnMapping(importId, mapping, { saveProfile });
       if (result.success) {
         router.push(`/transactions/import/preview?id=${importId}`);
       } else {
@@ -171,11 +230,18 @@ function MappingPageContent() {
     <>
       <Header title="Map Columns" />
       <div className="flex h-[calc(100vh-4rem)] flex-col p-4 pt-0">
-        {/* AI Mapping Status Banner */}
-        {isAiMapping && (
+        <CsvAiMappingStatus
+          status={aiMappingStatus}
+          error={aiMappingError}
+          onRetry={handleRetryAiMapping}
+          onMapManually={handleMapManually}
+        />
+        {appliedProfileName && (
           <div className="mb-4 flex items-center gap-2 rounded-lg border bg-muted/50 px-4 py-3">
-            <RiSparklingLine className="h-4 w-4 animate-pulse text-primary" />
-            <span className="text-sm">Analyzing your CSV with AI...</span>
+            <RiSparklingLine className="h-4 w-4 text-primary" />
+            <span className="text-sm">
+              Applied {appliedProfileName} for this account.
+            </span>
           </div>
         )}
 
@@ -184,7 +250,7 @@ function MappingPageContent() {
           <div className="grid h-full min-h-0 lg:grid-cols-2 lg:divide-x">
             {/* Left Column - Field Mapping */}
             <div className="flex min-h-0 flex-col p-6">
-              <div className="mb-4">
+              <div className="mb-4" ref={mappingSectionRef} tabIndex={-1}>
                 <h2 className="text-lg font-semibold">Field Mapping</h2>
                 <p className="text-sm text-muted-foreground">
                   Match each CSV column to the corresponding transaction field
@@ -211,7 +277,7 @@ function MappingPageContent() {
         </div>
 
         {/* Footer Actions */}
-        <div className="mt-6 flex items-center justify-between border-t pt-4">
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t pt-4">
           <Button
             type="button"
             variant="outline"
@@ -220,10 +286,22 @@ function MappingPageContent() {
             <RiArrowLeftLine className="mr-2 h-4 w-4" />
             Back
           </Button>
-          <Button onClick={handleContinue} disabled={isSaving || isAiMapping}>
-            {isSaving ? "Saving..." : "Preview Transactions"}
-            <RiArrowRightLine className="ml-2 h-4 w-4" />
-          </Button>
+          <div className="flex flex-1 flex-wrap items-center justify-end gap-4">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="saveProfile"
+                checked={saveProfile}
+                onCheckedChange={(checked) => setSaveProfile(!!checked)}
+              />
+              <Label htmlFor="saveProfile" className="text-sm font-normal">
+                Save this mapping for this account
+              </Label>
+            </div>
+            <Button onClick={handleContinue} disabled={isSaving || aiMappingStatus === "analyzing"}>
+              {isSaving ? "Saving..." : "Preview Transactions"}
+              <RiArrowRightLine className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
     </>

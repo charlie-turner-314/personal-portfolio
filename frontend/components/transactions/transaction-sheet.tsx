@@ -33,10 +33,16 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { cn, formatDate, formatAmount } from "@/lib/utils";
 import type { TransactionWithRelations } from "@/lib/actions/transactions";
-import { updateTransactionCategory, updateTransactionIncludeInAnalytics, deleteBalancingTransaction } from "@/lib/actions/transactions";
+import {
+  updateTransactionCategory,
+  updateTransactionIncludeInAnalytics,
+  updateTransactionProperty,
+  deleteBalancingTransaction,
+} from "@/lib/actions/transactions";
 import { unlinkInternalTransfer } from "@/lib/actions/accounts";
 import { Switch } from "@/components/ui/switch";
 import type { CategoryDisplay } from "@/types";
+import type { Property } from "@/lib/db/schema";
 import { filterSelectableCategories } from "@/lib/utils/category-utils";
 import { RiDeleteBinLine, RiExchangeLine, RiLoopRightLine } from "@remixicon/react";
 import { toast } from "sonner";
@@ -53,6 +59,7 @@ interface TransactionSheetProps {
   onUpdateTransaction?: (id: string, updates: Partial<TransactionWithRelations>) => void;
   onDeleteTransaction?: (id: string) => void;
   categories?: CategoryDisplay[];
+  properties?: Property[];
   canDelete?: boolean;
 }
 
@@ -63,6 +70,7 @@ export function TransactionSheet({
   onUpdateTransaction,
   onDeleteTransaction,
   categories = [],
+  properties = [],
   canDelete = true,
 }: TransactionSheetProps) {
   const router = useRouter();
@@ -70,6 +78,7 @@ export function TransactionSheet({
   const selectableCategories = filterSelectableCategories(categories);
 
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
   const [includeInAnalytics, setIncludeInAnalytics] = useState<boolean>(true);
   const [instructions, setInstructions] = useState<string>("");
   const [hasChanges, setHasChanges] = useState(false);
@@ -124,7 +133,7 @@ export function TransactionSheet({
       } else {
         toast.error(result.error || "Failed to revert balancing transfer");
       }
-    } catch (error) {
+    } catch {
       toast.error("Failed to revert balancing transfer");
     } finally {
       setIsReverting(false);
@@ -136,6 +145,7 @@ export function TransactionSheet({
     if (transaction && transaction.id !== prevTransactionIdRef.current) {
       prevTransactionIdRef.current = transaction.id;
       setSelectedCategoryId(transaction.categoryId);
+      setSelectedPropertyId(transaction.propertyId);
       setIncludeInAnalytics(transaction.includeInAnalytics ?? true);
       setInstructions("");
       setHasChanges(false);
@@ -154,6 +164,34 @@ export function TransactionSheet({
     const newCategoryId = value === "uncategorized" ? null : value;
     setSelectedCategoryId(newCategoryId);
     setHasChanges(newCategoryId !== transaction?.categoryId);
+  };
+
+  const handlePropertyChange = async (value: string | null) => {
+    if (!transaction || !value) return;
+
+    const newPropertyId = value === "none" ? null : value;
+    const previousPropertyId = selectedPropertyId;
+    setSelectedPropertyId(newPropertyId);
+
+    try {
+      const result = await updateTransactionProperty(transaction.id, newPropertyId);
+      if (result.success) {
+        const property = newPropertyId
+          ? properties.find((item) => item.id === newPropertyId) || null
+          : null;
+        onUpdateTransaction?.(transaction.id, {
+          propertyId: newPropertyId,
+          property: property ? { id: property.id, name: property.name } : null,
+        });
+        toast.success(newPropertyId ? "Property tagged" : "Property tag removed");
+      } else {
+        setSelectedPropertyId(previousPropertyId);
+        toast.error(result.error || "Failed to update property tag");
+      }
+    } catch {
+      setSelectedPropertyId(previousPropertyId);
+      toast.error("Failed to update property tag");
+    }
   };
 
   const handleInstructionsChange = (value: string) => {
@@ -335,6 +373,28 @@ export function TransactionSheet({
                 </p>
               )}
           </div>
+
+          {properties.length > 0 && (
+            <div className="space-y-3">
+              <Label htmlFor="property">Property</Label>
+              <Select
+                value={selectedPropertyId || "none"}
+                onValueChange={handlePropertyChange}
+              >
+                <SelectTrigger id="property" className="w-full">
+                  <SelectValue placeholder="Select property" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No property</SelectItem>
+                  {properties.map((property) => (
+                    <SelectItem key={property.id} value={property.id}>
+                      {property.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Linked Transactions Section */}
           {!isBalancingTransfer && (

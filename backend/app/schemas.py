@@ -3,13 +3,54 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from datetime import datetime
 from datetime import time as _time_type
 from decimal import Decimal
-from typing import Optional, List
+from typing import Any, Optional, List
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
+LIABILITY_REPAYMENT_FREQUENCIES = {
+    "weekly",
+    "fortnightly",
+    "monthly",
+    "quarterly",
+    "annually",
+}
+
+
+class LiabilityAccountDetailsMixin(BaseModel):
+    liability_interest_rate: Optional[Decimal] = None
+    liability_repayment_amount: Optional[Decimal] = None
+    liability_repayment_frequency: Optional[str] = None
+    liability_loan_term_months: Optional[int] = None
+    liability_secured: Optional[bool] = None
+
+    @field_validator("liability_interest_rate", "liability_repayment_amount")
+    @classmethod
+    def _non_negative_decimal(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and value < 0:
+            raise ValueError("must be non-negative")
+        return value
+
+    @field_validator("liability_loan_term_months")
+    @classmethod
+    def _positive_term_months(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value <= 0:
+            raise ValueError("must be greater than zero")
+        return value
+
+    @field_validator("liability_repayment_frequency")
+    @classmethod
+    def _known_repayment_frequency(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = value.lower()
+        if normalized not in LIABILITY_REPAYMENT_FREQUENCIES:
+            raise ValueError("unknown repayment frequency")
+        return normalized
+
+
 # Account Schemas
-class AccountBase(BaseModel):
+class AccountBase(LiabilityAccountDetailsMixin):
     name: str
     account_type: str
     institution: Optional[str] = None
@@ -20,8 +61,9 @@ class AccountCreate(AccountBase):
     pass
 
 
-class AccountUpdate(BaseModel):
+class AccountUpdate(LiabilityAccountDetailsMixin):
     name: Optional[str] = None
+    account_type: Optional[str] = None
     institution: Optional[str] = None
     balance_current: Optional[Decimal] = None
     is_active: Optional[bool] = None
@@ -339,6 +381,122 @@ class HoldingLot(BaseModel):
     cost_per_share_user: Optional[Decimal] = None
     age_days: int
     currency: str
+
+
+class CgtAllocationResponse(BaseModel):
+    id: UUID
+    acquisition_trade_id: UUID
+    disposal_trade_id: UUID
+    symbol: str
+    acquisition_date: _date_date
+    disposal_date: _date_date
+    quantity: Decimal
+    currency: str
+    cost_base_native: Decimal
+    proceeds_native: Decimal
+    gain_native: Decimal
+    cost_base_aud: Optional[Decimal] = None
+    proceeds_aud: Optional[Decimal] = None
+    gain_aud: Optional[Decimal] = None
+    fx_missing: bool
+    discount_eligible: bool
+    calculation_version: str
+    assumptions: list[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CgtFinancialYearSummary(BaseModel):
+    financial_year_start: int
+    gross_gains_aud: Decimal
+    capital_losses_aud: Decimal
+    discounted_gains_aud: Decimal
+    net_capital_gain_before_losses_aud: Decimal
+    allocation_count: int
+    missing_fx_allocation_count: int
+    assumptions: list[str]
+
+
+class AustralianTaxReportResponse(BaseModel):
+    """Auditable, informational Australian FY reporting pack."""
+    financial_year_start: int
+    financial_year_end: int
+    period: dict[str, str]
+    investment_income: dict[str, Any]
+    cgt: dict[str, Any]
+    transactions: dict[str, Any]
+    assumptions: list[str]
+
+
+class InvestmentIncomeEventCreate(BaseModel):
+    account_id: UUID
+    holding_id: UUID
+    event_type: str
+    pay_date: _date_date
+    ex_date: Optional[_date_date] = None
+    currency: str
+    cash_received: Decimal
+    franked_amount: Optional[Decimal] = None
+    unfranked_amount: Optional[Decimal] = None
+    franking_credit: Optional[Decimal] = None
+    foreign_income: Optional[Decimal] = None
+    foreign_tax_paid: Optional[Decimal] = None
+    amit_amma_components: Optional[dict] = None
+    is_drp: bool = False
+    drp_quantity: Optional[Decimal] = None
+    drp_price: Optional[Decimal] = None
+    source_id: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("event_type")
+    @classmethod
+    def _income_event_type(cls, value: str) -> str:
+        value = value.lower().strip()
+        if value not in {"dividend", "distribution"}:
+            raise ValueError("must be dividend or distribution")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def _income_currency(cls, value: str) -> str:
+        value = value.upper().strip()
+        if len(value) != 3:
+            raise ValueError("must be a 3-letter ISO code")
+        return value
+
+    @field_validator("cash_received", "franked_amount", "unfranked_amount", "franking_credit", "foreign_income", "foreign_tax_paid")
+    @classmethod
+    def _income_amounts(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and value < 0:
+            raise ValueError("must be non-negative")
+        return value
+
+    @model_validator(mode="after")
+    def _drp_fields(self):
+        if self.is_drp and (self.drp_quantity is None or self.drp_quantity <= 0 or self.drp_price is None or self.drp_price < 0):
+            raise ValueError("DRP events require a positive quantity and non-negative price")
+        if not self.is_drp and (self.drp_quantity is not None or self.drp_price is not None):
+            raise ValueError("DRP quantity and price are only valid for DRP events")
+        return self
+
+
+class InvestmentIncomeEventResponse(InvestmentIncomeEventCreate):
+    id: UUID
+    user_id: str
+    reinvestment_trade_id: Optional[UUID] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InvestmentIncomeSummary(BaseModel):
+    financial_year_start: int
+    currency: str
+    cash_income: Decimal
+    franking_credits: Decimal
+    foreign_income: Decimal
+    foreign_tax_paid: Decimal
 
 
 class SymbolSearchResult(BaseModel):

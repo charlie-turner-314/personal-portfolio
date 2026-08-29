@@ -18,7 +18,7 @@ export function ReportHeader({
   return (
     <Section style={{ padding: "28px 28px 0" }}>
       <Text className="sy-muted" style={{ fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: light.mutedForeground, margin: 0 }}>
-        Syllogic
+        Personal Portfolio
       </Text>
       <Text className="sy-fg" style={{ fontSize: "22px", fontWeight: 700, color: light.foreground, margin: "10px 0 0", lineHeight: 1.25 }}>
         {reportName}

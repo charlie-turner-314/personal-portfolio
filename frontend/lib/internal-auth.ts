@@ -1,8 +1,8 @@
 import { createHmac } from "node:crypto";
 
-export const INTERNAL_AUTH_USER_HEADER = "x-syllogic-user-id";
-export const INTERNAL_AUTH_TIMESTAMP_HEADER = "x-syllogic-timestamp";
-export const INTERNAL_AUTH_SIGNATURE_HEADER = "x-syllogic-signature";
+export const INTERNAL_AUTH_USER_HEADER = "x-personal-portfolio-user-id";
+export const INTERNAL_AUTH_TIMESTAMP_HEADER = "x-personal-portfolio-timestamp";
+export const INTERNAL_AUTH_SIGNATURE_HEADER = "x-personal-portfolio-signature";
 
 interface InternalAuthSignatureInput {
   method: string;

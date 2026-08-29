@@ -31,40 +31,40 @@ const RUN_PATHS = [
 const COMPARE_ROWS = [
   {
     label: "Data control",
-    syllogic: "You own the database and files",
+    personalPortfolio: "You own the database and files",
     hosted: "Vendor-controlled",
     spreadsheet: "Local file only",
   },
   {
     label: "Deployment",
-    syllogic: "Docker, Railway, CasaOS",
+    personalPortfolio: "Docker, Railway, CasaOS",
     hosted: "No self-host option",
     spreadsheet: "No app to deploy",
   },
   {
     label: "AI categorization",
-    syllogic: "Optional OpenAI integration",
+    personalPortfolio: "Optional OpenAI integration",
     hosted: "Vendor-dependent",
     spreadsheet: "Manual formulas or scripts",
   },
   {
     label: "Recurring spend tracking",
-    syllogic: "Built in",
+    personalPortfolio: "Built in",
     hosted: "Usually built in",
     spreadsheet: "Manual setup",
   },
   {
     label: "Exportability",
-    syllogic: "CSV import and export",
+    personalPortfolio: "CSV import and export",
     hosted: "Varies by vendor",
     spreadsheet: "Manual and brittle",
   },
 ];
 
 export const metadata: Metadata = {
-  title: "Start Here | Syllogic",
+  title: "Start Here | Personal Portfolio",
   description:
-    "What Syllogic is, who it is for, and how to self-host it in under 10 minutes.",
+    "What Personal Portfolio is, who it is for, and how to self-host it in under 10 minutes.",
 };
 
 export default function StartPage() {
@@ -96,7 +96,7 @@ export default function StartPage() {
             className="font-mono text-base leading-relaxed max-w-3xl"
             style={{ color: "var(--color-fg)" }}
           >
-            Syllogic is a self-hosted personal finance dashboard with AI
+            Personal Portfolio is a self-hosted personal finance dashboard with AI
             categorization, recurring spend tracking, CSV import and export,
             and a live demo. It is built for self-hosters who want a real app,
             not a spreadsheet template and not a black-box hosted product.
@@ -201,7 +201,7 @@ export default function StartPage() {
                     Category
                   </th>
                   <th className="p-4 text-left font-mono text-xs uppercase tracking-widest">
-                    Syllogic
+                    Personal Portfolio
                   </th>
                   <th className="p-4 text-left font-mono text-xs uppercase tracking-widest">
                     Hosted app
@@ -221,7 +221,7 @@ export default function StartPage() {
                       {row.label}
                     </td>
                     <td className="p-4 font-mono text-sm" style={{ color: "var(--color-fg)" }}>
-                      {row.syllogic}
+                      {row.personalPortfolio}
                     </td>
                     <td className="p-4 font-mono text-sm" style={{ color: "var(--color-muted)" }}>
                       {row.hosted}

@@ -35,6 +35,7 @@ export const CURRENCIES = [
 // Functional currencies for user's primary reporting currency
 // Limited to major currencies for simplicity
 export const FUNCTIONAL_CURRENCIES = [
+  { code: "AUD", name: "Australian Dollar", symbol: "A$" },
   { code: "EUR", name: "Euro", symbol: "€" },
   { code: "USD", name: "US Dollar", symbol: "$" },
 ] as const;

@@ -2,10 +2,8 @@ name: Build & Publish Docker Images
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags: ["v*.*.*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch: {}
 
 jobs:
@@ -41,7 +39,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/syllogic-${{ matrix.service }}
+            ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ matrix.service }}
           tags: |
             type=ref,event=tag
             type=raw,value=edge,enable={{is_default_branch}}
@@ -52,8 +50,8 @@ jobs:
         with:
           context: ./${{ matrix.service }}
           file: ./${{ matrix.service }}/Dockerfile
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name != 'pull_request' }}
+          platforms: linux/amd64,linux/arm64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # backend/Dockerfile's frontend-deps stage renders report
@@ -88,10 +86,10 @@ jobs:
             echo "ERROR: tag '$TAG' does not match expected semver pattern (vX.Y.Z or vX.Y.Z-suffix)"
             exit 1
           fi
-          sed -i "s|ghcr.io/syllogic-ai/syllogic-frontend:[^ ]*|ghcr.io/syllogic-ai/syllogic-frontend:${TAG}|g" deploy/railway/docker-compose.yml
-          sed -i "s|ghcr.io/syllogic-ai/syllogic-backend:[^ ]*|ghcr.io/syllogic-ai/syllogic-backend:${TAG}|g" deploy/railway/docker-compose.yml
+          sed -i "s|ghcr.io/charlie-turner-314/personal-portfolio-frontend:[^ ]*|ghcr.io/charlie-turner-314/personal-portfolio-frontend:${TAG}|g" deploy/railway/docker-compose.yml
+          sed -i "s|ghcr.io/charlie-turner-314/personal-portfolio-backend:[^ ]*|ghcr.io/charlie-turner-314/personal-portfolio-backend:${TAG}|g" deploy/railway/docker-compose.yml
           # Fail if any :edge pins remain in the Railway file
-          if grep -qE 'ghcr.io/syllogic-ai/syllogic-(frontend|backend):edge' deploy/railway/docker-compose.yml; then
+          if grep -qE 'ghcr.io/charlie-turner-314/personal-portfolio-(frontend|backend):edge' deploy/railway/docker-compose.yml; then
             echo "ERROR: :edge pins remain in deploy/railway/docker-compose.yml after bump"
             exit 1
           fi
@@ -105,8 +103,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if ! git diff --quiet deploy/railway/docker-compose.yml deploy/compose/.env.example deploy/casaos/.env.example; then
-            git config user.name "syllogic-bot"
-            git config user.email "bot@syllogic.ai"
+            git config user.name "personal-portfolio-bot"
+            git config user.email "personal-portfolio-bot@users.noreply.github.com"
             git checkout main
             git pull --ff-only origin main
             git checkout "${{ github.ref_name }}" -- deploy/railway/docker-compose.yml deploy/compose/.env.example deploy/casaos/.env.example

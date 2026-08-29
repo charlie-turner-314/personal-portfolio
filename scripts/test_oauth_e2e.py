@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Headless end-to-end test of the Syllogic OAuth 2.1 + MCP flow.
+Headless end-to-end test of the Personal Portfolio OAuth 2.1 + MCP flow.
 
 Simulates exactly what Claude's custom connector does:
   1. Dynamic Client Registration (DCR)
@@ -29,7 +29,7 @@ import requests
 
 FRONTEND = os.environ.get("FRONTEND_BASE", "http://localhost:3000")
 MCP = os.environ.get("MCP_BASE", "http://localhost:8001")
-EMAIL = "e2e-tester@syllogic.local"
+EMAIL = "e2e-tester@personal-portfolio.local"
 PASSWORD = "e2e-tester-password-1234"
 NAME = "E2E Tester"
 

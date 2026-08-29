@@ -10,6 +10,24 @@ from app.security.data_encryption import decrypt_with_fallback
 from app.services.ownership_service import attribute_amount, entity_ids_for_people, get_owners
 
 
+def _liability_details(account: Account) -> dict:
+    return {
+        "liability_interest_rate": (
+            float(account.liability_interest_rate)
+            if account.liability_interest_rate is not None
+            else None
+        ),
+        "liability_repayment_amount": (
+            float(account.liability_repayment_amount)
+            if account.liability_repayment_amount is not None
+            else None
+        ),
+        "liability_repayment_frequency": account.liability_repayment_frequency,
+        "liability_loan_term_months": account.liability_loan_term_months,
+        "liability_secured": account.liability_secured,
+    }
+
+
 def list_accounts(
     user_id: str,
     include_inactive: bool = False,
@@ -84,6 +102,7 @@ def list_accounts(
                 "functional_balance": float(account.functional_balance) if account.functional_balance else None,
                 "is_active": account.is_active,
                 "alias_patterns": account.alias_patterns or [],
+                **_liability_details(account),
                 "last_synced_at": account.last_synced_at.isoformat() if account.last_synced_at else None,
                 "created_at": account.created_at.isoformat() if account.created_at else None,
             }
@@ -146,6 +165,7 @@ def get_account(user_id: str, account_id: str) -> dict | None:
             "functional_balance": float(account.functional_balance) if account.functional_balance else None,
             "is_active": account.is_active,
             "alias_patterns": account.alias_patterns or [],
+            **_liability_details(account),
             "last_synced_at": account.last_synced_at.isoformat() if account.last_synced_at else None,
             "created_at": account.created_at.isoformat() if account.created_at else None,
             "updated_at": account.updated_at.isoformat() if account.updated_at else None,

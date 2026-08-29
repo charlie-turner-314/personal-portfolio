@@ -3,8 +3,10 @@
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -14,17 +16,27 @@ import {
 } from "@/components/ui/select";
 import { CURRENCIES } from "@/lib/constants/currencies";
 import { createProperty } from "@/lib/actions/properties";
+import { getLiabilityMagnitude } from "@/lib/properties/equity";
 import { PROPERTY_TYPES } from "./types";
 import { OwnersField, type OwnerValue } from "@/components/household/owners-field";
+import type { Account } from "@/lib/db/schema";
 
 type Person = { id: string; name: string; kind: string; color?: string | null; avatarUrl?: string | null };
 
 interface AddPropertyFormProps {
   onSuccess?: () => void;
   onCancel?: () => void;
+  liabilityAccounts?: Account[];
 }
 
-export function AddPropertyForm({ onSuccess, onCancel }: AddPropertyFormProps) {
+function formatCurrency(value: string | number | null, currency: string | null): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: currency || "EUR",
+  }).format(typeof value === "number" ? value : parseFloat(value || "0"));
+}
+
+export function AddPropertyForm({ onSuccess, onCancel, liabilityAccounts = [] }: AddPropertyFormProps) {
   const [isLoading, setIsLoading] = useState(false);
 
   // Form state
@@ -33,6 +45,11 @@ export function AddPropertyForm({ onSuccess, onCancel }: AddPropertyFormProps) {
   const [address, setAddress] = useState("");
   const [currentValue, setCurrentValue] = useState("");
   const [currency, setCurrency] = useState("EUR");
+  const [isRental, setIsRental] = useState(false);
+  const [valuationDate, setValuationDate] = useState("");
+  const [valuationSource, setValuationSource] = useState("");
+  const [notes, setNotes] = useState("");
+  const [linkedLiabilityIds, setLinkedLiabilityIds] = useState<string[]>([]);
 
   // Ownership state
   const [people, setPeople] = useState<Person[]>([]);
@@ -134,6 +151,11 @@ export function AddPropertyForm({ onSuccess, onCancel }: AddPropertyFormProps) {
         address: address.trim() || undefined,
         currentValue: value,
         currency,
+        isRental,
+        valuationDate: valuationDate || null,
+        valuationSource: valuationSource.trim() || null,
+        notes: notes.trim() || null,
+        linkedLiabilityAccountIds: linkedLiabilityIds,
       });
 
       if (result.success) {
@@ -204,6 +226,72 @@ export function AddPropertyForm({ onSuccess, onCancel }: AddPropertyFormProps) {
             placeholder="0.00"
             value={currentValue}
             onChange={(e) => setCurrentValue(e.target.value)}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="property-rental"
+            checked={isRental}
+            onCheckedChange={(checked) => setIsRental(checked === true)}
+          />
+          <Label htmlFor="property-rental">Rental property</Label>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="property-valuation-date">Valuation Date</Label>
+            <Input
+              id="property-valuation-date"
+              type="date"
+              value={valuationDate}
+              onChange={(e) => setValuationDate(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="property-valuation-source">Valuation Source</Label>
+            <Input
+              id="property-valuation-source"
+              placeholder="manual"
+              value={valuationSource}
+              onChange={(e) => setValuationSource(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {liabilityAccounts.length > 0 && (
+          <div className="space-y-2">
+            <Label>Linked Mortgage or Debt</Label>
+            <div className="grid gap-2 rounded border p-3">
+              {liabilityAccounts.map((account) => (
+                <label key={account.id} className="flex items-center justify-between gap-3 text-sm">
+                  <span>
+                    {account.name}
+                    <span className="ml-2 text-muted-foreground">
+                      {formatCurrency(getLiabilityMagnitude(account), account.currency)}
+                    </span>
+                  </span>
+                  <Checkbox
+                    checked={linkedLiabilityIds.includes(account.id)}
+                    onCheckedChange={(checked) => {
+                      setLinkedLiabilityIds((current) => checked === true
+                        ? [...new Set([...current, account.id])]
+                        : current.filter((id) => id !== account.id)
+                      );
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <Label htmlFor="property-notes">Notes</Label>
+          <Textarea
+            id="property-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
           />
         </div>
 

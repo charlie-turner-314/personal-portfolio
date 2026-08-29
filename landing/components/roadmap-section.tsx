@@ -54,7 +54,7 @@ export function RoadmapSection() {
         className="max-w-3xl font-mono text-sm leading-relaxed mb-12"
         style={{ color: "var(--color-muted)" }}
       >
-        Syllogic is already deployable. The next phase is focused on trust,
+        Personal Portfolio is already deployable. The next phase is focused on trust,
         onboarding, and sharper community feedback loops instead of adding
         abstract surface area.
       </p>

@@ -6,7 +6,7 @@ describe("resolveMcpServerUrlForSnippet", () => {
   it("uses explicit MCP_SERVER_URL when provided", () => {
     const result = resolveMcpServerUrlForSnippet({
       mcpServerUrl: "https://custom.example.com/mcp",
-      betterAuthUrl: "https://app.syllogic.ai",
+      betterAuthUrl: "http://localhost:8080",
     });
 
     expect(result).toBe("https://custom.example.com/mcp");
@@ -30,10 +30,10 @@ describe("resolveMcpServerUrlForSnippet", () => {
 
   it("derives mcp subdomain from app subdomain", () => {
     const result = resolveMcpServerUrlForSnippet({
-      betterAuthUrl: "https://app.syllogic.ai",
+      betterAuthUrl: "http://localhost:8080",
     });
 
-    expect(result).toBe("https://mcp.syllogic.ai/mcp");
+    expect(result).toBe("http://localhost:8080/mcp");
   });
 
   it("falls back to app URL when BETTER_AUTH_URL is not set", () => {
@@ -47,6 +47,6 @@ describe("resolveMcpServerUrlForSnippet", () => {
   it("uses hosted default when no URLs are available", () => {
     const result = resolveMcpServerUrlForSnippet();
 
-    expect(result).toBe("https://mcp.syllogic.ai/mcp");
+    expect(result).toBe("http://localhost:8080/mcp");
   });
 });

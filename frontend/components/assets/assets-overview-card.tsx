@@ -14,6 +14,9 @@ interface AssetsOverviewCardProps {
 
 export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
   const router = useRouter();
+  const grossAssets = data.grossAssets;
+  const totalLiabilities = data.totalLiabilities;
+  const netWorth = data.netWorth;
 
   const handleAssetAdded = () => {
     router.refresh();
@@ -22,19 +25,47 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <CardTitle>Assets Overview</CardTitle>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <CardTitle>Net Worth</CardTitle>
             <AddAssetDialog onAssetAdded={handleAssetAdded} />
           </div>
-          <span className="text-2xl font-bold">
-            {formatCurrency(data.total, data.currency)}
-          </span>
+          <div className="min-w-0 text-left sm:text-right">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Net worth
+            </div>
+            <div className="break-words text-3xl font-bold leading-tight sm:text-2xl">
+              {formatCurrency(netWorth, data.currency, { showSign: true })}
+            </div>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
-        <AssetsStackedBar categories={data.categories} total={data.total} />
-        <AssetsTable categories={data.categories} currency={data.currency} />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="min-w-0 border-t pt-3">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Gross assets
+            </div>
+            <div className="break-words text-lg font-semibold">
+              {formatCurrency(grossAssets, data.currency)}
+            </div>
+          </div>
+          <div className="min-w-0 border-t pt-3">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Total liabilities
+            </div>
+            <div className="break-words text-lg font-semibold">
+              {formatCurrency(Math.abs(totalLiabilities), data.currency)}
+            </div>
+          </div>
+        </div>
+        <AssetsStackedBar categories={data.categories} total={grossAssets} />
+        <AssetsTable
+          categories={data.categories}
+          currency={data.currency}
+          liabilities={data.liabilities}
+          superannuation={data.superannuation}
+        />
       </CardContent>
     </Card>
   );

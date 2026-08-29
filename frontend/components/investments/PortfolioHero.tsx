@@ -5,13 +5,14 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { currencySymbol } from "@/lib/utils/currency";
 import type { Range } from "@/lib/actions/investments";
 
-const RANGES: Range[] = ["1W", "1M", "3M", "1Y", "ALL"];
+const RANGES: Range[] = ["1W", "1M", "3M", "1Y", "FY", "ALL"];
 
 const RANGE_LABEL: Record<Range, string> = {
   "1W": "this week",
   "1M": "this month",
   "3M": "this 3 months",
   "1Y": "this year",
+  FY: "this financial year",
   ALL: "all time",
 };
 

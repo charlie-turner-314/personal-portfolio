@@ -41,6 +41,10 @@ import {
 } from "@remixicon/react";
 import type { TransactionWithRelations } from "@/lib/actions/transactions";
 import type { CategoryForFilter } from "@/types";
+import {
+  getAustralianFinancialYearLabelForDateRange,
+  getAustralianFinancialYearPresetDateRanges,
+} from "@/lib/dates/australian-financial-year";
 import { cn } from "@/lib/utils";
 
 interface AccountTransactionFiltersProps {
@@ -54,14 +58,41 @@ interface FilterOption {
   color?: string;
 }
 
-const datePresets = [
-  { label: "Today", getValue: () => ({ from: startOfDay(new Date()), to: endOfDay(new Date()) }) },
-  { label: "Yesterday", getValue: () => ({ from: startOfDay(subDays(new Date(), 1)), to: endOfDay(subDays(new Date(), 1)) }) },
-  { label: "This Week", getValue: () => ({ from: startOfWeek(new Date(), { weekStartsOn: 1 }), to: endOfWeek(new Date(), { weekStartsOn: 1 }) }) },
-  { label: "This Month", getValue: () => ({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) }) },
-  { label: "This Quarter", getValue: () => ({ from: startOfQuarter(new Date()), to: endOfQuarter(new Date()) }) },
-  { label: "This Year", getValue: () => ({ from: startOfYear(new Date()), to: endOfYear(new Date()) }) },
-];
+function getDatePresets() {
+  return [
+    { label: "Today", getValue: () => ({ from: startOfDay(new Date()), to: endOfDay(new Date()) }) },
+    {
+      label: "Yesterday",
+      getValue: () => ({
+        from: startOfDay(subDays(new Date(), 1)),
+        to: endOfDay(subDays(new Date(), 1)),
+      }),
+    },
+    {
+      label: "This Week",
+      getValue: () => ({
+        from: startOfWeek(new Date(), { weekStartsOn: 1 }),
+        to: endOfWeek(new Date(), { weekStartsOn: 1 }),
+      }),
+    },
+    {
+      label: "This Month",
+      getValue: () => ({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) }),
+    },
+    {
+      label: "This Quarter",
+      getValue: () => ({ from: startOfQuarter(new Date()), to: endOfQuarter(new Date()) }),
+    },
+    {
+      label: "This Year",
+      getValue: () => ({ from: startOfYear(new Date()), to: endOfYear(new Date()) }),
+    },
+    ...getAustralianFinancialYearPresetDateRanges().map((preset) => ({
+      label: preset.label,
+      getValue: () => ({ from: preset.range.from, to: preset.range.to }),
+    })),
+  ];
+}
 
 interface MultiSelectFilterProps {
   label: string;
@@ -193,9 +224,12 @@ interface DateRangeFilterProps {
 
 function DateRangeFilter({ dateRange, onDateRangeChange }: DateRangeFilterProps) {
   const [open, setOpen] = React.useState(false);
+  const datePresets = getDatePresets();
 
   const getDisplayText = () => {
     if (!dateRange?.from) return "All time";
+    const financialYearLabel = getAustralianFinancialYearLabelForDateRange(dateRange.from, dateRange.to);
+    if (financialYearLabel) return financialYearLabel;
     if (!dateRange.to) return format(dateRange.from, "MMM d, yyyy");
     return `${format(dateRange.from, "MMM d")} - ${format(dateRange.to, "MMM d, yyyy")}`;
   };

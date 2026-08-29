@@ -23,7 +23,7 @@ export function HeroSection() {
           color: "var(--color-fg)",
         }}
       >
-        <SplitFlapText text="SYLLOGIC" startDelay={400} charDelay={100} />
+        <SplitFlapText text="PERSONAL_PORTFOLIO" startDelay={400} charDelay={100} />
       </h1>
 
       {/* Sub-tagline */}
@@ -83,14 +83,14 @@ export function HeroSection() {
       {/* Product Hunt badge */}
       <div className="mt-8">
         <a
-          href="https://www.producthunt.com/products/syllogic?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-syllogic"
+          href="https://www.producthunt.com/products/personal-portfolio?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-personal-portfolio"
           target="_blank"
           rel="noopener noreferrer"
           className="inline-block transition-opacity hover:opacity-80"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            alt="Syllogic - Self-hosted personal finance. Your data, your server. | Product Hunt"
+            alt="Personal Portfolio - Self-hosted personal finance. Your data, your server. | Product Hunt"
             width={250}
             height={54}
             src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1172114&theme=light&t=1781509839879"

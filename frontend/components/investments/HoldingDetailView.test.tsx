@@ -147,7 +147,7 @@ describe("HoldingDetailView", () => {
     expect(screen.getByLabelText("Range ALL")).toBeTruthy();
   });
 
-  it("renders three tab triggers and About content on click", () => {
+  it("renders capital-gains tab and realised disposal detail", () => {
     render(
       <HoldingDetailView
         holding={MANUAL_HOLDING}
@@ -157,10 +157,8 @@ describe("HoldingDetailView", () => {
     );
     expect(screen.getByRole("tab", { name: /Overview/i })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /Transactions/i })).toBeTruthy();
-    const aboutTab = screen.getByRole("tab", { name: /About/i });
-    expect(aboutTab).toBeTruthy();
-    fireEvent.click(aboutTab);
-    // dl content visible after switching
-    expect(screen.getAllByText(/Symbol/i).length).toBeGreaterThan(0);
+    const capitalGainsTab = screen.getByRole("tab", { name: /Capital gains/i });
+    fireEvent.click(capitalGainsTab);
+    expect(screen.getByText(/No realised disposals are available/i)).toBeTruthy();
   });
 });

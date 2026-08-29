@@ -30,8 +30,16 @@ import { currencySymbol } from "@/lib/utils/currency";
 import { PortfolioChart } from "./PortfolioChart";
 import { TypeBadge } from "./HoldingsTableHF";
 import { EditHoldingDialog } from "./EditHoldingDialog";
+import { InvestmentIncomePanel } from "./InvestmentIncomePanel";
+import { RealisedCgtDisposals } from "./RealisedCgtDisposals";
+import type { RealisedCgtDisposal } from "./cgt-types";
+import type {
+  CreateInvestmentIncomeEvent,
+  InvestmentIncomeEvent,
+  InvestmentIncomeTotals,
+} from "./income-types";
 
-const RANGES: Range[] = ["1W", "1M", "3M", "1Y", "ALL"];
+const RANGES: Range[] = ["1W", "1M", "3M", "1Y", "FY", "ALL"];
 
 function fmt(n: number, digits = 2) {
   return n.toLocaleString("en", {
@@ -46,6 +54,10 @@ export function HoldingDetailView({
   initialHistory,
   trades = [],
   lots = [],
+  incomeEvents = [],
+  incomeTotals,
+  onCreateIncomeEvent,
+  realisedCgtDisposals = [],
   isDemoRestricted = false,
 }: {
   holding: Holding;
@@ -53,6 +65,10 @@ export function HoldingDetailView({
   initialHistory: ValuationPoint[];
   trades?: HoldingTrade[];
   lots?: HoldingLot[];
+  incomeEvents?: InvestmentIncomeEvent[];
+  incomeTotals?: InvestmentIncomeTotals;
+  onCreateIncomeEvent?: (event: Omit<CreateInvestmentIncomeEvent, "account_id" | "holding_id">) => Promise<unknown>;
+  realisedCgtDisposals?: RealisedCgtDisposal[];
   isDemoRestricted?: boolean;
 }) {
   const router = useRouter();
@@ -228,6 +244,8 @@ export function HoldingDetailView({
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
+          <TabsTrigger value="income">Income</TabsTrigger>
+          <TabsTrigger value="capital-gains">Capital gains</TabsTrigger>
           <TabsTrigger value="about">About</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
@@ -358,6 +376,17 @@ export function HoldingDetailView({
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+        <TabsContent value="income">
+          <InvestmentIncomePanel
+            events={incomeEvents}
+            totals={incomeTotals}
+            defaultCurrency={holding.currency}
+            onCreate={isDemoRestricted ? undefined : onCreateIncomeEvent}
+          />
+        </TabsContent>
+        <TabsContent value="capital-gains">
+          <RealisedCgtDisposals disposals={realisedCgtDisposals} />
         </TabsContent>
         <TabsContent value="about">
           <Card>

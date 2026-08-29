@@ -1,13 +1,16 @@
 """REST endpoints for investment connections, holdings, and portfolio."""
 from __future__ import annotations
 
+import csv
+from io import StringIO
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import desc
+from fastapi.responses import StreamingResponse
+from sqlalchemy import desc, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,23 +22,31 @@ from app.models import (
     AccountBalance,
     BrokerConnection,
     BrokerTrade,
+    CgtAllocation,
     Holding,
     HoldingValuation,
+    InvestmentIncomeEvent,
     User,
 )
 from app.schemas import (
     BrokerConnectionCreate,
     HoldingCreate,
     HoldingLot,
+    CgtAllocationResponse,
+    CgtFinancialYearSummary,
     HoldingTrade,
     HoldingUpdate,
     HoldingResponse,
+    InvestmentIncomeEventCreate,
+    InvestmentIncomeEventResponse,
+    InvestmentIncomeSummary,
     ManualAccountCreate,
     PortfolioSummary,
     SymbolSearchResult,
     ValuationPoint,
 )
 from app.services.pnl_service import Trade as _FifoTrade, compute_fifo
+from app.services.broker_trade_service import ImportError as BrokerTradeImportError, import_trades, remove_trade
 from app.services import credentials_crypto
 
 logger = __import__("logging").getLogger(__name__)
@@ -83,6 +94,207 @@ def _run_sync_in_process(account_id: UUID) -> None:
 
 
 router = APIRouter()
+
+
+def _owned_income_event_context(db: Session, user_id: str, payload: InvestmentIncomeEventCreate):
+    account = db.query(Account).filter(Account.id == payload.account_id, Account.user_id == user_id).first()
+    if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+        raise HTTPException(status_code=404, detail="Investment account not found")
+    holding = db.query(Holding).filter(
+        Holding.id == payload.holding_id,
+        Holding.user_id == user_id,
+        Holding.account_id == account.id,
+    ).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found in this investment account")
+    return account, holding
+
+
+def _save_income_event(
+    db: Session,
+    user_id: str,
+    payload: InvestmentIncomeEventCreate,
+    event: InvestmentIncomeEvent | None = None,
+) -> InvestmentIncomeEvent:
+    account, holding = _owned_income_event_context(db, user_id, payload)
+    if payload.source_id:
+        existing = db.query(InvestmentIncomeEvent).filter(
+            InvestmentIncomeEvent.account_id == account.id,
+            InvestmentIncomeEvent.source_id == payload.source_id,
+        ).first()
+        if existing and event is None:
+            return existing
+        if existing and existing.id != event.id:
+            raise HTTPException(status_code=409, detail="An income event already uses this import source ID")
+    if event is not None and event.reinvestment_trade_id:
+        remove_trade(db, user_id, str(event.account_id), str(event.reinvestment_trade_id), commit=False)
+        event.reinvestment_trade_id = None
+    values = payload.model_dump()
+    if event is None:
+        event = InvestmentIncomeEvent(user_id=user_id, **values)
+        db.add(event)
+    else:
+        for key, value in values.items():
+            setattr(event, key, value)
+    db.flush()
+    if payload.is_drp:
+        try:
+            import_trades(db, user_id, str(account.id), [{
+                "symbol": holding.symbol,
+                "trade_date": payload.pay_date.isoformat(),
+                "side": "buy",
+                "quantity": payload.drp_quantity,
+                "price": payload.drp_price,
+                "currency": payload.currency,
+                "fees": Decimal("0"),
+                "external_id": f"income-event-drp:{event.id}",
+            }], dry_run=False, commit=False)
+        except BrokerTradeImportError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        trade = db.query(BrokerTrade).filter(
+            BrokerTrade.account_id == account.id,
+            BrokerTrade.external_id == f"income-event-drp:{event.id}",
+        ).first()
+        event.reinvestment_trade_id = trade.id if trade else None
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def _owned_income_event(db: Session, user_id: str, event_id: UUID) -> InvestmentIncomeEvent:
+    event = (
+        db.query(InvestmentIncomeEvent)
+        .filter(InvestmentIncomeEvent.id == event_id, InvestmentIncomeEvent.user_id == user_id)
+        .first()
+    )
+    if not event:
+        raise HTTPException(status_code=404, detail="Investment income event not found")
+    return event
+
+
+def _financial_year_bounds(financial_year_start: int) -> tuple[date, date]:
+    """Return the inclusive/exclusive Australian FY date range for a start year."""
+    return date(financial_year_start, 7, 1), date(financial_year_start + 1, 7, 1)
+
+
+# ---------------------------------------------------------------------------
+# Investment income events
+# ---------------------------------------------------------------------------
+
+
+@router.post("/income-events", response_model=InvestmentIncomeEventResponse)
+def create_investment_income_event(
+    payload: InvestmentIncomeEventCreate,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Create an owned dividend/distribution event.
+
+    A caller-supplied source_id makes imports idempotent per investment
+    account. Tax fields are persisted exactly as supplied and never derived.
+    """
+    user_id = get_user_id(user_id)
+    return _save_income_event(db, user_id, payload)
+
+
+@router.get("/income-events", response_model=list[InvestmentIncomeEventResponse])
+def list_investment_income_events(
+    account_id: Optional[UUID] = None,
+    holding_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.user_id == user_id)
+    if account_id is not None:
+        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(InvestmentIncomeEvent.account_id == account.id)
+    if holding_id is not None:
+        holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+        if not holding or (account_id is not None and holding.account_id != account_id):
+            raise HTTPException(status_code=404, detail="Holding not found in this investment account")
+        query = query.filter(InvestmentIncomeEvent.holding_id == holding.id)
+    return query.order_by(InvestmentIncomeEvent.pay_date.desc(), InvestmentIncomeEvent.created_at.desc()).all()
+
+
+@router.put("/income-events/{event_id:uuid}", response_model=InvestmentIncomeEventResponse)
+def update_investment_income_event(
+    event_id: UUID,
+    payload: InvestmentIncomeEventCreate,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Replace an income event and rebuild its linked DRP trade when needed."""
+    user_id = get_user_id(user_id)
+    event = _owned_income_event(db, user_id, event_id)
+    return _save_income_event(db, user_id, payload, event)
+
+
+@router.delete("/income-events/{event_id:uuid}", status_code=204)
+def delete_investment_income_event(
+    event_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    event = _owned_income_event(db, user_id, event_id)
+    if event.reinvestment_trade_id:
+        try:
+            remove_trade(db, user_id, str(event.account_id), str(event.reinvestment_trade_id), commit=False)
+        except BrokerTradeImportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.delete(event)
+    db.commit()
+    return None
+
+
+@router.get("/income-events/summary", response_model=list[InvestmentIncomeSummary])
+def investment_income_summary(
+    financial_year_start: int = Query(..., ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    holding_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Summarise statement-supplied income components by Australian FY/currency."""
+    user_id = get_user_id(user_id)
+    start, end = _financial_year_bounds(financial_year_start)
+    query = db.query(
+        InvestmentIncomeEvent.currency,
+        func.coalesce(func.sum(InvestmentIncomeEvent.cash_received), 0).label("cash_income"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.franking_credit), 0).label("franking_credits"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.foreign_income), 0).label("foreign_income"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.foreign_tax_paid), 0).label("foreign_tax_paid"),
+    ).filter(
+        InvestmentIncomeEvent.user_id == user_id,
+        InvestmentIncomeEvent.pay_date >= start,
+        InvestmentIncomeEvent.pay_date < end,
+    )
+    if account_id is not None:
+        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(InvestmentIncomeEvent.account_id == account.id)
+    if holding_id is not None:
+        holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+        if not holding or (account_id is not None and holding.account_id != account_id):
+            raise HTTPException(status_code=404, detail="Holding not found in this investment account")
+        query = query.filter(InvestmentIncomeEvent.holding_id == holding.id)
+    rows = query.group_by(InvestmentIncomeEvent.currency).order_by(InvestmentIncomeEvent.currency).all()
+    return [
+        InvestmentIncomeSummary(
+            financial_year_start=financial_year_start,
+            currency=row.currency,
+            cash_income=Decimal(row.cash_income),
+            franking_credits=Decimal(row.franking_credits),
+            foreign_income=Decimal(row.foreign_income),
+            foreign_tax_paid=Decimal(row.foreign_tax_paid),
+        )
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +779,8 @@ def portfolio_summary(
 def holding_history(
     holding_id: UUID,
     days: int = Query(30, ge=1, le=3650),
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -578,12 +792,16 @@ def holding_history(
     )
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
-    cutoff = date.today() - timedelta(days=days)
+    end_date = to_date or date.today()
+    cutoff = from_date or (date.today() - timedelta(days=days))
+    if end_date < cutoff:
+        raise HTTPException(status_code=400, detail="to must be on or after from")
     rows = (
         db.query(HoldingValuation)
         .filter(
             HoldingValuation.holding_id == holding_id,
             HoldingValuation.date >= cutoff,
+            HoldingValuation.date <= end_date,
         )
         .order_by(HoldingValuation.date.asc())
         .all()
@@ -597,11 +815,16 @@ def holding_history(
 @router.get("/portfolio/history", response_model=list[ValuationPoint])
 def portfolio_history(
     days: int = Query(30, ge=1, le=3650),
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
-    cutoff = date.today() - timedelta(days=days)
+    end_date = to_date or date.today()
+    cutoff = from_date or (date.today() - timedelta(days=days))
+    if end_date < cutoff:
+        raise HTTPException(status_code=400, detail="to must be on or after from")
 
     accounts = (
         db.query(Account.id)
@@ -620,6 +843,7 @@ def portfolio_history(
         .filter(
             AccountBalance.account_id.in_(account_ids),
             AccountBalance.date >= cutoff,
+            AccountBalance.date <= end_date,
         )
         .order_by(AccountBalance.date.asc())
         .all()
@@ -771,6 +995,153 @@ def holding_lots(
             )
         )
     return out
+
+
+@router.get("/holdings/{holding_id}/cgt-allocations", response_model=list[CgtAllocationResponse])
+def holding_cgt_allocations(
+    holding_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return persisted FIFO allocation rows for disposals of this holding."""
+    user_id = get_user_id(user_id)
+    holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    return db.query(CgtAllocation).filter(
+        CgtAllocation.account_id == holding.account_id,
+        CgtAllocation.symbol == holding.symbol,
+    ).order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc()).all()
+
+
+def _cgt_allocations_query(
+    db: Session,
+    user_id: str,
+    financial_year_start: Optional[int] = None,
+    account_id: Optional[UUID] = None,
+):
+    query = db.query(CgtAllocation).join(Account, Account.id == CgtAllocation.account_id).filter(
+        Account.user_id == user_id,
+    )
+    if financial_year_start is not None:
+        start, end = _financial_year_bounds(financial_year_start)
+        query = query.filter(
+            CgtAllocation.disposal_date >= start,
+            CgtAllocation.disposal_date < end,
+        )
+    if account_id is not None:
+        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(CgtAllocation.account_id == account.id)
+    return query.order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc())
+
+
+def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
+    """Serialize persisted allocations without deriving or hiding tax-relevant values."""
+    fields = [
+        "allocation_id", "account_id", "acquisition_trade_id", "disposal_trade_id", "symbol",
+        "acquisition_date", "disposal_date", "quantity", "currency", "cost_base_native",
+        "proceeds_native", "gain_native", "cost_base_aud", "proceeds_aud", "gain_aud",
+        "fx_missing", "discount_eligible", "calculation_version", "assumptions",
+    ]
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({
+            "allocation_id": row.id,
+            "account_id": row.account_id,
+            "acquisition_trade_id": row.acquisition_trade_id,
+            "disposal_trade_id": row.disposal_trade_id,
+            "symbol": row.symbol,
+            "acquisition_date": row.acquisition_date.isoformat(),
+            "disposal_date": row.disposal_date.isoformat(),
+            "quantity": row.quantity,
+            "currency": row.currency,
+            "cost_base_native": row.cost_base_native,
+            "proceeds_native": row.proceeds_native,
+            "gain_native": row.gain_native,
+            "cost_base_aud": row.cost_base_aud if row.cost_base_aud is not None else "",
+            "proceeds_aud": row.proceeds_aud if row.proceeds_aud is not None else "",
+            "gain_aud": row.gain_aud if row.gain_aud is not None else "",
+            "fx_missing": str(bool(row.fx_missing)).lower(),
+            "discount_eligible": str(bool(row.discount_eligible)).lower(),
+            "calculation_version": row.calculation_version,
+            "assumptions": " | ".join(row.assumptions or []),
+        })
+    return output.getvalue()
+
+
+@router.get("/cgt/allocations", response_model=list[CgtAllocationResponse])
+def cgt_allocations(
+    financial_year_start: Optional[int] = Query(None, ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return the user's persisted CGT allocation records, optionally for one FY/account."""
+    user_id = get_user_id(user_id)
+    return _cgt_allocations_query(db, user_id, financial_year_start, account_id).all()
+
+
+@router.get("/cgt/export.csv")
+def export_cgt_allocations_csv(
+    financial_year_start: int = Query(..., ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Download the authenticated user's Australian-FY CGT allocation audit trail."""
+    user_id = get_user_id(user_id)
+    rows = _cgt_allocations_query(db, user_id, financial_year_start, account_id).all()
+    filename = f"cgt-allocations-fy{financial_year_start}-{financial_year_start + 1}.csv"
+    return StreamingResponse(
+        iter([_cgt_export_csv(rows)]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/cgt/summary", response_model=CgtFinancialYearSummary)
+def cgt_financial_year_summary(
+    financial_year_start: int = Query(..., ge=1900, le=2200),
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Summarise recorded Australian-dollar CGT allocations for an Australian FY.
+
+    This is a calculation record, not tax advice. Allocations lacking either
+    transaction-date FX rate are deliberately excluded from AUD totals.
+    """
+    user_id = get_user_id(user_id)
+    rows = _cgt_allocations_query(db, user_id, financial_year_start, account_id).all()
+    known = [row for row in rows if not row.fx_missing and row.gain_aud is not None]
+    gross_gains = sum((max(Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
+    losses = sum((max(-Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
+    discounted = sum((Decimal(row.gain_aud) / 2 for row in known if row.discount_eligible and row.gain_aud > 0), Decimal("0"))
+    net_before_losses = sum((
+        Decimal(row.gain_aud) / 2 if row.discount_eligible and row.gain_aud > 0 else Decimal(row.gain_aud)
+        for row in known
+    ), Decimal("0"))
+    assumptions = [
+        "FIFO matching is calculated from recorded broker trades and their recorded fees.",
+        "Corporate actions, managed-fund cost-base adjustments, and other tax elections are not calculated.",
+    ]
+    missing = len(rows) - len(known)
+    if missing:
+        assumptions.append(f"{missing} allocation(s) excluded from AUD totals because transaction-date FX is missing.")
+    return CgtFinancialYearSummary(
+        financial_year_start=financial_year_start,
+        gross_gains_aud=gross_gains.quantize(Decimal("0.01")),
+        capital_losses_aud=losses.quantize(Decimal("0.01")),
+        discounted_gains_aud=discounted.quantize(Decimal("0.01")),
+        net_capital_gain_before_losses_aud=net_before_losses.quantize(Decimal("0.01")),
+        allocation_count=len(rows),
+        missing_fx_allocation_count=missing,
+        assumptions=assumptions,
+    )
 
 
 # ---------------------------------------------------------------------------

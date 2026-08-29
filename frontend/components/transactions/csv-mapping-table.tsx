@@ -20,8 +20,12 @@ interface CsvMappingTableProps {
 
 const FIELD_MAPPINGS = [
   { key: "date", label: "Date", description: "Transaction date", required: true },
-  { key: "amount", label: "Amount", description: "Transaction amount", required: true },
+  { key: "amount", label: "Amount", description: "Signed or single transaction amount", required: false },
+  { key: "debitAmount", label: "Debit Amount", description: "Outgoing amount when debits and credits use separate columns", required: false },
+  { key: "creditAmount", label: "Credit Amount", description: "Incoming amount when debits and credits use separate columns", required: false },
   { key: "description", label: "Description", description: "Transaction description", required: true },
+  { key: "merchant", label: "Merchant", description: "Merchant or payee name", required: false },
+  { key: "transactionType", label: "Transaction Type", description: "Debit/credit indicator", required: false },
   { key: "fee", label: "Fee", description: "Transaction fee (deducted from balance)", required: false },
   { key: "state", label: "State/Status", description: "Transaction status (e.g., COMPLETED, PENDING)", required: false },
   { key: "startingBalance", label: "Starting Balance", description: "Opening balance (for verification)", required: false },
@@ -59,7 +63,7 @@ export function CsvMappingTable({
           {FIELD_MAPPINGS.map((field) => (
             <div
               key={field.key}
-              className="flex items-center justify-between gap-4 rounded-lg border bg-card p-4"
+              className="flex flex-col gap-3 rounded-lg border bg-card p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
             >
               <div className="flex-1">
                 <div className="flex items-center gap-2">
@@ -71,10 +75,10 @@ export function CsvMappingTable({
                 <p className="text-xs text-muted-foreground">{field.description}</p>
               </div>
               <Select
-                value={mapping[field.key as keyof ColumnMapping] as string || "none"}
-                onValueChange={(value) => updateMapping(field.key as keyof ColumnMapping, value)}
+                value={mapping[field.key] as string || "none"}
+                onValueChange={(value) => updateMapping(field.key, value)}
               >
-                <SelectTrigger className="w-[200px]">
+                <SelectTrigger className="w-full sm:w-[200px]">
                   <SelectValue placeholder="Select column" />
                 </SelectTrigger>
                 <SelectContent>

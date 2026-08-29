@@ -1,9 +1,9 @@
-name: syllogic
+name: personal-portfolio
 
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
-    container_name: syllogic-postgres
+    container_name: personal-portfolio-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-financeuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -19,7 +19,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: syllogic-redis
+    container_name: personal-portfolio-redis
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
@@ -32,7 +32,7 @@ services:
 
   uploads-init:
     image: alpine:3.20
-    container_name: syllogic-uploads-init
+    container_name: personal-portfolio-uploads-init
     command: ["sh", "-c", "mkdir -p /uploads/profile /uploads/logos /uploads/imports /uploads/people && chown -R 1000:1000 /uploads"]
     volumes:
       - uploads_data:/uploads
@@ -40,8 +40,8 @@ services:
 
   # One-shot DB migrations (Drizzle SQL migrations).
   migrate:
-    image: ghcr.io/syllogic-ai/syllogic-frontend:${APP_VERSION:-edge}
-    container_name: syllogic-migrate
+    image: ghcr.io/charlie-turner-314/personal-portfolio-frontend:${APP_VERSION:-edge}
+    container_name: personal-portfolio-migrate
     environment:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:
@@ -51,8 +51,8 @@ services:
     restart: "no"
 
   backend:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
-    container_name: syllogic-backend
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
+    container_name: personal-portfolio-backend
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -88,8 +88,8 @@ services:
   # Internal service port is fixed at 8001.
   # External host port defaults to 8001 and is configurable via MCP_PORT.
   mcp:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
-    container_name: syllogic-mcp
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
+    container_name: personal-portfolio-mcp
     command: uvicorn mcp_server:app --host 0.0.0.0 --port 8001
     environment:
       PROCESS_TYPE: mcp
@@ -110,8 +110,8 @@ services:
     restart: unless-stopped
 
   worker:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
-    container_name: syllogic-worker
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
+    container_name: personal-portfolio-worker
     command: celery -A celery_app worker --loglevel=info --concurrency=4
     environment:
       DATABASE_URL: ${DATABASE_URL}
@@ -134,8 +134,8 @@ services:
     restart: unless-stopped
 
   beat:
-    image: ghcr.io/syllogic-ai/syllogic-backend:${APP_VERSION:-edge}
-    container_name: syllogic-beat
+    image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
+    container_name: personal-portfolio-beat
     command: celery -A celery_app beat --loglevel=info
     environment:
       DATABASE_URL: ${DATABASE_URL}
@@ -158,8 +158,8 @@ services:
     restart: unless-stopped
 
   app:
-    image: ghcr.io/syllogic-ai/syllogic-frontend:${APP_VERSION:-edge}
-    container_name: syllogic-app
+    image: ghcr.io/charlie-turner-314/personal-portfolio-frontend:${APP_VERSION:-edge}
+    container_name: personal-portfolio-app
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL}
@@ -200,7 +200,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
-    container_name: syllogic-caddy
+    container_name: personal-portfolio-caddy
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"

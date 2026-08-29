@@ -175,7 +175,7 @@ async function main() {
   const sql = postgres(databaseUrl, {
     max: 1, // keep it minimal; this runs as a one-shot job
     connection: {
-      application_name: "syllogic-migrator",
+      application_name: "personal-portfolio-migrator",
     },
     ...(sslRequired ? { ssl: "require" } : {}),
   });

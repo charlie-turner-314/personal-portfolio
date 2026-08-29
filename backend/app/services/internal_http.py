@@ -41,8 +41,8 @@ def signed_post(
     body_hex = _body_hash(body_bytes)
     headers = {
         "content-type": "application/json",
-        "x-syllogic-user-id": user_id,
-        "x-syllogic-timestamp": ts,
-        "x-syllogic-signature": _signature("POST", path, user_id, ts, body_hex),
+        "x-personal-portfolio-user-id": user_id,
+        "x-personal-portfolio-timestamp": ts,
+        "x-personal-portfolio-signature": _signature("POST", path, user_id, ts, body_hex),
     }
     return httpx.post(url, headers=headers, content=body_bytes, timeout=timeout_seconds)

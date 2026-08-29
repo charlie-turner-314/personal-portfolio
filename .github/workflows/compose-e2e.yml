@@ -1,0 +1,90 @@
+name: Compose End-to-End
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.3
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install Playwright test runner
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Create Compose CI environment
+        run: |
+          cp deploy/compose/.env.example deploy/compose/.env.ci
+          sed -i \
+            -e 's|^APP_VERSION=.*|APP_VERSION=edge|' \
+            -e 's|^APP_URL=.*|APP_URL=http://localhost:8080|' \
+            -e 's|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=0123456789abcdef0123456789abcdef|' \
+            -e 's|^INTERNAL_AUTH_SECRET=.*|INTERNAL_AUTH_SECRET=test-internal-auth-secret|' \
+            -e 's|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=financepass|' \
+            -e 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://financeuser:financepass@postgres:5432/finance_db|' \
+            -e 's|^HTTP_PORT=.*|HTTP_PORT=8080|' \
+            deploy/compose/.env.ci
+          printf '\nHTTPS_PORT=8443\nCORS_ALLOW_ORIGINS=http://localhost:8080\nAPI_DOCS_ENABLED=false\nSTORAGE_PROVIDER=local\nLOCAL_STORAGE_PATH=/data/uploads\nOPENAI_API_KEY=\nLOGO_DEV_API_KEY=\n' >> deploy/compose/.env.ci
+
+      - name: Build and start clean Compose stack
+        run: |
+          docker compose --env-file deploy/compose/.env.ci -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.local.yml up -d --build --wait
+
+      - name: Wait for public Caddy endpoint
+        run: timeout 120 bash -c 'until curl --fail --silent --show-error http://localhost:8080/ >/dev/null; do sleep 2; done'
+
+      - name: Verify clean database migration contract
+        run: ./scripts/compose-migration-smoke.sh
+
+      - name: Run Chromium end-to-end happy path
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: pnpm exec playwright test
+
+      - name: Collect Compose diagnostics
+        if: failure()
+        run: docker compose --env-file deploy/compose/.env.ci -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.local.yml logs --no-color > compose.log
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-e2e-diagnostics
+          if-no-files-found: warn
+          path: |
+            compose.log
+            frontend/test-results
+            frontend/playwright-report
+
+      - name: Tear down Compose stack and volumes
+        if: always()
+        run: docker compose --env-file deploy/compose/.env.ci -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.local.yml down --volumes --remove-orphans

@@ -51,7 +51,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { CURRENCIES } from "@/lib/constants/currencies";
+import {
+  ACCOUNT_TYPES,
+  CURRENCIES,
+  LIABILITY_REPAYMENT_FREQUENCIES,
+  getAccountTypeLabel,
+  isLiabilityAccountType,
+} from "@/lib/constants";
 import { updateAccount, deleteAccount, recalculateAccountTimeseries } from "@/lib/actions/accounts";
 import { UpdateBalanceDialog } from "@/components/accounts/update-balance-dialog";
 import { AccountLogo } from "@/components/ui/account-logo";
@@ -60,20 +66,6 @@ import { OwnerBadges } from "@/components/household/owner-badges";
 import type { Account } from "@/lib/db/schema";
 
 type Person = { id: string; name: string; kind: string; color?: string | null; avatarUrl?: string | null };
-
-const ACCOUNT_TYPES = [
-  { value: "checking", label: "Checking Account" },
-  { value: "savings", label: "Savings Account" },
-  { value: "credit_card", label: "Credit Card" },
-  { value: "investment", label: "Investment Account" },
-  { value: "cash", label: "Cash" },
-  { value: "other", label: "Other" },
-] as const;
-
-function getAccountTypeLabel(value: string): string {
-  const type = ACCOUNT_TYPES.find((t) => t.value === value);
-  return type?.label || value;
-}
 
 type AccountWithLogo = Account & {
   logo?: {
@@ -100,6 +92,11 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
   const [editInstitution, setEditInstitution] = useState("");
   const [editCurrency, setEditCurrency] = useState("");
   const [editBalance, setEditBalance] = useState("");
+  const [editLiabilityInterestRate, setEditLiabilityInterestRate] = useState("");
+  const [editLiabilityRepaymentAmount, setEditLiabilityRepaymentAmount] = useState("");
+  const [editLiabilityRepaymentFrequency, setEditLiabilityRepaymentFrequency] = useState("unknown");
+  const [editLiabilityLoanTermMonths, setEditLiabilityLoanTermMonths] = useState("");
+  const [editLiabilitySecured, setEditLiabilitySecured] = useState("unknown");
 
   // Ownership state
   const [people, setPeople] = useState<Person[]>([]);
@@ -119,6 +116,17 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
     setEditInstitution(account.institution || "");
     setEditCurrency(account.currency || "EUR");
     setEditBalance(account.startingBalance || "0");
+    setEditLiabilityInterestRate(account.liabilityInterestRate || "");
+    setEditLiabilityRepaymentAmount(account.liabilityRepaymentAmount || "");
+    setEditLiabilityRepaymentFrequency(account.liabilityRepaymentFrequency || "unknown");
+    setEditLiabilityLoanTermMonths(account.liabilityLoanTermMonths?.toString() || "");
+    setEditLiabilitySecured(
+      account.liabilitySecured === null || account.liabilitySecured === undefined
+        ? "unknown"
+        : account.liabilitySecured
+          ? "secured"
+          : "unsecured"
+    );
     // Reset owners immediately to prevent stale state during fetch
     setEditOwners([]);
     // Fetch current owners for this account
@@ -143,13 +151,40 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
     setIsLoading(true);
 
     try {
+      const parseOptionalNumber = (value: string, label: string): number | undefined => {
+        if (!value.trim()) return undefined;
+        const parsed = parseFloat(value);
+        if (!Number.isFinite(parsed)) {
+          throw new Error(`Please enter a valid ${label}`);
+        }
+        return parsed;
+      };
+
       const balance = parseFloat(editBalance);
+      const interestRate = parseOptionalNumber(editLiabilityInterestRate, "interest rate");
+      const repaymentAmount = parseOptionalNumber(editLiabilityRepaymentAmount, "repayment amount");
+      const loanTermMonths = parseOptionalNumber(editLiabilityLoanTermMonths, "loan term");
+      if (loanTermMonths !== undefined && (!Number.isInteger(loanTermMonths) || loanTermMonths <= 0)) {
+        toast.error("Loan term must be a whole number of months");
+        setIsLoading(false);
+        return;
+      }
+      const isLiability = isLiabilityAccountType(editAccountType);
       const result = await updateAccount(editingAccount.id, {
         name: editName.trim(),
         accountType: editAccountType,
         institution: editInstitution.trim() || undefined,
         currency: editCurrency,
         startingBalance: isNaN(balance) ? 0 : balance,
+        liabilityInterestRate: isLiability ? interestRate : undefined,
+        liabilityRepaymentAmount: isLiability ? repaymentAmount : undefined,
+        liabilityRepaymentFrequency: isLiability && editLiabilityRepaymentFrequency !== "unknown"
+          ? editLiabilityRepaymentFrequency
+          : undefined,
+        liabilityLoanTermMonths: isLiability ? loanTermMonths : undefined,
+        liabilitySecured: isLiability && editLiabilitySecured !== "unknown"
+          ? editLiabilitySecured === "secured"
+          : undefined,
       });
 
       if (result.success) {
@@ -180,8 +215,8 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
       } else {
         toast.error(result.error || "Failed to update account");
       }
-    } catch {
-      toast.error("An error occurred. Please try again.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "An error occurred. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -235,7 +270,7 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
         <CardHeader>
           <CardTitle>Accounts</CardTitle>
           <CardDescription>
-            You haven't created any accounts yet. Add an account to start tracking your finances.
+            You have not created any accounts yet. Add an account to start tracking your finances.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -292,7 +327,9 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
                         currency: account.currency || "EUR",
                       }).format(parseFloat(account.functionalBalance || "0"))}
                     </p>
-                    <p className="text-xs text-muted-foreground">{account.currency}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {isLiabilityAccountType(account.accountType) ? "Balance owed" : account.currency}
+                    </p>
                   </div>
                   <Button
                     variant="outline"
@@ -356,7 +393,9 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
                 <Label htmlFor="edit-type">Account Type</Label>
                 <Select value={editAccountType} onValueChange={(v) => v && setEditAccountType(v)}>
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue>
+                      {(value) => value ? getAccountTypeLabel(value) : "Select account type"}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {ACCOUNT_TYPES.map((type) => (
@@ -404,6 +443,89 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
                   className="flex-1"
                 />
               </div>
+              {isLiabilityAccountType(editAccountType) && (
+                <div className="grid gap-4 rounded border p-3">
+                  <div>
+                    <p className="text-sm font-medium">Loan details</p>
+                    <p className="text-xs text-muted-foreground">
+                      Leave anything unknown blank.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="settings-liability-interest-rate">Interest Rate % (optional)</Label>
+                      <Input
+                        id="settings-liability-interest-rate"
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        placeholder="6.49"
+                        value={editLiabilityInterestRate}
+                        onChange={(e) => setEditLiabilityInterestRate(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="settings-liability-repayment-amount">Repayment Amount (optional)</Label>
+                      <Input
+                        id="settings-liability-repayment-amount"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0.00"
+                        value={editLiabilityRepaymentAmount}
+                        onChange={(e) => setEditLiabilityRepaymentAmount(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="settings-liability-repayment-frequency">Frequency (optional)</Label>
+                      <Select
+                        value={editLiabilityRepaymentFrequency}
+                        onValueChange={(v) => v && setEditLiabilityRepaymentFrequency(v)}
+                      >
+                        <SelectTrigger id="settings-liability-repayment-frequency">
+                          <SelectValue placeholder="Select frequency" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="unknown">Unknown</SelectItem>
+                          {LIABILITY_REPAYMENT_FREQUENCIES.map((frequency) => (
+                            <SelectItem key={frequency.value} value={frequency.value}>
+                              {frequency.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="settings-liability-loan-term">Loan Term Months (optional)</Label>
+                      <Input
+                        id="settings-liability-loan-term"
+                        type="number"
+                        step="1"
+                        min="1"
+                        placeholder="360"
+                        value={editLiabilityLoanTermMonths}
+                        onChange={(e) => setEditLiabilityLoanTermMonths(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="settings-liability-secured">Security (optional)</Label>
+                    <Select
+                      value={editLiabilitySecured}
+                      onValueChange={(v) => v && setEditLiabilitySecured(v)}
+                    >
+                      <SelectTrigger id="settings-liability-secured">
+                        <SelectValue placeholder="Select security type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unknown">Unknown</SelectItem>
+                        <SelectItem value="secured">Secured</SelectItem>
+                        <SelectItem value="unsecured">Unsecured</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
               {people.length > 1 && (
                 <OwnersField
                   people={people}
@@ -436,7 +558,7 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Account</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{deletingAccount?.name}"? This action cannot be undone.
+              Are you sure you want to delete {deletingAccount?.name}? This action cannot be undone.
               All transactions associated with this account will remain but will no longer be linked to an account.
             </AlertDialogDescription>
           </AlertDialogHeader>

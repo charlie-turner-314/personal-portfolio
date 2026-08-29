@@ -23,9 +23,10 @@ import {
 import type { SupportedHorizon } from "@/lib/dashboard/query-params";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { db } from "@/lib/db";
-import { categories, transactions, transactionLinks, users } from "@/lib/db/schema";
+import { categories, transactions, users } from "@/lib/db/schema";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";
 import type { TransactionWithRelations } from "@/lib/actions/transactions";
+import { fetchCategoryActualAmounts } from "@/lib/spending/category-actuals";
 import type {
   CategorySpendingSortField,
   CategorySpendingSortOrder,
@@ -52,14 +53,6 @@ export interface CategorySpendingTransactionsFilters extends CategorySpendingFil
   pageSize?: number;
   sort?: CategorySpendingSortField;
   order?: CategorySpendingSortOrder;
-}
-
-interface RawCategoryAmount {
-  id: string;
-  name: string;
-  color: string | null;
-  icon: string | null;
-  amount: number;
 }
 
 export interface CategorySpendingCategory {
@@ -122,6 +115,7 @@ interface CategorySpendingTransactionRowWithRelations {
   currency: string | null;
   categoryId: string | null;
   categorySystemId: string | null;
+  propertyId: string | null;
   recurringTransactionId: string | null;
   internalTransferId: string | null;
   bookedAt: Date;
@@ -151,6 +145,10 @@ interface CategorySpendingTransactionRowWithRelations {
     name: string;
     color: string | null;
     icon: string | null;
+  } | null;
+  property: {
+    id: string;
+    name: string;
   } | null;
   recurringTransaction: {
     id: string;
@@ -296,115 +294,6 @@ function resolvePrimaryRange(
   };
 }
 
-async function fetchCategoryAmounts(
-  userId: string,
-  startDate: Date,
-  endDate: Date,
-  accountIds: string[]
-): Promise<RawCategoryAmount[]> {
-  const baseConditions = [
-    eq(transactions.userId, userId),
-    eq(transactions.transactionType, "debit"),
-    eq(transactions.includeInAnalytics, true),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-
-  if (accountIds.length > 0) {
-    baseConditions.push(inArray(transactions.accountId, accountIds));
-  }
-
-  const categorizedResult = await db
-    .select({
-      id: categories.id,
-      name: categories.name,
-      color: categories.color,
-      icon: categories.icon,
-      amount: sql<string>`COALESCE(SUM(
-        CASE
-          WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-            COALESCE((
-              SELECT CASE
-                WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
-                ELSE 0
-              END
-              FROM ${transactions} t2
-              JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-              WHERE tl2.group_id = ${transactionLinks.groupId}
-                AND tl2.group_id IS NOT NULL
-            ), 0)
-          WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-          ELSE ABS(${transactions.amount})
-        END
-      ), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))
-    .where(and(...baseConditions, eq(categories.categoryType, "expense")))
-    .groupBy(categories.id, categories.name, categories.color, categories.icon)
-    .orderBy(
-      desc(
-        sql`COALESCE(SUM(
-          CASE
-            WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-              COALESCE((
-                SELECT CASE
-                  WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
-                  ELSE 0
-                END
-                FROM ${transactions} t2
-                JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-                WHERE tl2.group_id = ${transactionLinks.groupId}
-                  AND tl2.group_id IS NOT NULL
-              ), 0)
-            WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-            ELSE ABS(${transactions.amount})
-          END
-        ), 0)`
-      )
-    );
-
-  const uncategorizedResult = await db
-    .select({
-      amount: sql<string>`COALESCE(SUM(ABS(${transactions.amount})), 0)`,
-    })
-    .from(transactions)
-    .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))
-    .where(
-      and(
-        ...baseConditions,
-        isNull(transactions.categoryId),
-        isNull(transactions.categorySystemId),
-        isNull(transactionLinks.linkRole)
-      )
-    );
-
-  const items: RawCategoryAmount[] = categorizedResult.map((row) => ({
-    id: row.id,
-    name: row.name,
-    color: row.color,
-    icon: row.icon,
-    amount: parseFloat(row.amount || "0"),
-  }));
-
-  const uncategorizedAmount = parseFloat(uncategorizedResult[0]?.amount || "0");
-  if (uncategorizedAmount > 0) {
-    items.push({
-      id: "uncategorized",
-      name: "Uncategorized",
-      color: null,
-      icon: null,
-      amount: uncategorizedAmount,
-    });
-  }
-
-  return items.sort((a, b) => b.amount - a.amount);
-}
-
 function mapCategorySpendingTransactionRowsForUi(
   rows: CategorySpendingTransactionRowWithRelations[]
 ): TransactionWithRelations[] {
@@ -456,6 +345,13 @@ function mapCategorySpendingTransactionRowsForUi(
               name: tx.categorySystem.name,
               color: tx.categorySystem.color,
               icon: tx.categorySystem.icon,
+            }
+          : null,
+        propertyId: tx.propertyId,
+        property: tx.property
+          ? {
+              id: tx.property.id,
+              name: tx.property.name,
             }
           : null,
         recurringTransactionId: tx.recurringTransactionId,
@@ -578,13 +474,16 @@ export async function getCategorySpendingData(
   const { comparisonStart, comparisonEnd } = computePreviousWindow(startDate, endDate);
 
   const [currentCategories, previousCategories] = await Promise.all([
-    fetchCategoryAmounts(session.user.id, startDate, endDate, normalizedAccountIds),
-    fetchCategoryAmounts(
-      session.user.id,
-      comparisonStart,
-      comparisonEnd,
-      normalizedAccountIds
-    ),
+    fetchCategoryActualAmounts(session.user.id, {
+      startDate,
+      endDate,
+      accountIds: normalizedAccountIds,
+    }),
+    fetchCategoryActualAmounts(session.user.id, {
+      startDate: comparisonStart,
+      endDate: comparisonEnd,
+      accountIds: normalizedAccountIds,
+    }),
   ]);
 
   const previousById = new Map(previousCategories.map((item) => [item.id, item.amount]));
@@ -758,6 +657,12 @@ export async function getCategorySpendingTransactionsPage(
         },
         category: true,
         categorySystem: true,
+        property: {
+          columns: {
+            id: true,
+            name: true,
+          },
+        },
         recurringTransaction: true,
         transactionLink: true,
         internalTransfer: {

@@ -1,4 +1,5 @@
 import type { AssetCategoryKey } from "@/lib/assets/asset-category";
+import type { NetWorthSuperannuation } from "@/lib/net-worth/calculation";
 
 export type { AssetCategoryKey };
 export {
@@ -28,10 +29,26 @@ export interface AssetCategory {
   accounts: AssetAccount[];
 }
 
+export interface AssetLiability {
+  id: string;
+  name: string;
+  institution: string | null;
+  value: number;
+  currency: string;
+  initial: string;
+  source: "account" | "property" | "vehicle" | "portfolio";
+  accountType?: string | null;
+}
+
 export interface AssetsOverviewData {
   total: number;
+  grossAssets: number;
+  totalLiabilities: number;
+  netWorth: number;
   currency: string;
   categories: AssetCategory[];
+  liabilities: AssetLiability[];
+  superannuation: NetWorthSuperannuation;
 }
 
 export const PROPERTY_TYPES = [

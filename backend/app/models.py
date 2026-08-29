@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     UniqueConstraint,
+    CheckConstraint,
     JSON,
     text,
 )
@@ -52,6 +53,11 @@ class Account(Base):
     starting_balance = Column(Numeric(15, 2), default=Decimal("0"))  # Starting balance for calculation
     functional_balance = Column(Numeric(15, 2), nullable=True)  # Calculated balance (sum of transactions + starting_balance)
     balance_is_anchored = Column(Boolean, default=False)  # True when starting_balance is from verified bank data
+    liability_interest_rate = Column(Numeric(7, 4), nullable=True)
+    liability_repayment_amount = Column(Numeric(15, 2), nullable=True)
+    liability_repayment_frequency = Column(String(20), nullable=True)
+    liability_loan_term_months = Column(Integer, nullable=True)
+    liability_secured = Column(Boolean, nullable=True)
     is_active = Column(Boolean, default=True)
     alias_patterns = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     last_synced_at = Column(DateTime, nullable=True)
@@ -69,9 +75,14 @@ class Account(Base):
         passive_deletes=True,
     )
     csv_imports = relationship("CsvImport", back_populates="account")
+    csv_import_profiles = relationship("CsvImportProfile", back_populates="account", cascade="all, delete-orphan")
     balances = relationship("AccountBalance", back_populates="account")
     recurring_transactions = relationship("RecurringTransaction", back_populates="account")
+    property_liability_links = relationship("PropertyLiabilityLink", back_populates="account")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="account")
+    planned_expenses = relationship("PlannedExpense", back_populates="account")
+    cashflow_overrides = relationship("CashflowOverride", back_populates="account")
+    super_account = relationship("SuperAccount", back_populates="account", uselist=False, cascade="all, delete-orphan")
 
     # Indexes and constraints
     __table_args__ = (
@@ -154,11 +165,169 @@ class Category(Base):
     system_transactions = relationship("Transaction", back_populates="category_system", foreign_keys="Transaction.category_system_id")
     categorization_rules = relationship("CategorizationRule", back_populates="category")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="suggested_category")
+    budget_limits = relationship("BudgetLimit", back_populates="category")
+    planned_expenses = relationship("PlannedExpense", back_populates="category")
+    cashflow_overrides = relationship("CashflowOverride", back_populates="category")
 
     # Indexes and constraints
     __table_args__ = (
         Index("idx_categories_user", "user_id"),
         UniqueConstraint("user_id", "name", "parent_id", name="categories_user_name_parent"),
+    )
+
+
+class BudgetLimit(Base):
+    """Monthly planned spend for a category."""
+    __tablename__ = "budget_limits"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="CASCADE"), nullable=False, index=True)
+    month = Column(Date, nullable=False)
+    planned_amount = Column(Numeric(15, 2), nullable=False, default=Decimal("0"))
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+    category = relationship("Category", back_populates="budget_limits")
+
+    __table_args__ = (
+        Index("idx_budget_limits_user_month", "user_id", "month"),
+        Index("idx_budget_limits_category", "category_id"),
+        UniqueConstraint("user_id", "month", "category_id", name="budget_limits_user_month_category"),
+    )
+
+
+class PlannedExpense(Base):
+    """Expected irregular expense with recurrence and optional sinking-fund target."""
+    __tablename__ = "planned_expenses"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="EUR")
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="RESTRICT"), nullable=False, index=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    due_date = Column(Date, nullable=False)
+    recurrence_type = Column(String(20), nullable=False)
+    custom_interval_months = Column(Integer, nullable=True)
+    sinking_fund_target_amount = Column(Numeric(15, 2), nullable=False)
+    sinking_fund_start_date = Column(Date, nullable=False, server_default=text("CURRENT_DATE"))
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="planned_expenses")
+    category = relationship("Category", back_populates="planned_expenses")
+    account = relationship("Account", back_populates="planned_expenses")
+    linked_transactions = relationship(
+        "PlannedExpenseTransactionLink",
+        back_populates="planned_expense",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("idx_planned_expenses_user_active_due", "user_id", "is_active", "due_date"),
+        Index("idx_planned_expenses_category", "category_id"),
+        Index("idx_planned_expenses_account", "account_id"),
+        CheckConstraint("amount > 0", name="planned_expenses_amount_positive"),
+        CheckConstraint("sinking_fund_target_amount > 0", name="planned_expenses_sinking_target_positive"),
+        CheckConstraint(
+            "recurrence_type in ('one_off', 'monthly', 'quarterly', 'annual', 'custom')",
+            name="planned_expenses_recurrence_type_check",
+        ),
+        CheckConstraint(
+            "recurrence_type <> 'custom' or custom_interval_months between 1 and 120",
+            name="planned_expenses_custom_interval_check",
+        ),
+    )
+
+
+class PlannedExpenseTransactionLink(Base):
+    """Transaction linked as payment for a planned irregular expense occurrence."""
+    __tablename__ = "planned_expense_transaction_links"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    planned_expense_id = Column(UUID(as_uuid=True), ForeignKey("planned_expenses.id", ondelete="CASCADE"), nullable=False, index=True)
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False, index=True)
+    occurrence_due_date = Column(Date, nullable=False)
+    amount_applied = Column(Numeric(15, 2), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="planned_expense_transaction_links")
+    planned_expense = relationship("PlannedExpense", back_populates="linked_transactions")
+    transaction = relationship("Transaction", back_populates="planned_expense_links")
+
+    __table_args__ = (
+        Index("idx_planned_expense_links_user", "user_id"),
+        Index("idx_planned_expense_links_expense_occurrence", "planned_expense_id", "occurrence_due_date"),
+        Index("idx_planned_expense_links_transaction", "transaction_id"),
+        UniqueConstraint("planned_expense_id", "transaction_id", "occurrence_due_date", name="planned_expense_link_occurrence_unique"),
+        UniqueConstraint("transaction_id", name="planned_expense_link_transaction_unique"),
+        CheckConstraint("amount_applied > 0", name="planned_expense_links_amount_positive"),
+    )
+
+
+class CashflowOverride(Base):
+    """Manual expected cashflow entry used by the forecast."""
+    __tablename__ = "cashflow_overrides"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True)
+    expected_date = Column(Date, nullable=False)
+    direction = Column(String(20), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    description = Column(String(255), nullable=False)
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="cashflow_overrides")
+    account = relationship("Account", back_populates="cashflow_overrides")
+    category = relationship("Category", back_populates="cashflow_overrides")
+
+    __table_args__ = (
+        Index("idx_cashflow_overrides_user_date", "user_id", "expected_date"),
+        Index("idx_cashflow_overrides_account", "account_id"),
+        Index("idx_cashflow_overrides_category", "category_id"),
+        CheckConstraint(
+            "direction in ('income', 'expense', 'transfer_in', 'transfer_out')",
+            name="cashflow_overrides_direction_check",
+        ),
+        CheckConstraint("amount > 0", name="cashflow_overrides_amount_positive"),
+    )
+
+
+class RecurringTransactionScheduleOverride(Base):
+    """User-controlled anchor and direction for forecasting a recurring item."""
+    __tablename__ = "recurring_transaction_schedule_overrides"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    recurring_transaction_id = Column(UUID(as_uuid=True), ForeignKey("recurring_transactions.id", ondelete="CASCADE"), nullable=False)
+    anchor_date = Column(Date, nullable=False)
+    direction = Column(String(10), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="recurring_transaction_schedule_overrides")
+    recurring_transaction = relationship("RecurringTransaction", back_populates="schedule_override")
+
+    __table_args__ = (
+        Index("idx_recurring_schedule_overrides_user", "user_id"),
+        UniqueConstraint("recurring_transaction_id", name="recurring_schedule_overrides_recurring_unique"),
+        CheckConstraint(
+            "direction in ('inflow', 'outflow')",
+            name="recurring_schedule_overrides_direction_check",
+        ),
     )
 
 
@@ -190,6 +359,7 @@ class Transaction(Base):
     )
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)  # User-overridden category
     category_system_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)  # AI-assigned category
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)
     booked_at = Column(DateTime, nullable=False, index=True)
     pending = Column(Boolean, default=False)
     categorization_instructions = Column(Text)  # User instructions for AI categorization
@@ -205,8 +375,10 @@ class Transaction(Base):
     account = relationship("Account", back_populates="transactions")
     category = relationship("Category", foreign_keys=[category_id], back_populates="transactions")
     category_system = relationship("Category", foreign_keys=[category_system_id], back_populates="system_transactions")
+    property = relationship("Property", back_populates="transactions")
     recurring_transaction = relationship("RecurringTransaction", back_populates="linked_transactions")
     transaction_link = relationship("TransactionLink", back_populates="transaction", uselist=False)
+    planned_expense_links = relationship("PlannedExpenseTransactionLink", back_populates="transaction")
     csv_import = relationship("CsvImport", back_populates="transactions")
 
     # Indexes and constraints
@@ -349,6 +521,12 @@ class RecurringTransaction(Base):
     category = relationship("Category")
     logo = relationship("CompanyLogo", back_populates="recurring_transactions")
     linked_transactions = relationship("Transaction", back_populates="recurring_transaction")
+    schedule_override = relationship(
+        "RecurringTransactionScheduleOverride",
+        back_populates="recurring_transaction",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     # Indexes and constraints
     __table_args__ = (
@@ -389,6 +567,7 @@ class CsvImport(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    import_profile_id = Column(UUID(as_uuid=True), ForeignKey("csv_import_profiles.id", ondelete="SET NULL"), nullable=True, index=True)
     file_name = Column(String(255), nullable=False)
     file_path = Column(Text, nullable=True)
     file_path_ciphertext = Column(Text, nullable=True)
@@ -397,6 +576,7 @@ class CsvImport(Base):
     total_rows = Column(Integer, nullable=True)
     imported_rows = Column(Integer, nullable=True)
     duplicates_found = Column(Integer, nullable=True)
+    rows_needing_attention = Column(Integer, default=0, server_default=text("0"), nullable=True)
     error_message = Column(Text, nullable=True)
     # Background worker fields
     celery_task_id = Column(String(255), nullable=True)
@@ -408,12 +588,42 @@ class CsvImport(Base):
     # Relationships
     user = relationship("User", back_populates="csv_imports")
     account = relationship("Account", back_populates="csv_imports")
+    import_profile = relationship("CsvImportProfile", back_populates="csv_imports")
     transactions = relationship("Transaction", back_populates="csv_import")
 
     # Indexes and constraints
     __table_args__ = (
         Index("idx_csv_imports_user", "user_id"),
         Index("idx_csv_imports_account", "account_id"),
+        Index("idx_csv_imports_import_profile", "import_profile_id"),
+    )
+
+
+class CsvImportProfile(Base):
+    """
+    Saved CSV column mapping for an account.
+    At most one profile is stored per user/account pair.
+    """
+    __tablename__ = "csv_import_profiles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False, default="Default CSV mapping", server_default=text("'Default CSV mapping'"))
+    column_mapping = Column(JSONB, nullable=False)
+    header_signature = Column(JSONB, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="csv_import_profiles")
+    account = relationship("Account", back_populates="csv_import_profiles")
+    csv_imports = relationship("CsvImport", back_populates="import_profile")
+
+    __table_args__ = (
+        Index("idx_csv_import_profiles_user", "user_id"),
+        Index("idx_csv_import_profiles_account", "account_id"),
+        UniqueConstraint("user_id", "account_id", name="csv_import_profiles_user_account_unique"),
     )
 
 
@@ -467,6 +677,76 @@ class AccountBalance(Base):
     )
 
 
+class SuperAccount(Base):
+    """First-class superannuation metadata for a manual super account."""
+    __tablename__ = "super_accounts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    fund_name = Column(String(255), nullable=False)
+    investment_option = Column(String(255), nullable=True)
+    include_in_net_worth = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship("Account", back_populates="super_account")
+    user = relationship("User", back_populates="super_accounts")
+    contributions = relationship("SuperContribution", back_populates="super_account", cascade="all, delete-orphan")
+
+    __table_args__ = (Index("idx_super_accounts_user", "user_id"),)
+
+
+class SuperContribution(Base):
+    """Immutable fund-statement or manual contribution event, never a cash transaction."""
+    __tablename__ = "super_contributions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    super_account_id = Column(UUID(as_uuid=True), ForeignKey("super_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(Date, nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="AUD")
+    kind = Column(String(40), nullable=False)
+    notes = Column(Text, nullable=True)
+    source_import_id = Column(UUID(as_uuid=True), ForeignKey("csv_imports.id", ondelete="SET NULL"), nullable=True)
+    source_row_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    super_account = relationship("SuperAccount", back_populates="contributions")
+    user = relationship("User", back_populates="super_contributions")
+
+    __table_args__ = (
+        Index("idx_super_contributions_user_date", "user_id", "date"),
+        Index("idx_super_contributions_account_date", "super_account_id", "date"),
+        Index("super_contributions_import_row_unique", "source_import_id", "source_row_hash", unique=True, postgresql_where=text("source_import_id IS NOT NULL AND source_row_hash IS NOT NULL")),
+        CheckConstraint("amount > 0", name="super_contributions_amount_positive"),
+        CheckConstraint("kind in ('employer_sg', 'salary_sacrifice', 'personal_concessional', 'personal_non_concessional', 'fee', 'insurance')", name="super_contributions_kind_check"),
+    )
+
+
+class SuperContributionCap(Base):
+    """User-configured contribution caps for one Australian financial year."""
+    __tablename__ = "super_contribution_caps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    financial_year_start = Column(Integer, nullable=False)
+    concessional_cap = Column(Numeric(15, 2), nullable=True)
+    non_concessional_cap = Column(Numeric(15, 2), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="super_contribution_caps")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "financial_year_start", name="super_contribution_caps_user_fy_unique"),
+        CheckConstraint("financial_year_start BETWEEN 1900 AND 9998", name="super_contribution_caps_fy_check"),
+        CheckConstraint("concessional_cap IS NULL OR concessional_cap >= 0", name="super_contribution_caps_concessional_positive"),
+        CheckConstraint("non_concessional_cap IS NULL OR non_concessional_cap >= 0", name="super_contribution_caps_non_concessional_positive"),
+    )
+
+
 class Property(Base):
     """
     Property model matching Drizzle schema.
@@ -481,16 +761,65 @@ class Property(Base):
     address = Column(Text, nullable=True)
     current_value = Column(Numeric(15, 2), default=Decimal("0"))
     currency = Column(String(3), default="EUR")
+    is_rental = Column(Boolean, default=False, nullable=False)
+    valuation_date = Column(Date, nullable=True)
+    valuation_source = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     user = relationship("User", back_populates="properties")
+    linked_liabilities = relationship("PropertyLiabilityLink", back_populates="property")
+    valuations = relationship("PropertyValuation", back_populates="property")
+    transactions = relationship("Transaction", back_populates="property")
 
     # Indexes and constraints
     __table_args__ = (
         Index("idx_properties_user", "user_id"),
+    )
+
+
+class PropertyLiabilityLink(Base):
+    """Link a property to liability accounts secured against it."""
+    __tablename__ = "property_liability_links"
+
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), primary_key=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="property_liability_links")
+    property = relationship("Property", back_populates="linked_liabilities")
+    account = relationship("Account", back_populates="property_liability_links")
+
+    __table_args__ = (
+        Index("idx_property_liability_links_user", "user_id"),
+        Index("idx_property_liability_links_account", "account_id"),
+    )
+
+
+class PropertyValuation(Base):
+    """Historical valuation snapshots for a property."""
+    __tablename__ = "property_valuations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    valuation_date = Column(Date, nullable=False)
+    value = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), default="EUR", nullable=False)
+    source = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="property_valuations")
+    property = relationship("Property", back_populates="valuations")
+
+    __table_args__ = (
+        Index("idx_property_valuations_property_date", "property_id", "valuation_date"),
+        Index("idx_property_valuations_user", "user_id"),
     )
 
 
@@ -704,6 +1033,8 @@ class User(Base):
     onboarding_status = Column(String(20), default="pending")  # pending, step_1, step_2, step_3, completed
     onboarding_completed_at = Column(DateTime, nullable=True)
     functional_currency = Column(String(3), default="EUR")  # User's functional currency for reporting
+    country_code = Column(String(2), nullable=True)
+    locale = Column(String(35), nullable=True)
     profile_photo_path = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -717,12 +1048,22 @@ class User(Base):
     recurring_transactions = relationship("RecurringTransaction", back_populates="user", cascade="all, delete-orphan")
     categorization_rules = relationship("CategorizationRule", back_populates="user", cascade="all, delete-orphan")
     csv_imports = relationship("CsvImport", back_populates="user", cascade="all, delete-orphan")
+    csv_import_profiles = relationship("CsvImportProfile", back_populates="user", cascade="all, delete-orphan")
     properties = relationship("Property", back_populates="user", cascade="all, delete-orphan")
+    property_liability_links = relationship("PropertyLiabilityLink", back_populates="user", cascade="all, delete-orphan")
+    property_valuations = relationship("PropertyValuation", back_populates="user", cascade="all, delete-orphan")
     vehicles = relationship("Vehicle", back_populates="user", cascade="all, delete-orphan")
     subscription_suggestions = relationship("SubscriptionSuggestion", back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
     transaction_links = relationship("TransactionLink", back_populates="user", cascade="all, delete-orphan")
+    planned_expenses = relationship("PlannedExpense", back_populates="user", cascade="all, delete-orphan")
+    planned_expense_transaction_links = relationship("PlannedExpenseTransactionLink", back_populates="user", cascade="all, delete-orphan")
+    cashflow_overrides = relationship("CashflowOverride", back_populates="user", cascade="all, delete-orphan")
+    recurring_transaction_schedule_overrides = relationship("RecurringTransactionScheduleOverride", back_populates="user", cascade="all, delete-orphan")
     bank_connections = relationship("BankConnection", back_populates="user", cascade="all, delete-orphan")
+    super_accounts = relationship("SuperAccount", back_populates="user", cascade="all, delete-orphan")
+    super_contributions = relationship("SuperContribution", back_populates="user", cascade="all, delete-orphan")
+    super_contribution_caps = relationship("SuperContributionCap", back_populates="user", cascade="all, delete-orphan")
 
 
 class ApiKey(Base):
@@ -811,6 +1152,76 @@ class BrokerTrade(Base):
 
     __table_args__ = (
         UniqueConstraint("account_id", "external_id", name="broker_trades_account_external_uq"),
+    )
+
+
+class CgtAllocation(Base):
+    """One auditable FIFO acquisition-to-disposal allocation for Australian CGT reporting."""
+
+    __tablename__ = "cgt_allocations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    acquisition_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
+    disposal_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
+    symbol = Column(String(64), nullable=False)
+    acquisition_date = Column(Date, nullable=False)
+    disposal_date = Column(Date, nullable=False)
+    quantity = Column(Numeric(28, 8), nullable=False)
+    currency = Column(String(3), nullable=False)
+    cost_base_native = Column(Numeric(28, 8), nullable=False)
+    proceeds_native = Column(Numeric(28, 8), nullable=False)
+    gain_native = Column(Numeric(28, 8), nullable=False)
+    cost_base_aud = Column(Numeric(28, 8), nullable=True)
+    proceeds_aud = Column(Numeric(28, 8), nullable=True)
+    gain_aud = Column(Numeric(28, 8), nullable=True)
+    fx_missing = Column(Boolean, nullable=False, default=False)
+    discount_eligible = Column(Boolean, nullable=False, default=False)
+    calculation_version = Column(String(32), nullable=False, default="fifo-v1")
+    assumptions = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("acquisition_trade_id", "disposal_trade_id", name="cgt_allocations_trade_pair_uq"),
+        Index("idx_cgt_allocations_account_disposal", "account_id", "disposal_date"),
+    )
+
+
+class InvestmentIncomeEvent(Base):
+    __tablename__ = "investment_income_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    holding_id = Column(UUID(as_uuid=True), ForeignKey("holdings.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String(20), nullable=False)
+    pay_date = Column(Date, nullable=False)
+    ex_date = Column(Date, nullable=True)
+    currency = Column(String(3), nullable=False)
+    cash_received = Column(Numeric(18, 2), nullable=False)
+    franked_amount = Column(Numeric(18, 2), nullable=True)
+    unfranked_amount = Column(Numeric(18, 2), nullable=True)
+    franking_credit = Column(Numeric(18, 2), nullable=True)
+    foreign_income = Column(Numeric(18, 2), nullable=True)
+    foreign_tax_paid = Column(Numeric(18, 2), nullable=True)
+    amit_amma_components = Column(JSON, nullable=True)
+    is_drp = Column(Boolean, nullable=False, default=False)
+    drp_quantity = Column(Numeric(28, 8), nullable=True)
+    drp_price = Column(Numeric(28, 8), nullable=True)
+    reinvestment_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="SET NULL"), nullable=True)
+    source_id = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "source_id", name="investment_income_events_account_source_uq"),
+        CheckConstraint("event_type IN ('dividend', 'distribution')", name="investment_income_events_type_check"),
+        CheckConstraint("cash_received >= 0", name="investment_income_events_cash_received_check"),
+        CheckConstraint("is_drp = false OR (drp_quantity > 0 AND drp_price >= 0)", name="investment_income_events_drp_check"),
+        Index("idx_investment_income_events_user_pay_date", "user_id", "pay_date"),
+        Index("idx_investment_income_events_holding_pay_date", "holding_id", "pay_date"),
     )
 
 

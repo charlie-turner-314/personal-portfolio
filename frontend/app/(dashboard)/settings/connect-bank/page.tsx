@@ -22,7 +22,7 @@ export default async function ConnectBankPage() {
             </div>
           }
         >
-          <BankPicker />
+          <BankPicker countryCode={user.countryCode} />
         </Suspense>
       </div>
     </>

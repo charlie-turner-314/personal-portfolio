@@ -417,6 +417,7 @@ def process_csv_import(
 
         # Update CSV import record
         csv_import.status = "completed"
+        csv_import.duplicates_found = max(csv_import.duplicates_found or 0, total_skipped)
         csv_import.imported_rows = total_inserted
         csv_import.completed_at = datetime.utcnow()
         db.commit()
@@ -463,7 +464,6 @@ def process_csv_import(
         db.close()
         publisher.close()
         clear_request_user_id(request_token)
-
 
 
 

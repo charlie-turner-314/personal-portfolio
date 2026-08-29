@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { JetBrains_Mono } from "next/font/google";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { getOnboardingRedirectPath } from "@/lib/actions/onboarding";
@@ -8,15 +7,13 @@ import { getCachedSession, getCachedOnboardingStatus } from "@/lib/data/cached";
 import { ImportStatusNotifier } from "@/components/import-status-notifier";
 import { WalkthroughProvider } from "@/components/walkthrough/walkthrough-provider";
 
-const jbMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jb-mono", weight: ["400","500","600","700"] });
-
 export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const cookieStore = await cookies();
-  const sidebarCookie = cookieStore.get("syllogic.sidebar.open")?.value;
+  const sidebarCookie = cookieStore.get("personal-portfolio.sidebar.open")?.value;
   const defaultSidebarOpen = sidebarCookie === "true";
 
   const session = await getCachedSession();
@@ -39,7 +36,7 @@ export default async function DashboardLayout({
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <WalkthroughProvider>
         <AppSidebar initialUser={session.user} />
-        <SidebarInset className={jbMono.variable}>{children}</SidebarInset>
+        <SidebarInset>{children}</SidebarInset>
         <ImportStatusNotifier />
       </WalkthroughProvider>
     </SidebarProvider>

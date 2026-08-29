@@ -3,13 +3,14 @@
 import { revalidatePath, updateTag } from "next/cache";
 import { eq, and, lte, gte, lt, desc, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, type NewAccount } from "@/lib/db/schema";
+import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, type NewAccount } from "@/lib/db/schema";
 import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
 import { resolveMissingAccountLogo } from "@/lib/actions/account-logos";
 import { getCachedFullUserAccounts, CACHE_TAGS } from "@/lib/data/cached";
+import { isLiabilityAccountType } from "@/lib/constants/account-types";
 
 export interface CreateAccountInput {
   name: string;
@@ -17,10 +18,60 @@ export interface CreateAccountInput {
   institution?: string;
   currency: string;
   startingBalance?: number;
+  liabilityInterestRate?: number | null;
+  liabilityRepaymentAmount?: number | null;
+  liabilityRepaymentFrequency?: string | null;
+  liabilityLoanTermMonths?: number | null;
+  liabilitySecured?: boolean | null;
+  superFundName?: string;
+  superInvestmentOption?: string | null;
+  includeSuperInNetWorth?: boolean;
 }
 
 export interface UpdateAccountInput extends Partial<CreateAccountInput> {
   logoId?: string | null;
+}
+
+function decimalStringOrNull(value: number | null | undefined): string | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value.toString()
+    : null;
+}
+
+function integerOrNull(value: number | null | undefined): number | null {
+  return Number.isInteger(value ?? NaN) && (value as number) > 0
+    ? value as number
+    : null;
+}
+
+function buildLiabilityFields(
+  accountType: string,
+  input: CreateAccountInput | UpdateAccountInput,
+): Pick<
+  NewAccount,
+  | "liabilityInterestRate"
+  | "liabilityRepaymentAmount"
+  | "liabilityRepaymentFrequency"
+  | "liabilityLoanTermMonths"
+  | "liabilitySecured"
+> {
+  if (!isLiabilityAccountType(accountType)) {
+    return {
+      liabilityInterestRate: null,
+      liabilityRepaymentAmount: null,
+      liabilityRepaymentFrequency: null,
+      liabilityLoanTermMonths: null,
+      liabilitySecured: null,
+    };
+  }
+
+  return {
+    liabilityInterestRate: decimalStringOrNull(input.liabilityInterestRate),
+    liabilityRepaymentAmount: decimalStringOrNull(input.liabilityRepaymentAmount),
+    liabilityRepaymentFrequency: input.liabilityRepaymentFrequency || null,
+    liabilityLoanTermMonths: integerOrNull(input.liabilityLoanTermMonths),
+    liabilitySecured: input.liabilitySecured ?? null,
+  };
 }
 
 export async function createAccount(
@@ -33,6 +84,9 @@ export async function createAccount(
   }
 
   try {
+    if (input.accountType === "superannuation" && !input.superFundName?.trim()) {
+      return { success: false, error: "Fund or provider is required for a super account" };
+    }
     const balanceValue = input.startingBalance?.toString() || "0";
     const newAccount: NewAccount = {
       userId,
@@ -42,11 +96,24 @@ export async function createAccount(
       currency: input.currency,
       startingBalance: balanceValue,
       functionalBalance: balanceValue, // For manual accounts, functional = starting
+      ...buildLiabilityFields(input.accountType, input),
       provider: "manual",
       isActive: true,
     };
 
-    const [result] = await db.insert(accounts).values(newAccount).returning({ id: accounts.id });
+    const result = await db.transaction(async (tx) => {
+      const [account] = await tx.insert(accounts).values(newAccount).returning({ id: accounts.id });
+      if (input.accountType === "superannuation") {
+        await tx.insert(superAccounts).values({
+          accountId: account.id,
+          userId,
+          fundName: input.superFundName!.trim(),
+          investmentOption: input.superInvestmentOption?.trim() || null,
+          includeInNetWorth: input.includeSuperInNetWorth ?? true,
+        });
+      }
+      return account;
+    });
 
     revalidatePath("/settings");
     revalidatePath("/transactions/import");
@@ -98,6 +165,18 @@ export async function updateAccount(
     }
     if ("logoId" in input) {
       updateData.logoId = input.logoId ?? null;
+    }
+
+    const shouldUpdateLiabilityFields =
+      "accountType" in input ||
+      "liabilityInterestRate" in input ||
+      "liabilityRepaymentAmount" in input ||
+      "liabilityRepaymentFrequency" in input ||
+      "liabilityLoanTermMonths" in input ||
+      "liabilitySecured" in input;
+    if (shouldUpdateLiabilityFields) {
+      const nextAccountType = input.accountType ?? account.accountType;
+      Object.assign(updateData, buildLiabilityFields(nextAccountType, input));
     }
 
     await db.update(accounts).set(updateData).where(eq(accounts.id, accountId));

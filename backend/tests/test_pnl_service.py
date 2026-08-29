@@ -4,7 +4,13 @@ from decimal import Decimal
 
 import pytest
 
-from app.services.pnl_service import compute_fifo, OverSellError, Trade
+from app.services.pnl_service import (
+    cgt_aud_values_for_closed_lot,
+    compute_fifo,
+    is_cgt_discount_eligible,
+    OverSellError,
+    Trade,
+)
 
 
 def _t(symbol, d, side, qty, price, currency="USD", fees="0"):
@@ -209,3 +215,66 @@ def test_compute_fifo_separates_lots_by_currency():
     assert set(open_by_currency.keys()) == {"USD", "EUR"}
     assert open_by_currency["USD"].quantity_remaining == Decimal("5")
     assert open_by_currency["EUR"].quantity_remaining == Decimal("10")
+
+
+def test_compute_fifo_retains_trade_identity_and_stable_same_day_ordering():
+    trades = [
+        Trade("AAPL", date(2024, 1, 10), "buy", Decimal("1"), Decimal("100"), "AUD", trade_id="buy-b", sort_key="b"),
+        Trade("AAPL", date(2024, 1, 10), "buy", Decimal("1"), Decimal("90"), "AUD", trade_id="buy-a", sort_key="a"),
+        Trade("AAPL", date(2024, 2, 1), "sell", Decimal("1"), Decimal("120"), "AUD", trade_id="sell-a"),
+    ]
+
+    result = compute_fifo(trades)
+
+    assert result.realized[0].acquisition_trade_id == "buy-a"
+    assert result.realized[0].disposal_trade_id == "sell-a"
+    assert result.realized[0].cost_native == Decimal("90")
+
+
+def test_cgt_discount_uses_calendar_year_anniversary_including_leap_day():
+    assert not is_cgt_discount_eligible(date(2024, 1, 10), date(2025, 1, 9))
+    assert is_cgt_discount_eligible(date(2024, 1, 10), date(2025, 1, 10))
+    assert is_cgt_discount_eligible(date(2024, 2, 29), date(2025, 2, 28))
+
+
+def test_cgt_aud_values_convert_cost_and_proceeds_on_their_own_trade_dates():
+    lot = compute_fifo([
+        _t("VTI", "2024-01-10", "buy", 10, 100, currency="USD", fees="10"),
+        _t("VTI", "2025-07-10", "sell", 10, 150, currency="USD", fees="5"),
+    ]).realized[0]
+    calls = []
+
+    def fx_rate_for(source, target, on):
+        calls.append((source, target, on))
+        return {
+            date(2024, 1, 10): Decimal("0.70"),
+            date(2025, 7, 10): Decimal("0.80"),
+        }[on]
+
+    values = cgt_aud_values_for_closed_lot(lot, fx_rate_for)
+
+    assert values.cost_base_aud == Decimal("707.00")  # (1000 + 10) USD at 0.70
+    assert values.proceeds_aud == Decimal("1196.00")  # (1500 - 5) USD at 0.80
+    assert values.gain_aud == Decimal("489.00")
+    assert not values.fx_missing
+    assert calls == [
+        ("USD", "AUD", date(2024, 1, 10)),
+        ("USD", "AUD", date(2025, 7, 10)),
+    ]
+
+
+def test_cgt_aud_values_disclose_missing_fx_without_partial_aud_amounts():
+    lot = compute_fifo([
+        _t("VTI", "2024-01-10", "buy", 1, 100, currency="USD"),
+        _t("VTI", "2025-07-10", "sell", 1, 120, currency="USD"),
+    ]).realized[0]
+
+    values = cgt_aud_values_for_closed_lot(
+        lot,
+        lambda _source, _target, on: Decimal("0.70") if on == lot.open_date else None,
+    )
+
+    assert values.fx_missing
+    assert values.cost_base_aud is None
+    assert values.proceeds_aud is None
+    assert values.gain_aud is None

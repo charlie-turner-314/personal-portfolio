@@ -1,14 +1,19 @@
 "use client";
 
 import type { SubscriptionOrSuggestion } from "./subscriptions-client";
-import { calculateMonthlyEquivalent, getCurrencyFallback } from "./subscription-math";
+import { formatCurrency } from "@/lib/utils";
+import { calculateMonthlyEquivalent } from "./subscription-math";
 
 interface SubscriptionsSummaryRowProps {
   data: SubscriptionOrSuggestion[];
+  currency: string;
+  locale: string;
 }
 
 export function SubscriptionsSummaryRow({
   data,
+  currency,
+  locale,
 }: SubscriptionsSummaryRowProps) {
   // Only sum active subscriptions (exclude suggestions)
   const activeSubscriptions = data.filter((s) => !s.isSuggestion && s.isActive);
@@ -17,16 +22,17 @@ export function SubscriptionsSummaryRow({
     return sum + calculateMonthlyEquivalent(subscription);
   }, 0);
 
-  // Get currency from first subscription (assuming all use same currency)
-  const currency = getCurrencyFallback(data);
-
   return (
     <div className="border-t bg-muted/30 px-4 py-3 flex items-center justify-between">
       <span className="text-sm font-medium text-muted-foreground">
         Monthly Total
       </span>
       <span className="text-sm font-mono font-semibold">
-        {monthlyTotal.toFixed(2)} {currency}
+        {formatCurrency(monthlyTotal, currency, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+          locale,
+        })}
       </span>
     </div>
   );

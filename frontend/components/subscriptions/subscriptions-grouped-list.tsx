@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { SubscriptionsSummaryRow } from "./subscriptions-summary-row";
 import { CompanyLogo } from "@/components/ui/company-logo";
 import {
@@ -32,10 +32,7 @@ import {
   RiMoreLine,
 } from "@remixicon/react";
 import type { SubscriptionOrSuggestion } from "./subscriptions-client";
-import {
-  calculateMonthlyEquivalent,
-  getCurrencyFallback,
-} from "./subscription-math";
+import { calculateMonthlyEquivalent } from "./subscription-math";
 import { WeightBarVisualizer } from "@/components/assets/weight-bar-visualizer";
 import type { SubscriptionKpis } from "@/lib/actions/subscriptions";
 import { SubscriptionsKpiGrid } from "./subscriptions-kpi-grid";
@@ -43,6 +40,8 @@ import { SubscriptionsKpiGrid } from "./subscriptions-kpi-grid";
 interface SubscriptionsGroupedListProps {
   data: SubscriptionOrSuggestion[];
   kpis: SubscriptionKpis;
+  displayCurrency: string;
+  locale: string;
   onAdd: () => void;
   onEdit: (row: SubscriptionOrSuggestion) => void;
   onDelete: (row: SubscriptionOrSuggestion) => void;
@@ -136,6 +135,8 @@ function groupByCategory(
 export function SubscriptionsGroupedList({
   data,
   kpis,
+  displayCurrency,
+  locale,
   onAdd,
   onEdit,
   onDelete,
@@ -182,8 +183,6 @@ export function SubscriptionsGroupedList({
   }, [data]);
 
   const renderCategoryHeader = (group: CategoryGroup, muted = false) => {
-    const currency = getCurrencyFallback(group.items);
-
     return (
       <div
         className={cn(
@@ -208,7 +207,11 @@ export function SubscriptionsGroupedList({
             </span>
           </div>
           <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-            {group.monthlyTotal.toFixed(2)} {currency} / mo
+            {formatCurrency(group.monthlyTotal, displayCurrency, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+              locale,
+            })} / mo
           </span>
         </div>
       </div>
@@ -239,7 +242,6 @@ export function SubscriptionsGroupedList({
     muted = false
   ) => {
     const amount = parseFloat(item.amount || "0");
-    const currency = item.currency || "EUR";
     const frequencyLabel = frequencyLabels[item.frequency] || item.frequency;
     const frequencyClass =
       frequencyColors[item.frequency] || "bg-gray-500/10 text-gray-700";
@@ -292,7 +294,11 @@ export function SubscriptionsGroupedList({
 
         <div className="flex items-center gap-3">
           <span className="whitespace-nowrap font-mono text-sm">
-            {amount.toFixed(2)} {currency}
+            {formatCurrency(amount, displayCurrency, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+              locale,
+            })}
           </span>
           {!item.isSuggestion && (
             item.isActive ? (
@@ -429,7 +435,11 @@ export function SubscriptionsGroupedList({
         </div>
       )}
 
-      <SubscriptionsSummaryRow data={data} />
+      <SubscriptionsSummaryRow
+        data={data}
+        currency={displayCurrency}
+        locale={locale}
+      />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>

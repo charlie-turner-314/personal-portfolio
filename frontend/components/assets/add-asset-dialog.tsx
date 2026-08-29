@@ -16,12 +16,14 @@ import { AssetTypeSelector } from "./asset-type-selector";
 import { AddPropertyForm } from "./add-property-form";
 import { AddVehicleForm } from "./add-vehicle-form";
 import type { AssetType } from "./types";
+import type { Account } from "@/lib/db/schema";
 
 interface AddAssetDialogProps {
   onAssetAdded?: () => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   showTrigger?: boolean;
+  liabilityAccounts?: Account[];
 }
 
 type DialogStep = "select" | "property" | "vehicle" | "account";
@@ -31,6 +33,7 @@ export function AddAssetDialog({
   open: controlledOpen,
   onOpenChange,
   showTrigger = true,
+  liabilityAccounts = [],
 }: AddAssetDialogProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const isControlled = controlledOpen !== undefined;
@@ -118,7 +121,11 @@ export function AddAssetDialog({
         )}
 
         {step === "property" && (
-          <AddPropertyForm onSuccess={handleSuccess} onCancel={() => setStep("select")} />
+          <AddPropertyForm
+            onSuccess={handleSuccess}
+            onCancel={() => setStep("select")}
+            liabilityAccounts={liabilityAccounts}
+          />
         )}
 
         {step === "vehicle" && (

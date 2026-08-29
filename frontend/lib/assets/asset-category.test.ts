@@ -22,6 +22,7 @@ describe("getAssetCategory", () => {
   it("maps investment and brokerage to investment", () => {
     expect(getAssetCategory("investment")).toBe("investment");
     expect(getAssetCategory("brokerage")).toBe("investment");
+    expect(getAssetCategory("superannuation")).toBe("investment");
   });
 
   it("maps investment_brokerage and investment_manual to investment", () => {
@@ -32,6 +33,13 @@ describe("getAssetCategory", () => {
 
   it("maps credit_card to other", () => {
     expect(getAssetCategory("credit_card")).toBe("other");
+  });
+
+  it("maps liability account types to other for gross asset grouping", () => {
+    expect(getAssetCategory("mortgage")).toBe("other");
+    expect(getAssetCategory("personal_loan")).toBe("other");
+    expect(getAssetCategory("hecs_help")).toBe("other");
+    expect(getAssetCategory("other_liability")).toBe("other");
   });
 
   it("maps cash to cash", () => {

@@ -44,6 +44,10 @@ import {
 } from "@remixicon/react";
 import type { CategoryForFilter, AccountForFilter } from "@/types";
 import type { TransactionsQueryState } from "@/lib/transactions/query-state";
+import {
+  getAustralianFinancialYearLabelForDateRange,
+  getAustralianFinancialYearPresetDateRanges,
+} from "@/lib/dates/australian-financial-year";
 import { cn } from "@/lib/utils";
 
 interface RecurringFilterOption {
@@ -72,48 +76,54 @@ interface FilterOption {
   color?: string;
 }
 
-const datePresets = [
-  {
-    label: "This Week",
-    getValue: () => ({
-      from: startOfWeek(new Date(), { weekStartsOn: 1 }),
-      to: endOfWeek(new Date(), { weekStartsOn: 1 }),
-    }),
-  },
-  {
-    label: "This Month",
-    getValue: () => ({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) }),
-  },
-  {
-    label: "Last Month",
-    getValue: () => {
-      const date = subMonths(new Date(), 1);
-      return { from: startOfMonth(date), to: endOfMonth(date) };
+function getDatePresets() {
+  return [
+    {
+      label: "This Week",
+      getValue: () => ({
+        from: startOfWeek(new Date(), { weekStartsOn: 1 }),
+        to: endOfWeek(new Date(), { weekStartsOn: 1 }),
+      }),
     },
-  },
-  {
-    label: "This Quarter",
-    getValue: () => ({ from: startOfQuarter(new Date()), to: endOfQuarter(new Date()) }),
-  },
-  {
-    label: "Last Quarter",
-    getValue: () => {
-      const date = subQuarters(new Date(), 1);
-      return { from: startOfQuarter(date), to: endOfQuarter(date) };
+    {
+      label: "This Month",
+      getValue: () => ({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) }),
     },
-  },
-  {
-    label: "This Year",
-    getValue: () => ({ from: startOfYear(new Date()), to: endOfYear(new Date()) }),
-  },
-  {
-    label: "Last Year",
-    getValue: () => {
-      const date = subYears(new Date(), 1);
-      return { from: startOfYear(date), to: endOfYear(date) };
+    {
+      label: "Last Month",
+      getValue: () => {
+        const date = subMonths(new Date(), 1);
+        return { from: startOfMonth(date), to: endOfMonth(date) };
+      },
     },
-  },
-];
+    {
+      label: "This Quarter",
+      getValue: () => ({ from: startOfQuarter(new Date()), to: endOfQuarter(new Date()) }),
+    },
+    {
+      label: "Last Quarter",
+      getValue: () => {
+        const date = subQuarters(new Date(), 1);
+        return { from: startOfQuarter(date), to: endOfQuarter(date) };
+      },
+    },
+    {
+      label: "This Year",
+      getValue: () => ({ from: startOfYear(new Date()), to: endOfYear(new Date()) }),
+    },
+    {
+      label: "Last Year",
+      getValue: () => {
+        const date = subYears(new Date(), 1);
+        return { from: startOfYear(date), to: endOfYear(date) };
+      },
+    },
+    ...getAustralianFinancialYearPresetDateRanges().map((preset) => ({
+      label: preset.label,
+      getValue: () => ({ from: preset.range.from, to: preset.range.to }),
+    })),
+  ];
+}
 
 interface MultiSelectFilterProps {
   label: string;
@@ -246,6 +256,8 @@ interface DateRangeFilterProps {
 
 function formatDateRangeDisplay(range: DateRange | undefined): string {
   if (!range?.from) return "Range";
+  const financialYearLabel = getAustralianFinancialYearLabelForDateRange(range.from, range.to);
+  if (financialYearLabel) return financialYearLabel;
   if (!range.to) return format(range.from, "MMM d, yyyy");
 
   const spansDifferentYears = range.from.getFullYear() !== range.to.getFullYear();
@@ -258,6 +270,7 @@ function formatDateRangeDisplay(range: DateRange | undefined): string {
 
 function DateRangeFilter({ dateRange, onDateRangeChange }: DateRangeFilterProps) {
   const [open, setOpen] = React.useState(false);
+  const datePresets = getDatePresets();
 
   return (
     <div className="space-y-2">
@@ -716,9 +729,7 @@ export function TransactionFilters({
             </PopoverContent>
           </Popover>
         </div>
-        <div data-walkthrough="walkthrough-import">
-        {action}
-        </div>
+        <div>{action}</div>
       </div>
 
       {filterTags.length > 0 && (

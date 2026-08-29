@@ -30,10 +30,10 @@ class ExchangeRateService:
     """Service for managing exchange rates using Yahoo Finance API."""
 
     # Default currencies to fetch if no transactions exist
-    DEFAULT_CURRENCIES = ["EUR", "USD", "GBP", "JPY", "INR"]
+    DEFAULT_CURRENCIES = ["EUR", "USD", "AUD", "GBP", "JPY", "INR"]
 
     # Functional currencies supported (target currencies for conversion)
-    FUNCTIONAL_CURRENCIES = ["EUR", "USD"]
+    FUNCTIONAL_CURRENCIES = ["EUR", "USD", "AUD"]
 
     # Batch size for API calls (days per batch to avoid rate limits)
     BATCH_SIZE_DAYS = 365  # Yahoo Finance can handle larger batches
@@ -69,8 +69,8 @@ class ExchangeRateService:
                 logger.info("No currencies found in transactions, using defaults")
                 return self.DEFAULT_CURRENCIES
 
-            # Always include EUR and USD
-            for curr in ["EUR", "USD"]:
+            # Always include supported reporting currencies
+            for curr in self.FUNCTIONAL_CURRENCIES:
                 if curr not in currency_list:
                     currency_list.append(curr)
 
@@ -93,7 +93,7 @@ class ExchangeRateService:
         
         Args:
             base_currency: Base currency (transaction currency) - what we're converting FROM
-            target_currencies: List of target currencies (EUR, USD) - what we're converting TO
+            target_currencies: List of target currencies - what we're converting TO
             start_date: Start date of the range
             end_date: End date of the range
 

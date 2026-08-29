@@ -8,6 +8,7 @@ from sqlalchemy.orm import aliased
 
 from app.mcp.dependencies import get_db, validate_uuid, validate_date
 from app.models import Transaction, Category, Account, TransactionLink
+from app.services.net_worth_service import calculate_net_worth, classify_account_amount
 from app.services.ownership_service import attribute_amount, entity_ids_for_people, get_owners
 
 
@@ -355,7 +356,8 @@ def get_financial_summary(
             share-weighted to that person's ownership fraction.
 
     Returns:
-        Summary with total income, total expenses, net, and account balances
+        Summary with income, expenses, cashflow, account balances, gross assets,
+        total liabilities, and net worth.
     """
     # Validate parameters
     from_dt = validate_date(from_date)
@@ -384,6 +386,9 @@ def get_financial_summary(
                 "net_cashflow": 0,
                 "savings_rate": 0,
                 "total_balance": 0,
+                "gross_assets": 0,
+                "total_liabilities": 0,
+                "net_worth": 0,
                 "accounts": [],
             }
         _ids_literal = ", ".join(f"'{a}'" for a in _allowed_account_ids)
@@ -453,18 +458,25 @@ def get_financial_summary(
                 return attribute_amount(full, owners_cache[str(acc.id)], person_ids[0])
             return full
 
-        total_balance = sum(_acc_balance(acc) for acc in accounts)
-
-        account_balances = [
-            {
+        gross_assets = 0.0
+        total_liabilities = 0.0
+        total_balance = 0.0
+        account_balances = []
+        for acc in accounts:
+            balance = _acc_balance(acc)
+            classified = classify_account_amount(balance, acc.account_type)
+            gross_assets += classified.asset_amount
+            total_liabilities += classified.liability_amount
+            total_balance += balance
+            account_balances.append({
                 "id": str(acc.id),
                 "name": acc.name,
-                "balance": _acc_balance(acc),
+                "balance": balance,
                 "currency": acc.currency,
                 "account_type": acc.account_type,
-            }
-            for acc in accounts
-        ]
+            })
+
+        net_worth = calculate_net_worth(gross_assets, total_liabilities)
 
         return {
             "period": {
@@ -476,6 +488,9 @@ def get_financial_summary(
             "net_cashflow": total_income - total_expenses,
             "savings_rate": round((total_income - total_expenses) / total_income * 100, 1) if total_income > 0 else 0,
             "total_balance": total_balance,
+            "gross_assets": gross_assets,
+            "total_liabilities": total_liabilities,
+            "net_worth": net_worth,
             "accounts": account_balances,
         }
 

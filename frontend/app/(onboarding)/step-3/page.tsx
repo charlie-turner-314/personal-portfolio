@@ -22,8 +22,9 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { OnboardingProgress } from "@/components/onboarding/onboarding-progress";
 import { AccountForm } from "@/components/accounts/account-form";
-import { completeOnboarding } from "@/lib/actions/onboarding";
+import { completeOnboarding, getCurrentUser } from "@/lib/actions/onboarding";
 import { getAccounts } from "@/lib/actions/accounts";
+import { FALLBACK_REGIONAL_DEFAULTS, getCountryDefaults, inferCountryCodeFromProfile } from "@/lib/constants";
 import type { Account } from "@/lib/db/schema";
 
 export default function OnboardingStep3Page() {
@@ -32,6 +33,8 @@ export default function OnboardingStep3Page() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [countryCode, setCountryCode] = useState(FALLBACK_REGIONAL_DEFAULTS.code);
+  const [currency, setCurrency] = useState(FALLBACK_REGIONAL_DEFAULTS.defaultCurrency);
 
   const loadAccounts = async () => {
     try {
@@ -45,7 +48,21 @@ export default function OnboardingStep3Page() {
   };
 
   useEffect(() => {
-    loadAccounts();
+    async function loadProfileAndAccounts() {
+      try {
+        const user = await getCurrentUser();
+        const defaults = getCountryDefaults(inferCountryCodeFromProfile({
+          countryCode: user?.countryCode,
+          functionalCurrency: user?.functionalCurrency,
+          locale: user?.locale,
+        }));
+        setCountryCode(defaults.code);
+        setCurrency(user?.functionalCurrency || defaults.defaultCurrency);
+      } finally {
+        loadAccounts();
+      }
+    }
+    loadProfileAndAccounts();
   }, []);
 
   const handleComplete = async () => {
@@ -90,8 +107,9 @@ export default function OnboardingStep3Page() {
         <CardHeader>
           <CardTitle>Set up your first bank account</CardTitle>
           <CardDescription>
-            We&apos;re starting with CSV import only. Create your first account to
-            begin importing transactions.
+            Create a transaction account, savings account, credit card, home loan,
+            super account, or brokerage account. Property and vehicle assets can
+            be added from Assets after setup.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex-1 min-h-0">
@@ -121,7 +139,8 @@ export default function OnboardingStep3Page() {
                 <div className="space-y-2">
                   <h3 className="font-medium">No accounts yet</h3>
                   <p className="text-sm text-muted-foreground max-w-md">
-                    Create one account to start importing your transactions via CSV.
+                    Start with the account you use most. Australian users can add
+                    CSV imports now and connect live banking when the CDR path is available.
                   </p>
                 </div>
               </div>
@@ -167,6 +186,9 @@ export default function OnboardingStep3Page() {
             onCancel={() => setIsDialogOpen(false)}
             submitLabel="Create Account"
             successMessage="Account created successfully"
+            defaultCurrency={currency}
+            defaultAccountType="checking"
+            countryCode={countryCode}
           />
         </DialogContent>
       </Dialog>

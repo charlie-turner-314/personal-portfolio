@@ -11,6 +11,7 @@ import {
   jsonb,
   index,
   unique,
+  check,
   numeric,
   date,
   time,
@@ -37,6 +38,8 @@ export const users = pgTable("users", {
   onboardingStatus: varchar("onboarding_status", { length: 20 }).default("pending"), // pending, step_1, step_2, step_3, completed
   onboardingCompletedAt: timestamp("onboarding_completed_at"),
   functionalCurrency: char("functional_currency", { length: 3 }).default("EUR"), // User's functional currency for reporting
+  countryCode: char("country_code", { length: 2 }),
+  locale: varchar("locale", { length: 35 }),
   profilePhotoPath: text("profile_photo_path"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -227,6 +230,11 @@ export const accounts = pgTable(
     startingBalance: decimal("starting_balance", { precision: 15, scale: 2 }).default("0"), // Starting balance for calculation
     functionalBalance: decimal("functional_balance", { precision: 15, scale: 2 }), // Calculated balance (sum of transactions + starting_balance)
     balanceIsAnchored: boolean("balance_is_anchored").default(false), // True when startingBalance is derived from known bank data (CSV with verified opening/closing balance)
+    liabilityInterestRate: decimal("liability_interest_rate", { precision: 7, scale: 4 }),
+    liabilityRepaymentAmount: decimal("liability_repayment_amount", { precision: 15, scale: 2 }),
+    liabilityRepaymentFrequency: varchar("liability_repayment_frequency", { length: 20 }),
+    liabilityLoanTermMonths: integer("liability_loan_term_months"),
+    liabilitySecured: boolean("liability_secured"),
     isActive: boolean("is_active").default(true),
     aliasPatterns: jsonb("alias_patterns").$type<string[]>().default([]).notNull(),
     lastSyncedAt: timestamp("last_synced_at"),
@@ -254,6 +262,83 @@ export const accounts = pgTable(
       .on(table.userId, table.ibanHash)
       .where(sql`${table.provider} = 'manual' AND ${table.ibanHash} IS NOT NULL`),
   ]
+);
+
+/** Australian superannuation-specific metadata for an account. */
+export const superAccounts = pgTable(
+  "super_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    fundName: varchar("fund_name", { length: 255 }).notNull(),
+    investmentOption: varchar("investment_option", { length: 255 }),
+    includeInNetWorth: boolean("include_in_net_worth").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("super_accounts_account_unique").on(table.accountId),
+    index("idx_super_accounts_user").on(table.userId),
+  ],
+);
+
+export const superContributions = pgTable(
+  "super_contributions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    superAccountId: uuid("super_account_id")
+      .references(() => superAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    date: date("date").notNull(),
+    amount: decimal("amount", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull().default("AUD"),
+    kind: varchar("kind", { length: 40 }).notNull(),
+    notes: text("notes"),
+    sourceImportId: uuid("source_import_id").references(() => csvImports.id, { onDelete: "set null" }),
+    sourceRowHash: varchar("source_row_hash", { length: 64 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_super_contributions_user_date").on(table.userId, table.date),
+    index("idx_super_contributions_account_date").on(table.superAccountId, table.date),
+    uniqueIndex("super_contributions_import_row_unique")
+      .on(table.sourceImportId, table.sourceRowHash)
+      .where(sql`${table.sourceImportId} IS NOT NULL AND ${table.sourceRowHash} IS NOT NULL`),
+    check("super_contributions_amount_positive", sql`${table.amount} > 0`),
+    check(
+      "super_contributions_kind_check",
+      sql`${table.kind} IN ('employer_sg', 'salary_sacrifice', 'personal_concessional', 'personal_non_concessional', 'fee', 'insurance')`,
+    ),
+  ],
+);
+
+export const superContributionCaps = pgTable(
+  "super_contribution_caps",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    financialYearStart: integer("financial_year_start").notNull(),
+    concessionalCap: decimal("concessional_cap", { precision: 15, scale: 2 }),
+    nonConcessionalCap: decimal("non_concessional_cap", { precision: 15, scale: 2 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("super_contribution_caps_user_fy_unique").on(table.userId, table.financialYearStart),
+    check("super_contribution_caps_fy_check", sql`${table.financialYearStart} BETWEEN 1900 AND 9998`),
+    check("super_contribution_caps_concessional_positive", sql`${table.concessionalCap} IS NULL OR ${table.concessionalCap} >= 0`),
+    check("super_contribution_caps_non_concessional_positive", sql`${table.nonConcessionalCap} IS NULL OR ${table.nonConcessionalCap} >= 0`),
+  ],
 );
 
 export const bankConnections = pgTable(
@@ -312,6 +397,203 @@ export const categories = pgTable(
   ]
 );
 
+export const budgetLimits = pgTable(
+  "budget_limits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    categoryId: uuid("category_id")
+      .references(() => categories.id, { onDelete: "cascade" })
+      .notNull(),
+    month: date("month").notNull(),
+    plannedAmount: decimal("planned_amount", { precision: 15, scale: 2 }).notNull().default("0"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_budget_limits_user_month").on(table.userId, table.month),
+    index("idx_budget_limits_category").on(table.categoryId),
+    unique("budget_limits_user_month_category").on(table.userId, table.month, table.categoryId),
+  ]
+);
+
+export const plannedExpenses = pgTable(
+  "planned_expenses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    amount: decimal("amount", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).default("EUR").notNull(),
+    categoryId: uuid("category_id")
+      .references(() => categories.id, { onDelete: "restrict" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    dueDate: date("due_date").notNull(),
+    recurrenceType: varchar("recurrence_type", { length: 20 }).notNull(),
+    customIntervalMonths: integer("custom_interval_months"),
+    sinkingFundTargetAmount: decimal("sinking_fund_target_amount", {
+      precision: 15,
+      scale: 2,
+    }).notNull(),
+    sinkingFundStartDate: date("sinking_fund_start_date")
+      .default(sql`CURRENT_DATE`)
+      .notNull(),
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_planned_expenses_user_active_due").on(
+      table.userId,
+      table.isActive,
+      table.dueDate
+    ),
+    index("idx_planned_expenses_category").on(table.categoryId),
+    index("idx_planned_expenses_account").on(table.accountId),
+    check("planned_expenses_amount_positive", sql`${table.amount} > 0`),
+    check(
+      "planned_expenses_sinking_target_positive",
+      sql`${table.sinkingFundTargetAmount} > 0`
+    ),
+    check(
+      "planned_expenses_recurrence_type_check",
+      sql`${table.recurrenceType} IN ('one_off', 'monthly', 'quarterly', 'annual', 'custom')`
+    ),
+    check(
+      "planned_expenses_custom_interval_check",
+      sql`${table.recurrenceType} <> 'custom' OR ${table.customIntervalMonths} BETWEEN 1 AND 120`
+    ),
+  ]
+);
+
+export const plannedExpenseTransactionLinks = pgTable(
+  "planned_expense_transaction_links",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    plannedExpenseId: uuid("planned_expense_id")
+      .references(() => plannedExpenses.id, { onDelete: "cascade" })
+      .notNull(),
+    transactionId: uuid("transaction_id")
+      .references(() => transactions.id, { onDelete: "cascade" })
+      .notNull(),
+    occurrenceDueDate: date("occurrence_due_date").notNull(),
+    amountApplied: decimal("amount_applied", { precision: 15, scale: 2 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_planned_expense_links_user").on(table.userId),
+    index("idx_planned_expense_links_expense_occurrence").on(
+      table.plannedExpenseId,
+      table.occurrenceDueDate
+    ),
+    index("idx_planned_expense_links_transaction").on(table.transactionId),
+    unique("planned_expense_link_occurrence_unique").on(
+      table.plannedExpenseId,
+      table.transactionId,
+      table.occurrenceDueDate
+    ),
+    unique("planned_expense_link_transaction_unique").on(table.transactionId),
+    check("planned_expense_links_amount_positive", sql`${table.amountApplied} > 0`),
+  ]
+);
+
+export const cashflowOverrides = pgTable(
+  "cashflow_overrides",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    categoryId: uuid("category_id").references(() => categories.id, {
+      onDelete: "set null",
+    }),
+    expectedDate: date("expected_date").notNull(),
+    direction: varchar("direction", { length: 20 }).notNull(),
+    amount: decimal("amount", { precision: 15, scale: 2 }).notNull(),
+    description: varchar("description", { length: 255 }).notNull(),
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_cashflow_overrides_user_date").on(table.userId, table.expectedDate),
+    index("idx_cashflow_overrides_account").on(table.accountId),
+    index("idx_cashflow_overrides_category").on(table.categoryId),
+    check(
+      "cashflow_overrides_direction_check",
+      sql`${table.direction} IN ('income', 'expense', 'transfer_in', 'transfer_out')`
+    ),
+    check("cashflow_overrides_amount_positive", sql`${table.amount} > 0`),
+  ]
+);
+
+export const recurringTransactionScheduleOverrides = pgTable(
+  "recurring_transaction_schedule_overrides",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    recurringTransactionId: uuid("recurring_transaction_id")
+      .references(() => recurringTransactions.id, { onDelete: "cascade" })
+      .notNull(),
+    anchorDate: date("anchor_date").notNull(),
+    direction: varchar("direction", { length: 10 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_recurring_schedule_overrides_user").on(table.userId),
+    unique("recurring_schedule_overrides_recurring_unique").on(
+      table.recurringTransactionId
+    ),
+    check(
+      "recurring_schedule_overrides_direction_check",
+      sql`${table.direction} IN ('inflow', 'outflow')`
+    ),
+  ]
+);
+
+export const csvImportProfiles = pgTable(
+  "csv_import_profiles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 255 }).default("Default CSV mapping").notNull(),
+    columnMapping: jsonb("column_mapping").notNull(),
+    headerSignature: jsonb("header_signature"),
+    lastUsedAt: timestamp("last_used_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_csv_import_profiles_user").on(table.userId),
+    index("idx_csv_import_profiles_account").on(table.accountId),
+    unique("csv_import_profiles_user_account_unique").on(table.userId, table.accountId),
+  ]
+);
+
 export const csvImports = pgTable(
   "csv_imports",
   {
@@ -322,6 +604,7 @@ export const csvImports = pgTable(
     accountId: uuid("account_id")
       .references(() => accounts.id, { onDelete: "cascade" })
       .notNull(),
+    importProfileId: uuid("import_profile_id").references(() => csvImportProfiles.id, { onDelete: "set null" }),
     fileName: varchar("file_name", { length: 255 }).notNull(),
     filePath: text("file_path"),
     filePathCiphertext: text("file_path_ciphertext"),
@@ -330,6 +613,7 @@ export const csvImports = pgTable(
     totalRows: integer("total_rows"),
     importedRows: integer("imported_rows"),
     duplicatesFound: integer("duplicates_found"),
+    rowsNeedingAttention: integer("rows_needing_attention").default(0),
     errorMessage: text("error_message"),
     // Background worker fields
     celeryTaskId: varchar("celery_task_id", { length: 255 }),
@@ -341,7 +625,38 @@ export const csvImports = pgTable(
   (table) => [
     index("idx_csv_imports_user").on(table.userId),
     index("idx_csv_imports_account").on(table.accountId),
+    index("idx_csv_imports_import_profile").on(table.importProfileId),
   ]
+);
+
+// A historical snapshot is deliberately separate from transaction imports: it
+// represents a reported point-in-time net worth and must never create cashflow.
+export const historicalSnapshotImports = pgTable(
+  "historical_snapshot_imports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    fileName: varchar("file_name", { length: 255 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("idx_historical_snapshot_imports_user").on(table.userId)],
+);
+
+export const historicalSnapshotValues = pgTable(
+  "historical_snapshot_values",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    importId: uuid("import_id").references(() => historicalSnapshotImports.id, { onDelete: "cascade" }).notNull(),
+    snapshotDate: date("snapshot_date").notNull(),
+    netWorth: decimal("net_worth", { precision: 15, scale: 2 }).notNull(),
+    metricValues: jsonb("metric_values").$type<Record<string, number>>().notNull().default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_historical_snapshot_values_user_date").on(table.userId, table.snapshotDate),
+    unique("historical_snapshot_values_user_date").on(table.userId, table.snapshotDate),
+  ],
 );
 
 export const transactions = pgTable(
@@ -368,6 +683,7 @@ export const transactions = pgTable(
     internalTransferId: uuid("internal_transfer_id"), // FK to internal_transfers.id (enforced at DB level in migration 0017)
     categoryId: uuid("category_id").references(() => categories.id), // User-overridden category
     categorySystemId: uuid("category_system_id").references(() => categories.id), // AI-assigned category (never updated by user)
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
     bookedAt: timestamp("booked_at").notNull(),
     pending: boolean("pending").default(false),
     categorizationInstructions: text("categorization_instructions"), // User instructions for AI categorization
@@ -384,6 +700,7 @@ export const transactions = pgTable(
     index("idx_transactions_booked_at").on(table.bookedAt),
     index("idx_transactions_category").on(table.categoryId),
     index("idx_transactions_category_system").on(table.categorySystemId),
+    index("idx_transactions_property").on(table.propertyId),
     index("idx_transactions_recurring").on(table.recurringTransactionId),
     // Composite indexes for common query patterns
     index("idx_transactions_user_category_system").on(table.userId, table.categorySystemId),
@@ -480,11 +797,59 @@ export const properties = pgTable(
     address: text("address"),
     currentValue: decimal("current_value", { precision: 15, scale: 2 }).default("0"),
     currency: char("currency", { length: 3 }).default("EUR"),
+    isRental: boolean("is_rental").default(false).notNull(),
+    valuationDate: date("valuation_date"),
+    valuationSource: varchar("valuation_source", { length: 100 }),
+    notes: text("notes"),
     isActive: boolean("is_active").default(true),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },
   (table) => [index("idx_properties_user").on(table.userId)]
+);
+
+export const propertyLiabilityLinks = pgTable(
+  "property_liability_links",
+  {
+    propertyId: uuid("property_id")
+      .references(() => properties.id, { onDelete: "cascade" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.propertyId, t.accountId] }),
+    index("idx_property_liability_links_user").on(t.userId),
+    index("idx_property_liability_links_account").on(t.accountId),
+  ]
+);
+
+export const propertyValuations = pgTable(
+  "property_valuations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    propertyId: uuid("property_id")
+      .references(() => properties.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    valuationDate: date("valuation_date").notNull(),
+    value: decimal("value", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).default("EUR").notNull(),
+    source: varchar("source", { length: 100 }),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_property_valuations_property_date").on(t.propertyId, t.valuationDate),
+    index("idx_property_valuations_user").on(t.userId),
+  ]
 );
 
 export const vehicles = pgTable(
@@ -676,6 +1041,41 @@ export const brokerTrades = pgTable("broker_trades", {
   uniqTrade: uniqueIndex("broker_trades_account_external_uq").on(t.accountId, t.externalId),
 }));
 
+// Statement-supplied dividend and distribution details. Monetary component
+// columns remain nullable: absent statement values must never be inferred.
+export const investmentIncomeEvents = pgTable("investment_income_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  holdingId: uuid("holding_id").notNull().references(() => holdings.id, { onDelete: "cascade" }),
+  eventType: varchar("event_type", { length: 20 }).notNull(),
+  payDate: date("pay_date").notNull(),
+  exDate: date("ex_date"),
+  currency: char("currency", { length: 3 }).notNull(),
+  cashReceived: numeric("cash_received", { precision: 18, scale: 2 }).notNull(),
+  frankedAmount: numeric("franked_amount", { precision: 18, scale: 2 }),
+  unfrankedAmount: numeric("unfranked_amount", { precision: 18, scale: 2 }),
+  frankingCredit: numeric("franking_credit", { precision: 18, scale: 2 }),
+  foreignIncome: numeric("foreign_income", { precision: 18, scale: 2 }),
+  foreignTaxPaid: numeric("foreign_tax_paid", { precision: 18, scale: 2 }),
+  amitAmmaComponents: jsonb("amit_amma_components"),
+  isDrp: boolean("is_drp").default(false).notNull(),
+  drpQuantity: numeric("drp_quantity", { precision: 28, scale: 8 }),
+  drpPrice: numeric("drp_price", { precision: 28, scale: 8 }),
+  reinvestmentTradeId: uuid("reinvestment_trade_id").references(() => brokerTrades.id, { onDelete: "set null" }),
+  sourceId: varchar("source_id", { length: 255 }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  byUserPayDate: index("idx_investment_income_events_user_pay_date").on(t.userId, t.payDate),
+  byHoldingPayDate: index("idx_investment_income_events_holding_pay_date").on(t.holdingId, t.payDate),
+  sourceUnique: uniqueIndex("investment_income_events_account_source_uq").on(t.accountId, t.sourceId),
+  eventTypeCheck: check("investment_income_events_type_check", sql`${t.eventType} in ('dividend', 'distribution')`),
+  cashReceivedCheck: check("investment_income_events_cash_received_check", sql`${t.cashReceived} >= 0`),
+  drpCheck: check("investment_income_events_drp_check", sql`(${t.isDrp} = false) OR (${t.drpQuantity} > 0 AND ${t.drpPrice} >= 0)`),
+}));
+
 export const priceSnapshots = pgTable("price_snapshots", {
   id: uuid("id").primaryKey().defaultRandom(),
   symbol: text("symbol").notNull(),
@@ -787,21 +1187,64 @@ export const vehicleOwners = pgTable(
 // Relations
 // ============================================================================
 
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   sessions: many(sessions),
   authAccounts: many(authAccounts),
   accounts: many(accounts),
   categories: many(categories),
+  budgetLimits: many(budgetLimits),
+  plannedExpenses: many(plannedExpenses),
+  plannedExpenseTransactionLinks: many(plannedExpenseTransactionLinks),
+  cashflowOverrides: many(cashflowOverrides),
+  recurringTransactionScheduleOverrides: many(recurringTransactionScheduleOverrides),
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
   csvImports: many(csvImports),
+  csvImportProfiles: many(csvImportProfiles),
+  superAccount: one(superAccounts),
   properties: many(properties),
+  propertyLiabilityLinks: many(propertyLiabilityLinks),
+  propertyValuations: many(propertyValuations),
   vehicles: many(vehicles),
   subscriptionSuggestions: many(subscriptionSuggestions),
   apiKeys: many(apiKeys),
   transactionLinks: many(transactionLinks),
   bankConnections: many(bankConnections),
   people: many(people),
+}));
+
+export const superAccountsRelations = relations(superAccounts, ({ one, many }) => ({
+  account: one(accounts, {
+    fields: [superAccounts.accountId],
+    references: [accounts.id],
+  }),
+  user: one(users, {
+    fields: [superAccounts.userId],
+    references: [users.id],
+  }),
+  contributions: many(superContributions),
+}));
+
+export const superContributionsRelations = relations(superContributions, ({ one }) => ({
+  superAccount: one(superAccounts, {
+    fields: [superContributions.superAccountId],
+    references: [superAccounts.id],
+  }),
+  user: one(users, {
+    fields: [superContributions.userId],
+    references: [users.id],
+  }),
+  sourceImport: one(csvImports, {
+    fields: [superContributions.sourceImportId],
+    references: [csvImports.id],
+  }),
+}));
+
+export const superContributionCapsRelations = relations(superContributionCaps, ({ one }) => ({
+  user: one(users, {
+    fields: [superContributionCaps.userId],
+    references: [users.id],
+  }),
 }));
 
 export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
@@ -840,9 +1283,13 @@ export const accountsRelations = relations(accounts, ({ one, many }) => ({
   }),
   transactions: many(transactions),
   csvImports: many(csvImports),
+  csvImportProfiles: many(csvImportProfiles),
   balances: many(accountBalances),
   recurringTransactions: many(recurringTransactions),
+  plannedExpenses: many(plannedExpenses),
+  cashflowOverrides: many(cashflowOverrides),
   owners: many(accountOwners),
+  propertyLiabilityLinks: many(propertyLiabilityLinks),
 }));
 
 export const bankConnectionsRelations = relations(bankConnections, ({ one, many }) => ({
@@ -873,9 +1320,86 @@ export const categoriesRelations = relations(categories, ({ one, many }) => ({
   children: many(categories, { relationName: "categoryHierarchy" }),
   transactions: many(transactions),
   categorizationRules: many(categorizationRules),
+  budgetLimits: many(budgetLimits),
+  plannedExpenses: many(plannedExpenses),
+  cashflowOverrides: many(cashflowOverrides),
 }));
 
-export const transactionsRelations = relations(transactions, ({ one }) => ({
+export const budgetLimitsRelations = relations(budgetLimits, ({ one }) => ({
+  user: one(users, {
+    fields: [budgetLimits.userId],
+    references: [users.id],
+  }),
+  category: one(categories, {
+    fields: [budgetLimits.categoryId],
+    references: [categories.id],
+  }),
+}));
+
+export const plannedExpensesRelations = relations(plannedExpenses, ({ one, many }) => ({
+  user: one(users, {
+    fields: [plannedExpenses.userId],
+    references: [users.id],
+  }),
+  category: one(categories, {
+    fields: [plannedExpenses.categoryId],
+    references: [categories.id],
+  }),
+  account: one(accounts, {
+    fields: [plannedExpenses.accountId],
+    references: [accounts.id],
+  }),
+  linkedTransactions: many(plannedExpenseTransactionLinks),
+}));
+
+export const plannedExpenseTransactionLinksRelations = relations(
+  plannedExpenseTransactionLinks,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [plannedExpenseTransactionLinks.userId],
+      references: [users.id],
+    }),
+    plannedExpense: one(plannedExpenses, {
+      fields: [plannedExpenseTransactionLinks.plannedExpenseId],
+      references: [plannedExpenses.id],
+    }),
+    transaction: one(transactions, {
+      fields: [plannedExpenseTransactionLinks.transactionId],
+      references: [transactions.id],
+    }),
+  })
+);
+
+export const cashflowOverridesRelations = relations(cashflowOverrides, ({ one }) => ({
+  user: one(users, {
+    fields: [cashflowOverrides.userId],
+    references: [users.id],
+  }),
+  account: one(accounts, {
+    fields: [cashflowOverrides.accountId],
+    references: [accounts.id],
+  }),
+  category: one(categories, {
+    fields: [cashflowOverrides.categoryId],
+    references: [categories.id],
+  }),
+}));
+
+export const recurringTransactionScheduleOverridesRelations = relations(
+  recurringTransactionScheduleOverrides,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [recurringTransactionScheduleOverrides.userId],
+      references: [users.id],
+    }),
+    recurringTransaction: one(recurringTransactions, {
+      fields: [recurringTransactionScheduleOverrides.recurringTransactionId],
+      references: [recurringTransactions.id],
+    }),
+  })
+);
+
+export const transactionsRelations = relations(transactions, ({ one, many }) => ({
   user: one(users, {
     fields: [transactions.userId],
     references: [users.id],
@@ -894,6 +1418,10 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
     references: [categories.id],
     relationName: "transactionCategorySystem",
   }),
+  property: one(properties, {
+    fields: [transactions.propertyId],
+    references: [properties.id],
+  }),
   recurringTransaction: one(recurringTransactions, {
     fields: [transactions.recurringTransactionId],
     references: [recurringTransactions.id],
@@ -903,6 +1431,7 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
     fields: [transactions.id],
     references: [transactionLinks.transactionId],
   }),
+  plannedExpenseLinks: many(plannedExpenseTransactionLinks),
   csvImport: one(csvImports, {
     fields: [transactions.csvImportId],
     references: [csvImports.id],
@@ -958,6 +1487,7 @@ export const recurringTransactionsRelations = relations(recurringTransactions, (
     references: [companyLogos.id],
   }),
   linkedTransactions: many(transactions),
+  scheduleOverride: many(recurringTransactionScheduleOverrides),
 }));
 
 export const categorizationRulesRelations = relations(categorizationRules, ({ one }) => ({
@@ -980,7 +1510,23 @@ export const csvImportsRelations = relations(csvImports, ({ one, many }) => ({
     fields: [csvImports.accountId],
     references: [accounts.id],
   }),
+  importProfile: one(csvImportProfiles, {
+    fields: [csvImports.importProfileId],
+    references: [csvImportProfiles.id],
+  }),
   transactions: many(transactions),
+}));
+
+export const csvImportProfilesRelations = relations(csvImportProfiles, ({ one, many }) => ({
+  user: one(users, {
+    fields: [csvImportProfiles.userId],
+    references: [users.id],
+  }),
+  account: one(accounts, {
+    fields: [csvImportProfiles.accountId],
+    references: [accounts.id],
+  }),
+  imports: many(csvImports),
 }));
 
 export const propertiesRelations = relations(properties, ({ one, many }) => ({
@@ -989,6 +1535,35 @@ export const propertiesRelations = relations(properties, ({ one, many }) => ({
     references: [users.id],
   }),
   owners: many(propertyOwners),
+  linkedLiabilities: many(propertyLiabilityLinks),
+  valuations: many(propertyValuations),
+  transactions: many(transactions),
+}));
+
+export const propertyLiabilityLinksRelations = relations(propertyLiabilityLinks, ({ one }) => ({
+  user: one(users, {
+    fields: [propertyLiabilityLinks.userId],
+    references: [users.id],
+  }),
+  property: one(properties, {
+    fields: [propertyLiabilityLinks.propertyId],
+    references: [properties.id],
+  }),
+  account: one(accounts, {
+    fields: [propertyLiabilityLinks.accountId],
+    references: [accounts.id],
+  }),
+}));
+
+export const propertyValuationsRelations = relations(propertyValuations, ({ one }) => ({
+  user: one(users, {
+    fields: [propertyValuations.userId],
+    references: [users.id],
+  }),
+  property: one(properties, {
+    fields: [propertyValuations.propertyId],
+    references: [properties.id],
+  }),
 }));
 
 export const vehiclesRelations = relations(vehicles, ({ one, many }) => ({
@@ -1129,6 +1704,25 @@ export type NewAccount = typeof accounts.$inferInsert;
 export type Category = typeof categories.$inferSelect;
 export type NewCategory = typeof categories.$inferInsert;
 
+export type BudgetLimit = typeof budgetLimits.$inferSelect;
+export type NewBudgetLimit = typeof budgetLimits.$inferInsert;
+
+export type PlannedExpense = typeof plannedExpenses.$inferSelect;
+export type NewPlannedExpense = typeof plannedExpenses.$inferInsert;
+
+export type PlannedExpenseTransactionLink =
+  typeof plannedExpenseTransactionLinks.$inferSelect;
+export type NewPlannedExpenseTransactionLink =
+  typeof plannedExpenseTransactionLinks.$inferInsert;
+
+export type CashflowOverride = typeof cashflowOverrides.$inferSelect;
+export type NewCashflowOverride = typeof cashflowOverrides.$inferInsert;
+
+export type RecurringTransactionScheduleOverride =
+  typeof recurringTransactionScheduleOverrides.$inferSelect;
+export type NewRecurringTransactionScheduleOverride =
+  typeof recurringTransactionScheduleOverrides.$inferInsert;
+
 export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;
 
@@ -1141,9 +1735,15 @@ export type NewCategorizationRule = typeof categorizationRules.$inferInsert;
 
 export type CsvImport = typeof csvImports.$inferSelect;
 export type NewCsvImport = typeof csvImports.$inferInsert;
+export type CsvImportProfile = typeof csvImportProfiles.$inferSelect;
+export type NewCsvImportProfile = typeof csvImportProfiles.$inferInsert;
 
 export type Property = typeof properties.$inferSelect;
 export type NewProperty = typeof properties.$inferInsert;
+export type PropertyLiabilityLink = typeof propertyLiabilityLinks.$inferSelect;
+export type NewPropertyLiabilityLink = typeof propertyLiabilityLinks.$inferInsert;
+export type PropertyValuation = typeof propertyValuations.$inferSelect;
+export type NewPropertyValuation = typeof propertyValuations.$inferInsert;
 
 export type Vehicle = typeof vehicles.$inferSelect;
 export type NewVehicle = typeof vehicles.$inferInsert;

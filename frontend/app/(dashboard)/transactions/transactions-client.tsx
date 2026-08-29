@@ -7,6 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { TransactionTable } from "@/components/transactions/transaction-table";
 import { AddTransactionButton } from "@/components/transactions/add-transaction-button";
 import { AddTransactionDialog } from "@/components/transactions/add-transaction-dialog";
+import { ImportTransactionsButton } from "@/components/transactions/import-transactions-button";
 import { useRegisterCommandPaletteCallbacks } from "@/components/command-palette-context";
 import { exportTransactionsToCSV } from "@/lib/utils/csv-export";
 import {
@@ -21,6 +22,7 @@ import type {
 } from "@/lib/actions/transactions";
 import type { CategoryDisplay, AccountForFilter } from "@/types";
 import type { TransactionsQueryState } from "@/lib/transactions/query-state";
+import type { Property } from "@/lib/db/schema";
 
 interface TransactionsClientProps {
   initialTransactions: TransactionWithRelations[];
@@ -29,6 +31,7 @@ interface TransactionsClientProps {
   initialQueryState: TransactionsQueryState;
   categories: CategoryDisplay[];
   accounts: AccountForFilter[];
+  properties: Property[];
   canImportCsv: boolean;
   canDelete?: boolean;
 }
@@ -40,6 +43,7 @@ export function TransactionsClient({
   initialQueryState,
   categories,
   accounts,
+  properties,
   canImportCsv,
   canDelete = true,
 }: TransactionsClientProps) {
@@ -277,9 +281,9 @@ export function TransactionsClient({
     {
       onAddTransaction: handleAddManual,
       onExportCSV: handleExportCSV,
-      onImportCsv: canImportCsv ? handleImportCsv : undefined,
+      onImportCsv: handleImportCsv,
     },
-    [handleAddManual, handleExportCSV, handleImportCsv, canImportCsv]
+    [handleAddManual, handleExportCSV, handleImportCsv]
   );
 
   return (
@@ -292,6 +296,7 @@ export function TransactionsClient({
           queryState={initialQueryState}
           categories={categories}
           accounts={accounts}
+          properties={properties}
           onUpdateTransaction={handleUpdateTransaction}
           onDeleteTransaction={handleDeleteTransaction}
           onBulkUpdate={handleBulkUpdate}
@@ -322,8 +327,10 @@ export function TransactionsClient({
               )}
               <AddTransactionButton
                 onAddManual={handleAddManual}
-                allowCsvImport={canImportCsv}
               />
+              {canImportCsv && (
+                <ImportTransactionsButton onImport={handleImportCsv} />
+              )}
             </div>
           }
         />

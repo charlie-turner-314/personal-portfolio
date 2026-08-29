@@ -26,7 +26,7 @@ const client = postgres(connectionString, {
   
   // Connection settings
   connection: {
-    application_name: "syllogic-frontend",
+    application_name: "personal-portfolio-frontend",
   },
   
   // Error handling

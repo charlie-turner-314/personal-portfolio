@@ -76,16 +76,16 @@ describe("render-report.ts subprocess failure path", () => {
         institution: "ABN AMRO",
         balance: "50.00",
         currency: "EUR",
-        logo_url: "https://app.syllogic.ai/uploads/logos/abnamro.com.png",
+        logo_url: "http://localhost:8080/uploads/logos/abnamro.com.png",
       }],
       transactions: { mode_label: "Top 5 expenses", items: [] },
-      manage_url: "https://app.syllogic.ai/reports/1",
+      manage_url: "http://localhost:8080/reports/1",
     });
 
     const result = runRenderReport(input);
 
     expect(result.status).toBe(0);
     const { html } = JSON.parse(result.stdout);
-    expect(html).toContain("https://app.syllogic.ai/uploads/logos/abnamro.com.png");
+    expect(html).toContain("http://localhost:8080/uploads/logos/abnamro.com.png");
   }, 30000);
 });
