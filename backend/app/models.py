@@ -123,6 +123,9 @@ class BankConnection(Base):
     sync_cursor = Column(JSONB, nullable=True)
     initial_sync_days = Column(Integer, nullable=False, server_default="90")
     raw_session_data = Column(JSONB, nullable=True)
+    # Provider credentials are encrypted at rest.  They must never be placed in
+    # raw_session_data because that payload is returned to the mapping UI.
+    credentials_encrypted = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
