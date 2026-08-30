@@ -20,7 +20,7 @@ const FEATURES: Feature[] = [
     description:
       "Optional OpenAI-powered categorization with a fallback path when no API key is set.",
     detail:
-      "Every time you import a transaction, Syllogic reads the description and assigns it a spending category — things like Groceries, Dining, Travel, or Subscriptions — without you lifting a finger. When the AI gets it wrong (it occasionally does), you correct it once and it remembers. Over time the categories get more accurate and reflect your personal spending patterns.",
+      "Every time you import a transaction, Personal Portfolio reads the description and assigns it a spending category — things like Groceries, Dining, Travel, or Subscriptions — without you lifting a finger. When the AI gets it wrong (it occasionally does), you correct it once and it remembers. Over time the categories get more accurate and reflect your personal spending patterns.",
     wide: false,
     image: "/images/screenshots/transactions.png",
   },
@@ -30,7 +30,7 @@ const FEATURES: Feature[] = [
     description:
       "Detect recurring charges, group them by merchant, and understand monthly subscription drag.",
     detail:
-      "Syllogic scans your transaction history to find recurring charges — the ones that repeat every month or year at a predictable amount. It groups them by merchant so you can see the full list of your active subscriptions, when they renew, and what your total monthly subscription spend looks like. A surprisingly useful number once you actually see it.",
+      "Personal Portfolio scans your transaction history to find recurring charges — the ones that repeat every month or year at a predictable amount. It groups them by merchant so you can see the full list of your active subscriptions, when they renew, and what your total monthly subscription spend looks like. A surprisingly useful number once you actually see it.",
     wide: false,
     image: "/images/screenshots/subscriptions.png",
   },
@@ -50,7 +50,7 @@ const FEATURES: Feature[] = [
     description:
       "Link related transactions across accounts to avoid double-counting.",
     detail:
-      "If you transfer money from your checking account to your savings account, that shows up as both an outgoing and an incoming transaction. Without linking them, your expense totals look inflated. Syllogic lets you mark those two transactions as related so your dashboard counts them correctly — one transfer, not two separate expenses.",
+      "If you transfer money from your checking account to your savings account, that shows up as both an outgoing and an incoming transaction. Without linking them, your expense totals look inflated. Personal Portfolio lets you mark those two transactions as related so your dashboard counts them correctly — one transfer, not two separate expenses.",
     wide: false,
     image: "/images/screenshots/transactions_detail.png",
   },
@@ -60,7 +60,7 @@ const FEATURES: Feature[] = [
     description:
       "Import from bank CSVs and export your data whenever you want. No lock-in.",
     detail:
-      "Every bank lets you download your transaction history as a CSV file. Syllogic can import those files regardless of the column format your bank uses — it adapts to the structure automatically. And because your data is yours, you can export everything at any time in a clean, standard format. No lock-in, no strings attached.",
+      "Every bank lets you download your transaction history as a CSV file. Personal Portfolio can import those files regardless of the column format your bank uses — it adapts to the structure automatically. And because your data is yours, you can export everything at any time in a clean, standard format. No lock-in, no strings attached.",
     wide: false,
     image: "/images/screenshots/csv-import.png",
   },
@@ -70,7 +70,7 @@ const FEATURES: Feature[] = [
     description:
       "Connect Claude Desktop or any MCP-compatible LLM directly to your financial data. Ask questions, run bulk operations, and get AI-driven insights — all in natural language.",
     detail:
-      "Syllogic ships a built-in MCP (Model Context Protocol) server that exposes your financial data as tools any compatible AI client can call. Connect Claude Desktop, Cursor, or any other MCP-compatible app and start talking to your finances like you would a spreadsheet — except smarter. The LLM can read transactions, categories, accounts, and balances, then act on them based on your instructions.",
+      "Personal Portfolio ships a built-in MCP (Model Context Protocol) server that exposes your financial data as tools any compatible AI client can call. Connect Claude Desktop, Cursor, or any other MCP-compatible app and start talking to your finances like you would a spreadsheet — except smarter. The LLM can read transactions, categories, accounts, and balances, then act on them based on your instructions.",
     wide: true,
     image: "/images/screenshots/mcp-server.png",
     useCases: [
@@ -168,7 +168,7 @@ export function WorkSection() {
           className="font-mono text-sm leading-relaxed max-w-3xl mb-16"
           style={{ color: "var(--color-muted)" }}
         >
-          Syllogic already covers the workflows a self-hoster needs to evaluate
+          Personal Portfolio already covers the workflows a self-hoster needs to evaluate
           the product honestly: dashboards, imports, recurring spend, optional
           AI enrichment, and exportable data.
         </p>

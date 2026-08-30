@@ -64,14 +64,14 @@ export const auth = betterAuth({
       loginPage: "/login",
       consentPage: "/oauth/consent",
       // Allow MCP clients (e.g. Claude custom connectors) to request the
-      // Syllogic MCP server as the JWT audience via RFC 8707. Without this,
+      // Personal Portfolio MCP server as the JWT audience via RFC 8707. Without this,
       // better-auth rejects the resource parameter and falls back to an
       // opaque token that the MCP JWTVerifier can't validate.
       validAudiences: Array.from(
         new Set(
           [
-            "https://mcp.syllogic.ai/mcp",
-            "https://mcp.syllogic.ai",
+            "http://localhost:8080/mcp",
+            "http://localhost:8080",
             ...(process.env.MCP_LOCAL_AUDIENCE
               ? [process.env.MCP_LOCAL_AUDIENCE]
               : []),

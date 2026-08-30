@@ -21,7 +21,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.fixture(autouse=True)
 def crypto_key(monkeypatch):
     from app.services import credentials_crypto
-    monkeypatch.setenv("SYLLOGIC_SECRET_KEY", credentials_crypto.generate_key())
+    monkeypatch.setenv("PERSONAL_PORTFOLIO_SECRET_KEY", credentials_crypto.generate_key())
 
 
 @pytest.fixture

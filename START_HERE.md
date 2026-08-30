@@ -1,10 +1,10 @@
 # Start Here
 
-Syllogic is a self-hosted personal finance dashboard with AI categorization, recurring spend tracking, CSV import/export, and a live demo.
+Personal Portfolio is a self-hosted personal finance dashboard with AI categorization, recurring spend tracking, CSV import/export, and a live demo.
 
 ## What it is
 
-Syllogic gives self-hosters a finance app they can actually run themselves:
+Personal Portfolio gives self-hosters a finance app they can actually run themselves:
 
 - balances, spending trends, and cash-flow views
 - recurring subscription tracking
@@ -22,26 +22,26 @@ Syllogic gives self-hosters a finance app they can actually run themselves:
 
 ### 1. Live demo
 
-[Open the live demo](https://app.syllogic.ai/login?demo=1&utm_source=github&utm_medium=start_here&utm_campaign=oss_promotion&utm_content=demo_cta)
+[Open the live demo](http://localhost:8080/login?demo=1&utm_source=github&utm_medium=start_here&utm_campaign=oss_promotion&utm_content=demo_cta)
 
 ### 2. Self-host with Docker
 
 ```bash
-curl -fsSL https://github.com/syllogic-ai/syllogic/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://github.com/charlie-turner-314/personal-portfolio/releases/latest/download/install.sh | sudo bash
 ```
 
 For the manual setup, use [README.md](README.md#quick-start).
 
 ### 3. Deploy on Railway
 
-[Deploy on Railway](https://railway.com/deploy/syllogic?referralCode=25KFsK&utm_source=github&utm_medium=start_here&utm_campaign=oss_promotion&utm_content=railway_cta)
+[Deploy on Railway](https://railway.com/deploy/personal-portfolio?referralCode=25KFsK&utm_source=github&utm_medium=start_here&utm_campaign=oss_promotion&utm_content=railway_cta)
 
 ## Next links
 
 - [README](README.md)
 - [Roadmap](ROADMAP.md)
 - [Contributing](CONTRIBUTING.md)
-- [Install help issue form](https://github.com/syllogic-ai/syllogic/issues/new?template=install_help.yml)
-- [Demo feedback issue form](https://github.com/syllogic-ai/syllogic/issues/new?template=demo_feedback.yml)
-- [GitHub Discussions](https://github.com/syllogic-ai/syllogic/discussions)
+- [Install help issue form](https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=install_help.yml)
+- [Demo feedback issue form](https://github.com/charlie-turner-314/personal-portfolio/issues/new?template=demo_feedback.yml)
+- [GitHub Discussions](https://github.com/charlie-turner-314/personal-portfolio/discussions)
 

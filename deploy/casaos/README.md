@@ -1,6 +1,6 @@
 # CasaOS Deployment
 
-This folder contains the CasaOS-ready compose bundle for Syllogic.
+This folder contains the CasaOS-ready compose bundle for Personal Portfolio.
 
 ## Quick Start
 

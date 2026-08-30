@@ -28,8 +28,8 @@ import { RiSideBarLine } from "@remixicon/react"
 const SIDEBAR_WIDTH = "14rem"
 const SIDEBAR_WIDTH_MOBILE = "16rem"
 const SIDEBAR_WIDTH_ICON = "3.5rem"
-const SIDEBAR_OPEN_STORAGE_KEY = "syllogic.sidebar.open"
-const SIDEBAR_OPEN_COOKIE_KEY = "syllogic.sidebar.open"
+const SIDEBAR_OPEN_STORAGE_KEY = "personal-portfolio.sidebar.open"
+const SIDEBAR_OPEN_COOKIE_KEY = "personal-portfolio.sidebar.open"
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"

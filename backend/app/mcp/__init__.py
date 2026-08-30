@@ -1,5 +1,5 @@
 """
-MCP (Model Context Protocol) server for Syllogic.
+MCP (Model Context Protocol) server for Personal Portfolio.
 Provides read-only access to financial data with write operations for
 transaction categorization and category metadata.
 

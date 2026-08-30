@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="syllogic-ai/syllogic"
+REPO="charlie-turner-314/personal-portfolio"
 
 # Root is required on Linux for Docker/apt. On macOS, Docker Desktop runs as user.
 if [[ "${EUID:-$(id -u)}" -ne 0 ]] && [[ "$(uname -s)" != "Darwin" ]]; then
@@ -23,9 +23,9 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  INSTALL_DIR="${HOME}/.syllogic"
+  INSTALL_DIR="${HOME}/.personal-portfolio"
 else
-  INSTALL_DIR="/opt/syllogic"
+  INSTALL_DIR="/opt/personal-portfolio"
 fi
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT

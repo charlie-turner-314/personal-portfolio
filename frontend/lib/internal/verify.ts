@@ -14,9 +14,9 @@ export function verifyInternalRequest(
   path: string,
   rawBody: string,
 ): { ok: true; userId: string } | { ok: false; reason: string } {
-  const userId = req.headers.get("x-syllogic-user-id")?.trim();
-  const ts = req.headers.get("x-syllogic-timestamp")?.trim();
-  const sig = req.headers.get("x-syllogic-signature")?.trim();
+  const userId = req.headers.get("x-personal-portfolio-user-id")?.trim();
+  const ts = req.headers.get("x-personal-portfolio-timestamp")?.trim();
+  const sig = req.headers.get("x-personal-portfolio-signature")?.trim();
   if (!userId || !ts || !sig) return { ok: false, reason: "missing headers" };
   const tsNum = Number(ts);
   if (!Number.isFinite(tsNum)) return { ok: false, reason: "bad timestamp" };

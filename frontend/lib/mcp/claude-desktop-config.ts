@@ -1,16 +1,16 @@
-export const DEFAULT_MCP_SERVER_URL = "https://mcp.syllogic.ai/mcp";
+export const DEFAULT_MCP_SERVER_URL = "http://localhost:8080/mcp";
 
 type ClaudeDesktopServerConfig = {
   command: "npx";
   args: string[];
   env: {
-    SYLLOGIC_AUTH_HEADER: string;
+    PERSONAL_PORTFOLIO_AUTH_HEADER: string;
   };
 };
 
 export type ClaudeDesktopMcpConfig = {
   mcpServers: {
-    syllogic: ClaudeDesktopServerConfig;
+    "personal-portfolio": ClaudeDesktopServerConfig;
   };
 };
 
@@ -34,7 +34,7 @@ export function buildClaudeDesktopMcpConfig(
     "--transport",
     "http-only",
     "--header",
-    "Authorization:${SYLLOGIC_AUTH_HEADER}",
+    "Authorization:${PERSONAL_PORTFOLIO_AUTH_HEADER}",
   ];
 
   if (resolvedMcpUrl.toLowerCase().startsWith("http://")) {
@@ -43,11 +43,11 @@ export function buildClaudeDesktopMcpConfig(
 
   return {
     mcpServers: {
-      syllogic: {
+      "personal-portfolio": {
         command: "npx",
         args,
         env: {
-          SYLLOGIC_AUTH_HEADER: `Bearer ${apiKey}`,
+          PERSONAL_PORTFOLIO_AUTH_HEADER: `Bearer ${apiKey}`,
         },
       },
     },

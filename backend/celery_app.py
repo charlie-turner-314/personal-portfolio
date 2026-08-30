@@ -77,7 +77,7 @@ def _build_beat_schedule() -> dict:
     }
 
     try:
-        investment_hour = int(os.getenv("SYLLOGIC_INVESTMENT_SYNC_HOUR_UTC", "2"))
+        investment_hour = int(os.getenv("PERSONAL_PORTFOLIO_INVESTMENT_SYNC_HOUR_UTC", "2"))
     except ValueError:
         investment_hour = 2
     investment_hour = max(0, min(23, investment_hour))

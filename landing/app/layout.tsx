@@ -16,7 +16,7 @@ const bebasNeue = Bebas_Neue({
 });
 
 export const metadata: Metadata = {
-  title: "Syllogic - Self-Hosted Personal Finance",
+  title: "Personal Portfolio - Self-Hosted Personal Finance",
   description:
     "Self-hosted personal finance dashboard with AI categorization, recurring spend tracking, and a live demo.",
 };
