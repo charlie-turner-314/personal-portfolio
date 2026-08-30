@@ -30,6 +30,7 @@ import {
   type AmountFormat,
   type InferredAmountFormat,
 } from "@/lib/import/parsing";
+import { parseImportedDate } from "@/lib/import/date-parsing";
 import {
   createCsvHeaderSignature,
   suggestAustralianCsvMapping,
@@ -805,188 +806,8 @@ export async function previewImportedTransactions(
         continue;
       }
 
-      // Parse date with multiple format support
-      let parsedDate: Date | null = null;
-      try {
-        const cleaned = dateStr.replace(/['"]/g, "").trim();
-
-        // Try YYYYMMDD format (e.g., 20250130)
-        if (/^\d{8}$/.test(cleaned)) {
-          const year = parseInt(cleaned.substring(0, 4));
-          const month = parseInt(cleaned.substring(4, 6)) - 1;
-          const day = parseInt(cleaned.substring(6, 8));
-          parsedDate = createUTCDate(year, month, day);
-        }
-        // Try YYYY-MM-DD or YYYY/MM/DD (ISO format)
-        else if (/^\d{4}[\-\/]\d{2}[\-\/]\d{2}/.test(cleaned)) {
-          // Parse as UTC to avoid timezone issues
-          const parts = cleaned.split(/[\-\/]/);
-          const year = parseInt(parts[0]);
-          const month = parseInt(parts[1]) - 1;
-          const day = parseInt(parts[2]);
-          parsedDate = createUTCDate(year, month, day);
-        }
-        // Try DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY, MM-DD-YYYY, etc. (with optional time)
-        else if (/^\d{1,2}[\-\/\.]\d{1,2}[\-\/\.]\d{4}/.test(cleaned)) {
-          // Extract just the date part (before any time component)
-          const dateMatch = cleaned.match(/^(\d{1,2})[\-\/\.](\d{1,2})[\-\/\.](\d{4})/);
-          if (dateMatch) {
-            const first = parseInt(dateMatch[1]);
-            const second = parseInt(dateMatch[2]);
-            const year = parseInt(dateMatch[3]);
-
-            // If first > 12, it must be day (European format)
-            if (first > 12) {
-              parsedDate = createUTCDate(year, second - 1, first);
-            } else if (second > 12) {
-              // US format: MM-DD-YYYY
-              parsedDate = createUTCDate(year, first - 1, second);
-            } else {
-              // Ambiguous - use user preference
-              const dateFormat = mapping.typeConfig?.dateFormat ?? "DD-MM-YYYY";
-              if (dateFormat === "MM-DD-YYYY") {
-                // US format: MM-DD-YYYY
-                parsedDate = createUTCDate(year, first - 1, second);
-              } else {
-                // European format: DD-MM-YYYY
-                parsedDate = createUTCDate(year, second - 1, first);
-              }
-            }
-          }
-        }
-        // Try DD-MM-YY, DD/MM/YY, DD.MM.YY, MM-DD-YY, etc. (2-digit year with optional time)
-        else if (/^\d{1,2}[\-\/\.]\d{1,2}[\-\/\.]\d{2}(?:\s|$)/.test(cleaned)) {
-          // Extract just the date part (before any time component)
-          const dateMatch = cleaned.match(/^(\d{1,2})[\-\/\.](\d{1,2})[\-\/\.](\d{2})/);
-          if (dateMatch) {
-            const first = parseInt(dateMatch[1]);
-            const second = parseInt(dateMatch[2]);
-            let year = parseInt(dateMatch[3]);
-            // Assume 20xx for years 00-50, 19xx for 51-99
-            year = year <= 50 ? 2000 + year : 1900 + year;
-
-            // Determine day and month based on format
-            let day: number, month: number;
-
-            // If first > 12, it must be day (European format)
-            if (first > 12) {
-              day = first;
-              month = second - 1;
-            } else if (second > 12) {
-              // US format: MM-DD-YY
-              day = second;
-              month = first - 1;
-            } else {
-              // Ambiguous - use user preference
-              const dateFormat = mapping.typeConfig?.dateFormat ?? "DD-MM-YYYY";
-              if (dateFormat === "MM-DD-YYYY") {
-                // US format: MM-DD-YY
-                day = second;
-                month = first - 1;
-              } else {
-                // European format: DD-MM-YY
-                day = first;
-                month = second - 1;
-              }
-            }
-
-            parsedDate = createUTCDate(year, month, day);
-          }
-        }
-        // Try MM/DD/YYYY or DD/MM/YYYY - use user preference for ambiguous dates
-        else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(cleaned)) {
-          const parts = cleaned.split("/");
-          const first = parseInt(parts[0]);
-          const second = parseInt(parts[1]);
-          const year = parseInt(parts[2]);
-
-          // If first > 12, it must be day (European format)
-          if (first > 12) {
-            parsedDate = createUTCDate(year, second - 1, first);
-          } else if (second > 12) {
-            // US format: MM/DD/YYYY
-            parsedDate = createUTCDate(year, first - 1, second);
-          } else {
-            // Ambiguous - use user preference
-            const dateFormat = mapping.typeConfig?.dateFormat ?? "DD-MM-YYYY";
-            if (dateFormat === "MM-DD-YYYY") {
-              // US format: MM/DD/YYYY
-              parsedDate = createUTCDate(year, first - 1, second);
-            } else {
-              // European format: DD/MM/YYYY
-              parsedDate = createUTCDate(year, second - 1, first);
-            }
-          }
-        }
-        // Try month name formats: "Feb 6, 2026", "February 6, 2026", "6 Feb 2026", etc.
-        else {
-          const monthNames = [
-            "january", "february", "march", "april", "may", "june",
-            "july", "august", "september", "october", "november", "december"
-          ];
-          const monthAbbrevs = [
-            "jan", "feb", "mar", "apr", "may", "jun",
-            "jul", "aug", "sep", "oct", "nov", "dec"
-          ];
-          
-          // Try formats like "Feb 6, 2026" or "February 6, 2026"
-          const monthNameMatch = cleaned.match(/^([a-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
-          if (monthNameMatch) {
-            const monthStr = monthNameMatch[1].toLowerCase();
-            const day = parseInt(monthNameMatch[2]);
-            const year = parseInt(monthNameMatch[3]);
-            
-            let monthIndex = monthAbbrevs.indexOf(monthStr);
-            if (monthIndex === -1) {
-              monthIndex = monthNames.indexOf(monthStr);
-            }
-            
-            if (monthIndex !== -1 && day >= 1 && day <= 31 && year >= 1900) {
-              parsedDate = createUTCDate(year, monthIndex, day);
-            }
-          }
-          
-          // Try formats like "6 Feb 2026" or "6 February 2026"
-          if (!parsedDate) {
-            const dayMonthMatch = cleaned.match(/^(\d{1,2})\s+([a-z]+)\s+(\d{4})/i);
-            if (dayMonthMatch) {
-              const day = parseInt(dayMonthMatch[1]);
-              const monthStr = dayMonthMatch[2].toLowerCase();
-              const year = parseInt(dayMonthMatch[3]);
-              
-              let monthIndex = monthAbbrevs.indexOf(monthStr);
-              if (monthIndex === -1) {
-                monthIndex = monthNames.indexOf(monthStr);
-              }
-              
-              if (monthIndex !== -1 && day >= 1 && day <= 31 && year >= 1900) {
-                parsedDate = createUTCDate(year, monthIndex, day);
-              }
-            }
-          }
-        }
-        
-        // Fallback: try parsing as ISO date or use UTC
-        if (!parsedDate) {
-          // Try to parse as YYYY-MM-DD format first
-          if (/^\d{4}[\-\/]\d{2}[\-\/]\d{2}/.test(cleaned)) {
-            const parts = cleaned.split(/[\-\/]/);
-            const year = parseInt(parts[0]);
-            const month = parseInt(parts[1]) - 1;
-            const day = parseInt(parts[2]);
-            parsedDate = createUTCDate(year, month, day);
-          } else {
-            // Fallback to native parsing (may have timezone issues, but better than nothing)
-            parsedDate = new Date(cleaned);
-          }
-        }
-
-        // Validate the parsed date
-        if (!parsedDate || isNaN(parsedDate.getTime())) {
-          rowsNeedingAttention += 1;
-          continue; // Skip invalid rows
-        }
-      } catch {
+      const parsedDate = parseImportedDate(dateStr, mapping.typeConfig?.dateFormat);
+      if (!parsedDate) {
         rowsNeedingAttention += 1;
         continue; // Skip invalid rows
       }
@@ -1168,52 +989,8 @@ export async function previewImportedTransactions(
           const dateStr = row[dateIndex];
           if (!dateStr) continue;
 
-          // Parse the date to get YYYY-MM-DD format
-          let parsedDate: Date | null = null;
-          try {
-            const cleaned = dateStr.replace(/['"]/g, "").trim();
-
-            // Try YYYYMMDD format
-            if (/^\d{8}$/.test(cleaned)) {
-              const year = parseInt(cleaned.substring(0, 4));
-              const month = parseInt(cleaned.substring(4, 6)) - 1;
-              const day = parseInt(cleaned.substring(6, 8));
-              parsedDate = createUTCDate(year, month, day);
-            }
-            // Try YYYY-MM-DD or YYYY/MM/DD
-            else if (/^\d{4}[\-\/]\d{2}[\-\/]\d{2}/.test(cleaned)) {
-              const parts = cleaned.split(/[\-\/]/);
-              const year = parseInt(parts[0]);
-              const month = parseInt(parts[1]) - 1;
-              const day = parseInt(parts[2]);
-              parsedDate = createUTCDate(year, month, day);
-            }
-            // Try DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY
-            else if (/^\d{1,2}[\-\/\.]\d{1,2}[\-\/\.]\d{4}$/.test(cleaned)) {
-              const parts = cleaned.split(/[\-\/\.]/);
-              const day = parseInt(parts[0]);
-              const month = parseInt(parts[1]) - 1;
-              const year = parseInt(parts[2]);
-              parsedDate = createUTCDate(year, month, day);
-            }
-            // Try DD-MM-YY, DD/MM/YY, DD.MM.YY
-            else if (/^\d{1,2}[\-\/\.]\d{1,2}[\-\/\.]\d{2}$/.test(cleaned)) {
-              const parts = cleaned.split(/[\-\/\.]/);
-              const day = parseInt(parts[0]);
-              const month = parseInt(parts[1]) - 1;
-              let year = parseInt(parts[2]);
-              year = year <= 50 ? 2000 + year : 1900 + year;
-              parsedDate = createUTCDate(year, month, day);
-            }
-            // Fallback
-            else {
-              parsedDate = new Date(cleaned);
-            }
-
-            if (!parsedDate || isNaN(parsedDate.getTime())) continue;
-          } catch {
-            continue;
-          }
+          const parsedDate = parseImportedDate(dateStr, mapping.typeConfig?.dateFormat);
+          if (!parsedDate) continue;
 
           // Format as YYYY-MM-DD
           const isoDate = parsedDate.toISOString().split("T")[0];
