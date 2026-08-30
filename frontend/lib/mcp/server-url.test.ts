@@ -30,10 +30,10 @@ describe("resolveMcpServerUrlForSnippet", () => {
 
   it("derives mcp subdomain from app subdomain", () => {
     const result = resolveMcpServerUrlForSnippet({
-      betterAuthUrl: "http://localhost:8080",
+      betterAuthUrl: "https://app.example.com",
     });
 
-    expect(result).toBe("http://localhost:8080/mcp");
+    expect(result).toBe("https://mcp.example.com/mcp");
   });
 
   it("falls back to app URL when BETTER_AUTH_URL is not set", () => {

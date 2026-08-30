@@ -361,7 +361,11 @@ def sync_all_bank_connections():
         dispatched = 0
         for conn in connections:
             try:
-                sync_bank_connection.delay(str(conn.id))
+                if conn.provider == "up":
+                    from tasks.up_tasks import sync_up_connection
+                    sync_up_connection.delay(str(conn.id))
+                else:
+                    sync_bank_connection.delay(str(conn.id))
                 dispatched += 1
             except Exception as e:
                 logger.error(f"Failed to dispatch sync for connection {conn.id}: {e}")
@@ -385,6 +389,7 @@ def check_consent_expiry():
         # Mark expired connections
         expired = db.query(BankConnection).filter(
             BankConnection.status == "active",
+            BankConnection.provider == "enable_banking",
             BankConnection.consent_expires_at <= now,
         ).all()
 

@@ -37,10 +37,14 @@ export default async function MapAccountsPage({ searchParams }: MapAccountsPageP
   const rawAccounts = (connection.rawSessionData as any)?.accounts || [];
   const bankAccounts = rawAccounts.map((a: any) => ({
     uid: a.uid || a.id || "",
-    name: a.account_name || a.name || "Bank Account",
+    name: a.account_name || a.display_name || a.name || "Bank Account",
     iban: a.iban || a.account_id?.iban || "",
     currency: (a.currency || "EUR").toUpperCase(),
-    accountType: a.account_type || "checking",
+    accountType: a.account_type || a.account_type_name || (
+      a.cash_account_type === "SVGS" ? "savings"
+        : a.cash_account_type === "LOAN" || a.cash_account_type === "CARD" ? "credit"
+          : "checking"
+    ),
   }));
 
   return (
