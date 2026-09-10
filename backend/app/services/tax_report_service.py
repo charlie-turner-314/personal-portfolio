@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models import (
     Account,
     CgtAllocation,
+    InvestmentCryptoTransfer,
     InvestmentCostBaseAdjustment,
     InvestmentIncomeEvent,
     Transaction,
@@ -95,7 +96,20 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
         "is_drp": bool(event.is_drp), "reconciliation_status": event.reconciliation_status,
         "matched_transaction_id": str(event.matched_transaction_id) if event.matched_transaction_id else None,
         "component_sources": event.component_sources or {},
+        "asset_quantity": _number(getattr(event, "asset_quantity", None)),
+        "aud_market_value": _number(getattr(event, "aud_market_value", None)),
+        "valuation_source": getattr(event, "valuation_source", None),
+        "valuation_timestamp": (
+            event.valuation_timestamp.isoformat()
+            if getattr(event, "valuation_timestamp", None) else None
+        ),
+        "valuation_missing": bool(getattr(event, "valuation_missing", False)),
     } for event in income_events]
+
+    def is_crypto_income(row: dict) -> bool:
+        return row["event_type"] in {"staking_reward", "airdrop"} or (
+            row["event_type"] == "interest" and row["asset_quantity"] is not None
+        )
 
     cgt_events = (
         db.query(CgtAllocation)
@@ -115,6 +129,18 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
         "cost_base_aud": _number(row.cost_base_aud), "proceeds_aud": _number(row.proceeds_aud),
         "cost_base_adjustment_aud": _number(row.cost_base_adjustment_aud),
         "adjustment_ids": row.adjustment_ids or [], "instrument_type": row.instrument_type,
+        "acquisition_valuation_source": getattr(row, "acquisition_valuation_source", None),
+        "disposal_valuation_source": getattr(row, "disposal_valuation_source", None),
+        "acquisition_valuation_timestamp": (
+            row.acquisition_valuation_timestamp.isoformat()
+            if getattr(row, "acquisition_valuation_timestamp", None) else None
+        ),
+        "disposal_valuation_timestamp": (
+            row.disposal_valuation_timestamp.isoformat()
+            if getattr(row, "disposal_valuation_timestamp", None) else None
+        ),
+        "acquisition_economic_type": getattr(row, "acquisition_economic_type", "trade"),
+        "disposal_economic_type": getattr(row, "disposal_economic_type", "trade"),
         "discount_eligible": bool(row.discount_eligible), "calculation_version": row.calculation_version,
         "assumptions": row.assumptions or [],
     } for row in cgt_events]
@@ -147,6 +173,32 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
         "calculation_version": row.calculation_version,
         "assumptions": row.assumptions or [],
     } for row in cost_base_adjustments]
+
+    crypto_transfers = (
+        db.query(InvestmentCryptoTransfer)
+        .filter(
+            InvestmentCryptoTransfer.user_id == user_id,
+            InvestmentCryptoTransfer.occurred_at >= start,
+            InvestmentCryptoTransfer.occurred_at < end,
+        )
+        .order_by(InvestmentCryptoTransfer.occurred_at, InvestmentCryptoTransfer.id)
+        .all()
+    )
+    crypto_transfer_rows = [{
+        "source_id": str(row.id),
+        "source_activity_id": str(row.source_activity_id),
+        "account_id": str(row.account_id),
+        "matched_transfer_id": str(row.matched_transfer_id) if row.matched_transfer_id else None,
+        "direction": row.direction,
+        "asset_symbol": row.asset_symbol,
+        "quantity": _number(row.quantity),
+        "occurred_at": row.occurred_at.isoformat(),
+        "transaction_hash": row.transaction_hash,
+        "status": row.status,
+        "match_method": row.match_method,
+        "reason": row.reason,
+        "assumptions": row.assumptions or [],
+    } for row in crypto_transfers]
 
     # TransactionLink membership is excluded as the data model does not say which
     # linked cash amount should survive a reimbursement.  The source is counted
@@ -214,6 +266,25 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
                 row["source_id"] for row in income_rows
                 if row["reconciliation_status"] != "confirmed"
             ],
+            "crypto_ordinary_income_aud": _number(sum(
+                (
+                    Decimal(row["aud_market_value"])
+                    for row in income_rows
+                    if is_crypto_income(row)
+                    and row["aud_market_value"] is not None
+                ),
+                Decimal("0"),
+            )),
+            "crypto_ordinary_income_source_ids": [
+                row["source_id"] for row in income_rows
+                if is_crypto_income(row)
+                and row["aud_market_value"] is not None
+            ],
+            "crypto_missing_valuation_source_ids": [
+                row["source_id"] for row in income_rows
+                if is_crypto_income(row)
+                and row["valuation_missing"]
+            ],
         },
         "cgt": {"rows": cgt_rows, "gross_gains_aud": _number(gains), "capital_losses_aud": _number(losses),
                 "gross_gain_source_ids": [row["source_id"] for row in cgt_known if Decimal(row["gain_aud"]) > 0],
@@ -234,6 +305,13 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
                          "expense_categories": _expense_categories(transaction_rows),
                          "rental_income_by_currency": _absolute_sum_by_currency(rental_income_rows, "amount"),
                          "rental_expense_by_currency": _absolute_sum_by_currency(rental_expense_rows, "amount")},
+        "crypto_transfers": {
+            "rows": crypto_transfer_rows,
+            "unresolved_source_ids": [
+                row["source_id"] for row in crypto_transfer_rows
+                if row["status"] in {"pending", "ambiguous"}
+            ],
+        },
         "assumptions": [
             "Informational report only; it does not calculate tax payable, deductions, offsets, or taxable income.",
             "Transaction categories are labels only. Deductibility and interest treatment are unclassified or unavailable unless separately modelled. Rental rows are recorded cashflow for properties marked as rental; allocation, ownership, depreciation, and private-use treatment are not calculated.",
@@ -241,6 +319,9 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             "CGT rows with missing transaction-date FX are excluded from AUD gain/loss totals.",
             "Recorded AMIT/AMMA shortfalls increase cost base and excesses decrease it on their recorded effective dates.",
             "Bank transactions linked to investment-income events are excluded from transaction cashflow totals to avoid duplicate economic income.",
+            "Matched owned-wallet crypto transfers preserve lot basis and are excluded from CGT; crypto paid as a network fee remains a disposal.",
+            "Staking, airdrop, and crypto-interest ordinary income uses receipt-time AUD market value only when provenance is recorded.",
+            "Imported airdrop rows are treated as ordinary-income airdrops; other airdrop circumstances can require different tax treatment and should be reviewed.",
         ],
     }
 
@@ -256,6 +337,9 @@ _DICTIONARY = [
     ("component_sources", "Immutable activity references that supplied each recorded income component."),
     ("cost_base_adjustment_native", "Signed AMIT/AMMA adjustment included in the allocation cost base."),
     ("adjustment_ids", "Cost-base adjustment records included in the allocation."),
+    ("economic_type", "Derived crypto leg type, distinguishing swaps, rewards, fees, and owned transfers."),
+    ("valuation_missing", "True when event-time AUD market value is absent; tax totals do not infer a value."),
+    ("crypto_transfer_status", "Matched owned transfers carry basis; pending or ambiguous movements require review."),
 ]
 
 
@@ -266,6 +350,7 @@ def tax_report_zip(report: dict) -> bytes:
         for name, rows in (("investment_income", report["investment_income"]["rows"]),
                            ("cgt_allocations", report["cgt"]["rows"]),
                            ("cost_base_adjustments", report["cgt"].get("cost_base_adjustments", [])),
+                           ("crypto_transfers", report.get("crypto_transfers", {}).get("rows", [])),
                            ("transactions", report["transactions"]["rows"]),
                            ("excluded_transactions", report["transactions"]["excluded_rows"])):
             fields = sorted({key for row in rows for key in row}) or ["source_id"]

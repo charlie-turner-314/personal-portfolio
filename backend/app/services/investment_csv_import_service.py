@@ -51,12 +51,20 @@ MAPPING_FIELDS = (
     "currency",
     "fee_amount",
     "fee_currency",
+    "fee_aud_value",
+    "fee_valuation_source",
+    "fee_valuation_timestamp",
     "tax_amount",
     "tax_currency",
     "source_reference",
     "counter_asset_symbol",
     "counter_quantity",
     "direction",
+    "external_group_id",
+    "transaction_hash",
+    "aud_value",
+    "valuation_source",
+    "valuation_timestamp",
     "description",
     "ex_date",
     "franked_amount",
@@ -85,6 +93,8 @@ _NUMERIC_FIELDS = (
     "gross_amount",
     "net_amount",
     "fee_amount",
+    "fee_aud_value",
+    "aud_value",
     "tax_amount",
     "counter_quantity",
     "franked_amount",
@@ -495,6 +505,32 @@ def parse_investment_csv(
             if decimals["tax_amount"] is not None and indices.get("tax_currency", -1) < 0 and currency:
                 warnings.append("tax_currency defaulted to the activity currency")
             direction = _value(row, indices.get("direction", -1))
+            valuation_timestamp_raw = _value(row, indices.get("valuation_timestamp", -1))
+            fee_valuation_timestamp_raw = _value(row, indices.get("fee_valuation_timestamp", -1))
+            valuation_source = _value(row, indices.get("valuation_source", -1))
+            fee_valuation_source = _value(row, indices.get("fee_valuation_source", -1))
+            valuation_timestamp = None
+            fee_valuation_timestamp = None
+            if decimals["aud_value"] is not None:
+                valuation_source = valuation_source or f"{normalize_provider(provider)}_reported"
+                valuation_timestamp = (
+                    _parse_datetime(valuation_timestamp_raw, date_format)
+                    if valuation_timestamp_raw else occurred_at
+                )
+                if valuation_timestamp_raw is None:
+                    warnings.append("valuation_timestamp defaulted to the activity timestamp")
+                if indices.get("valuation_source", -1) < 0:
+                    warnings.append("valuation_source defaulted to the provider-reported CSV value")
+            if decimals["fee_aud_value"] is not None:
+                fee_valuation_source = fee_valuation_source or f"{normalize_provider(provider)}_reported"
+                fee_valuation_timestamp = (
+                    _parse_datetime(fee_valuation_timestamp_raw, date_format)
+                    if fee_valuation_timestamp_raw else occurred_at
+                )
+                if fee_valuation_timestamp_raw is None:
+                    warnings.append("fee_valuation_timestamp defaulted to the activity timestamp")
+                if indices.get("fee_valuation_source", -1) < 0:
+                    warnings.append("fee_valuation_source defaulted to the provider-reported CSV value")
             ex_date_raw = _value(row, indices.get("ex_date", -1))
             effective_date_raw = _value(row, indices.get("cost_base_effective_date", -1))
             components_raw = _value(row, indices.get("amit_amma_components", -1))
@@ -546,6 +582,7 @@ def parse_investment_csv(
                     if effective_date_raw else None
                 ),
                 "annual_statement_reference": _value(row, indices.get("annual_statement_reference", -1)),
+                "transaction_hash": _value(row, indices.get("transaction_hash", -1)),
             }
             metadata = {key: value for key, value in metadata.items() if value is not None}
             activity = CanonicalActivityInput(
@@ -561,11 +598,21 @@ def parse_investment_csv(
                 currency=currency,
                 fee_amount=decimals["fee_amount"],
                 fee_currency=fee_currency,
+                fee_aud_value=decimals["fee_aud_value"],
+                fee_valuation_source=fee_valuation_source,
+                fee_valuation_timestamp=fee_valuation_timestamp,
                 tax_amount=decimals["tax_amount"],
                 tax_currency=tax_currency,
                 counter_asset_symbol=_value(row, indices.get("counter_asset_symbol", -1)),
                 counter_quantity=decimals["counter_quantity"],
                 direction=direction,
+                external_group_id=(
+                    _value(row, indices.get("external_group_id", -1))
+                    or _value(row, indices.get("transaction_hash", -1))
+                ),
+                aud_value=decimals["aud_value"],
+                valuation_source=valuation_source,
+                valuation_timestamp=valuation_timestamp,
                 warnings=tuple(warnings),
                 metadata=metadata,
             )
@@ -588,7 +635,7 @@ def parse_investment_csv(
                 "row_number": row_number,
                 "status": "ready",
                 "normalized": _serialize_activity(record.activities[0]),
-                "warnings": warnings,
+                "warnings": list(record.activities[0].warnings),
                 "raw": raw_payload,
             })
         except ActivityValidationError as exc:

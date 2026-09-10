@@ -1,5 +1,5 @@
 """Unit tests for the pure FIFO P&L engine."""
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
@@ -297,6 +297,32 @@ def test_compute_fifo_retains_trade_identity_and_stable_same_day_ordering():
     assert result.realized[0].acquisition_trade_id == "buy-a"
     assert result.realized[0].disposal_trade_id == "sell-a"
     assert result.realized[0].cost_native == Decimal("90")
+
+
+def test_compute_fifo_uses_event_time_and_preserves_carried_acquisition_date():
+    sold_before_buy = [
+        Trade(
+            "BTC", date(2025, 1, 2), "sell", Decimal("1"), Decimal("120"), "AUD",
+            occurred_at=datetime(2025, 1, 2, 9, 0),
+        ),
+        Trade(
+            "BTC", date(2025, 1, 2), "buy", Decimal("1"), Decimal("100"), "AUD",
+            occurred_at=datetime(2025, 1, 2, 10, 0),
+        ),
+    ]
+    with pytest.raises(OverSellError):
+        compute_fifo(sold_before_buy)
+
+    carried = compute_fifo([
+        Trade(
+            "BTC", date(2025, 1, 2), "buy", Decimal("1"), Decimal("100"), "AUD",
+            trade_id="transfer-in",
+            occurred_at=datetime(2025, 1, 2, 10, 0),
+            acquisition_date=date(2023, 5, 1),
+        ),
+    ]).open_lots[0]
+    assert carried.open_date == date(2023, 5, 1)
+    assert carried.acquisition_trade_id == "transfer-in"
 
 
 def test_cgt_discount_uses_calendar_year_anniversary_including_leap_day():

@@ -40,4 +40,20 @@ describe("InvestmentIncomePanel", () => {
       drp_price: "40",
     })));
   });
+
+  it("shows crypto reward quantity and flags a missing AUD valuation", () => {
+    render(<InvestmentIncomePanel defaultCurrency="AUD" events={[{
+      id: "reward-1",
+      event_type: "staking_reward",
+      pay_date: "2026-06-30",
+      currency: "AUD",
+      cash_received: "0",
+      asset_quantity: "0.125",
+      aud_market_value: null,
+      valuation_missing: true,
+    }]} />);
+
+    expect(screen.getByText("staking reward")).toBeTruthy();
+    expect(screen.getByText("0.125 units · AUD value missing")).toBeTruthy();
+  });
 });

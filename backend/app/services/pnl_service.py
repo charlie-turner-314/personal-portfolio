@@ -7,7 +7,7 @@ no FX, no I/O. DB- and FX-aware wrappers live below.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Callable, Iterable, Optional
 
@@ -24,6 +24,8 @@ class Trade:
     fees: Decimal = Decimal("0")  # native currency, non-negative
     trade_id: Optional[str] = None
     sort_key: Optional[str] = None
+    occurred_at: Optional[datetime] = None
+    acquisition_date: Optional[date] = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,7 @@ class OpenLot:
     original_cost_per_share_native: Decimal = Decimal("0")
     cost_base_adjustment_per_share_native: Decimal = Decimal("0")
     adjustments: tuple[AppliedCostBaseAdjustment, ...] = ()
+    acquisition_trade_id: Optional[str] = None
 
 
 @dataclass
@@ -143,12 +146,25 @@ def compute_fifo(
     they are still matched (currency redenomination is out of scope for the
     pure engine — caller decides whether to split).
     """
-    events: list[tuple[date, int, str, Trade | CostBaseAdjustment]] = [
-        (trade.trade_date, 0 if trade.side == "buy" else 2, trade.sort_key or trade.trade_id or "", trade)
+    events: list[tuple[datetime, int, str, Trade | CostBaseAdjustment]] = [
+        (
+            trade.occurred_at or datetime.combine(
+                trade.trade_date,
+                time.min if trade.side == "buy" else time.max,
+            ),
+            0 if trade.side == "buy" else 2,
+            trade.sort_key or trade.trade_id or "",
+            trade,
+        )
         for trade in trades
     ]
     events.extend(
-        (item.effective_date, 1, item.sort_key or item.adjustment_id or "", item)
+        (
+            datetime.combine(item.effective_date, time(hour=12)),
+            1,
+            item.sort_key or item.adjustment_id or "",
+            item,
+        )
         for item in adjustments
     )
     events.sort(key=lambda item: item[:3])
@@ -187,7 +203,7 @@ def compute_fifo(
                 else t.price
             )
             lots.append(_MutableLot(
-                open_date=t.trade_date,
+                open_date=t.acquisition_date or t.trade_date,
                 quantity_remaining=t.quantity,
                 cost_per_share_native=cost_per_share,
                 original_cost_per_share_native=cost_per_share,
@@ -253,6 +269,7 @@ def compute_fifo(
                     lot.cost_per_share_native - lot.original_cost_per_share_native
                 ),
                 adjustments=tuple(lot.adjustments_per_share),
+                acquisition_trade_id=lot.trade_id,
             ))
 
     return FifoResult(realized=realized, open_lots=open_lots)

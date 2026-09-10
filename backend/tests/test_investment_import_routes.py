@@ -214,3 +214,40 @@ def test_reconciliation_routes_surface_and_resolve_owned_income_review(route_con
     hidden = _request_json(client, "GET", path, other_user)
     assert hidden.status_code == 200
     assert hidden.json() == []
+
+
+def test_crypto_transfer_review_route_is_account_scoped(route_context):
+    client, user, account = route_context
+    payload = _request(str(account.id))
+    payload["default_asset_type"] = "crypto"
+    payload["file_content"] = (
+        "Reference,Date,Type,Symbol,Quantity,Transaction hash\n"
+        "crypto-out-1,2025-08-01,Withdrawal,BTC,0.25,chain-hash-1\n"
+    )
+    payload["mapping"] = {
+        "source_reference": "Reference",
+        "occurred_at": "Date",
+        "activity_type": "Type",
+        "asset_symbol": "Symbol",
+        "quantity": "Quantity",
+        "transaction_hash": "Transaction hash",
+    }
+    applied = _request_json(
+        client, "POST", "/api/investments/imports", user.id, json=payload,
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["pending_transfers"] == 1
+
+    path = f"/api/investments/crypto-transfers?account_id={account.id}&status=pending"
+    listed = _request_json(client, "GET", path, user.id)
+    assert listed.status_code == 200, listed.text
+    transfer = listed.json()[0]
+    assert transfer["direction"] == "out"
+    assert transfer["asset_symbol"] == "BTC"
+    assert transfer["quantity"] == "0.250000000000000000"
+    assert transfer["transaction_hash"] == "chain-hash-1"
+    assert transfer["status"] == "pending"
+    assert transfer["match_method"] is None
+
+    hidden = _request_json(client, "GET", path, f"other-{uuid.uuid4()}")
+    assert hidden.status_code == 404

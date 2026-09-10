@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   applyInvestmentImport,
   listAccountIncomeEvents,
+  listInvestmentCryptoTransfers,
   listInvestmentImportProfiles,
   listInvestmentImports,
   listInvestmentReconciliationItems,
@@ -17,6 +18,7 @@ import {
   type InvestmentImportPreview,
   type InvestmentImportRequest,
   type InvestmentImportRun,
+  type InvestmentCryptoTransfer,
   type InvestmentIncomeEvent,
   type InvestmentReconciliationItem,
 } from "@/lib/api/investments";
@@ -58,6 +60,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<InvestmentImportPreview | null>(null);
   const [runs, setRuns] = useState<InvestmentImportRun[]>([]);
+  const [cryptoTransfers, setCryptoTransfers] = useState<InvestmentCryptoTransfer[]>([]);
   const [reconciliationItems, setReconciliationItems] = useState<InvestmentReconciliationItem[]>([]);
   const [incomeEvents, setIncomeEvents] = useState<InvestmentIncomeEvent[]>([]);
   const [selectedIncomeEvents, setSelectedIncomeEvents] = useState<Record<string, string>>({});
@@ -85,14 +88,16 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     if (!accountId) return;
     setBusy((current) => current ?? "history");
     try {
-      const [history, pending, events] = await Promise.all([
+      const [history, pending, events, transfers] = await Promise.all([
         listInvestmentImports(accountId),
         listInvestmentReconciliationItems(accountId),
         listAccountIncomeEvents(accountId),
+        listInvestmentCryptoTransfers(accountId),
       ]);
       setRuns(history);
       setReconciliationItems(pending);
       setIncomeEvents(events);
+      setCryptoTransfers(transfers);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load import history.");
     } finally {
@@ -293,6 +298,13 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
               Map the AMIT cost-base shortfall as an increase and excess as a decrease. Unmatched or conflicting rows stay in reconciliation review.
             </div>
           )}
+          {assetType === "crypto" && (
+            <div className="border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
+              For swaps and rewards, map the event-time AUD market value and its source when available.
+              For owned-wallet movements, map the blockchain transaction hash and the net quantity received;
+              map any network fee separately so its disposal remains auditable.
+            </div>
+          )}
           <CsvUploadDropzone onFileSelect={onFileSelect} isUploading={busy === "preview" || busy === "import"} />
           {profileMessage && <p className="text-xs text-muted-foreground">{profileMessage}</p>}
         </CardContent>
@@ -445,6 +457,36 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
           </CardContent>
         </Card>
       )}
+
+      <Card className="rounded-none">
+        <CardHeader><CardTitle className="text-base">Crypto transfer review</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            A transfer is excluded from CGT only after a unique matching movement is found in another owned account. Network fees remain separate disposals.
+          </p>
+          {cryptoTransfers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No crypto transfer activity is recorded for this account.</p>
+          ) : (
+            <div className="divide-y divide-border border border-border">
+              {cryptoTransfers.map((transfer) => (
+                <div className="grid gap-2 p-3 text-xs md:grid-cols-[minmax(0,1fr)_auto]" key={transfer.id}>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{transfer.direction === "in" ? "Received" : transfer.direction === "out" ? "Sent" : "Internal"} {transfer.quantity} {transfer.asset_symbol}</span>
+                      <Badge className={transfer.status === "ambiguous" ? "border-amber-500/50 text-amber-700 dark:text-amber-300" : undefined} variant="outline">{transfer.status}</Badge>
+                    </div>
+                    <p className="mt-1 text-muted-foreground">{formattedDate(transfer.occurred_at)} · {transfer.reason ?? "No matching detail was recorded."}</p>
+                    {transfer.transaction_hash && <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={transfer.transaction_hash}>Transaction {transfer.transaction_hash}</p>}
+                  </div>
+                  <div className="text-muted-foreground md:text-right">
+                    {transfer.match_method === "transaction_hash" ? "Matched by transaction hash" : transfer.match_method === "quantity_time_window" ? "Matched by quantity and time" : "Review required"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="rounded-none">
         <CardHeader><CardTitle className="text-base">Reconciliation review</CardTitle></CardHeader>

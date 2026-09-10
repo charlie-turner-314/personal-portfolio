@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   applyInvestmentImport: vi.fn(),
   listInvestmentImportProfiles: vi.fn(),
   listInvestmentImports: vi.fn(),
+  listInvestmentCryptoTransfers: vi.fn(),
   listInvestmentReconciliationItems: vi.fn(),
   listAccountIncomeEvents: vi.fn(),
   resolveInvestmentReconciliationItem: vi.fn(),
@@ -49,6 +50,7 @@ describe("InvestmentImportWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listInvestmentImports.mockResolvedValue([]);
+    mocks.listInvestmentCryptoTransfers.mockResolvedValue([]);
     mocks.listInvestmentImportProfiles.mockResolvedValue([]);
     mocks.listInvestmentReconciliationItems.mockResolvedValue([]);
     mocks.listAccountIncomeEvents.mockResolvedValue([]);
@@ -159,5 +161,30 @@ describe("InvestmentImportWizard", () => {
     expect(await screen.findByText(/may create CGT event E10/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /use statement values/i })).toBeNull();
     expect(screen.getByRole("button", { name: /keep recorded values/i })).toBeTruthy();
+  });
+
+  it("shows unresolved crypto transfers without classifying them as disposals", async () => {
+    mocks.listInvestmentCryptoTransfers.mockResolvedValueOnce([{
+      id: "transfer-1",
+      account_id: "account-1",
+      source_activity_id: "activity-1",
+      matched_transfer_id: null,
+      direction: "out",
+      asset_symbol: "BTC",
+      quantity: "0.25",
+      occurred_at: "2025-08-01T12:00:00Z",
+      transaction_hash: "abc123",
+      status: "pending",
+      match_method: null,
+      reason: "Awaiting a unique opposite movement in another owned account.",
+      assumptions: [],
+    }]);
+
+    render(<InvestmentImportWizard accounts={accounts} />);
+
+    expect(await screen.findByText("Sent 0.25 BTC")).toBeTruthy();
+    expect(screen.getByText("pending")).toBeTruthy();
+    expect(screen.getByText(/excluded from CGT only after a unique matching movement/i)).toBeTruthy();
+    expect(screen.getByText("Review required")).toBeTruthy();
   });
 });

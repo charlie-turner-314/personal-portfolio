@@ -25,6 +25,7 @@ from app.models import (
     Holding,
     InvestmentActivity,
     InvestmentCostBaseAdjustment,
+    InvestmentCryptoTransfer,
     InvestmentIncomeEnrichment,
     InvestmentIncomeEvent,
     InvestmentIngestionRun,
@@ -98,6 +99,9 @@ class CanonicalActivityInput:
     currency: str | None = None
     fee_amount: Decimal | str | int | float | None = None
     fee_currency: str | None = None
+    fee_aud_value: Decimal | str | int | float | None = None
+    fee_valuation_source: str | None = None
+    fee_valuation_timestamp: datetime | None = None
     tax_amount: Decimal | str | int | float | None = None
     tax_currency: str | None = None
     counter_asset_symbol: str | None = None
@@ -286,6 +290,7 @@ def _validate_activity(
         "gross_amount",
         "net_amount",
         "fee_amount",
+        "fee_aud_value",
         "tax_amount",
         "counter_quantity",
         "aud_value",
@@ -300,7 +305,10 @@ def _validate_activity(
         value = decimals[field_name]
         if value is not None and value <= 0:
             errors.append({**prefix, "field": field_name, "reason": f"{field_name} must be positive"})
-    for field_name in ("price", "gross_amount", "net_amount", "fee_amount", "tax_amount", "aud_value"):
+    for field_name in (
+        "price", "gross_amount", "net_amount", "fee_amount", "fee_aud_value",
+        "tax_amount", "aud_value",
+    ):
         value = decimals[field_name]
         if value is not None and value < 0:
             errors.append({**prefix, "field": field_name, "reason": f"{field_name} must be non-negative"})
@@ -312,18 +320,24 @@ def _validate_activity(
     counter_symbol = activity.counter_asset_symbol.strip().upper() if activity.counter_asset_symbol else None
 
     if activity_type in {"buy", "sell", "drp"}:
-        for required in ("quantity", "price"):
-            if decimals[required] is None:
-                errors.append({**prefix, "field": required, "reason": f"{activity_type} requires {required}"})
-        if not currency:
+        if decimals["quantity"] is None:
+            errors.append({**prefix, "field": "quantity", "reason": f"{activity_type} requires quantity"})
+        crypto_aud_total = asset_type == "crypto" and decimals["aud_value"] is not None
+        if decimals["price"] is None and not crypto_aud_total:
+            errors.append({**prefix, "field": "price", "reason": f"{activity_type} requires price or an explicit crypto AUD value"})
+        if not currency and not crypto_aud_total:
             errors.append({**prefix, "field": "currency", "reason": f"{activity_type} requires currency"})
-    if activity_type in {"dividend", "distribution", "interest"}:
+    if activity_type in {"dividend", "distribution"} or (
+        activity_type == "interest" and asset_type != "crypto"
+    ):
         if decimals["gross_amount"] is None and decimals["net_amount"] is None:
             errors.append({**prefix, "field": "gross_amount", "reason": f"{activity_type} requires gross_amount or net_amount"})
         if not currency:
             errors.append({**prefix, "field": "currency", "reason": f"{activity_type} requires currency"})
     if activity_type in {"deposit", "withdrawal", "staking_reward", "airdrop"} and decimals["quantity"] is None:
         errors.append({**prefix, "field": "quantity", "reason": f"{activity_type} requires quantity"})
+    if activity_type == "interest" and asset_type == "crypto" and decimals["quantity"] is None:
+        errors.append({**prefix, "field": "quantity", "reason": "crypto interest requires quantity"})
     if activity_type == "transfer":
         if decimals["quantity"] is None:
             errors.append({**prefix, "field": "quantity", "reason": "transfer requires quantity"})
@@ -339,6 +353,12 @@ def _validate_activity(
                 errors.append({**prefix, "field": required, "reason": f"crypto_swap requires {required}"})
         if not counter_symbol:
             errors.append({**prefix, "field": "counter_asset_symbol", "reason": "crypto_swap requires counter_asset_symbol"})
+        elif counter_symbol == symbol:
+            errors.append({**prefix, "field": "counter_asset_symbol", "reason": "crypto_swap assets must differ"})
+        if asset_type != "crypto":
+            errors.append({**prefix, "field": "asset_type", "reason": "crypto_swap requires crypto asset_type"})
+    if activity_type in {"staking_reward", "airdrop"} and asset_type != "crypto":
+        errors.append({**prefix, "field": "asset_type", "reason": f"{activity_type} requires crypto asset_type"})
 
     if decimals["fee_amount"] is not None and not fee_currency:
         errors.append({**prefix, "field": "fee_currency", "reason": "fee_currency is required when fee_amount is present"})
@@ -349,6 +369,11 @@ def _validate_activity(
             errors.append({**prefix, "field": "valuation_source", "reason": "AUD values require valuation provenance"})
         if activity.valuation_timestamp is None:
             errors.append({**prefix, "field": "valuation_timestamp", "reason": "AUD values require a valuation timestamp"})
+    if decimals["fee_aud_value"] is not None:
+        if not activity.fee_valuation_source or not activity.fee_valuation_source.strip():
+            errors.append({**prefix, "field": "fee_valuation_source", "reason": "fee AUD values require valuation provenance"})
+        if activity.fee_valuation_timestamp is None:
+            errors.append({**prefix, "field": "fee_valuation_timestamp", "reason": "fee AUD values require a valuation timestamp"})
 
     valuation_timestamp = None
     if activity.valuation_timestamp is not None:
@@ -359,8 +384,20 @@ def _validate_activity(
         except ValueError as exc:
             errors.append({**prefix, "field": "valuation_timestamp", "reason": str(exc)})
 
+    fee_valuation_timestamp = None
+    if activity.fee_valuation_timestamp is not None:
+        try:
+            fee_valuation_timestamp = _normalized_datetime(
+                activity.fee_valuation_timestamp, field_name="fee_valuation_timestamp"
+            )
+        except ValueError as exc:
+            errors.append({**prefix, "field": "fee_valuation_timestamp", "reason": str(exc)})
+
     if errors:
         return None, errors
+    has_crypto_aud_value = decimals["aud_value"] is not None or (
+        currency == "AUD" and decimals["price"] is not None
+    )
     return replace(
         activity,
         activity_type=activity_type,
@@ -374,6 +411,11 @@ def _validate_activity(
         currency=currency,
         fee_amount=decimals["fee_amount"],
         fee_currency=fee_currency,
+        fee_aud_value=decimals["fee_aud_value"],
+        fee_valuation_source=(
+            activity.fee_valuation_source.strip() if activity.fee_valuation_source else None
+        ),
+        fee_valuation_timestamp=fee_valuation_timestamp,
         tax_amount=decimals["tax_amount"],
         tax_currency=tax_currency,
         counter_asset_symbol=counter_symbol,
@@ -382,8 +424,20 @@ def _validate_activity(
         aud_value=decimals["aud_value"],
         valuation_source=activity.valuation_source.strip() if activity.valuation_source else None,
         valuation_timestamp=valuation_timestamp,
-        assumptions=tuple(str(item) for item in activity.assumptions),
-        warnings=tuple(str(item) for item in activity.warnings),
+        assumptions=tuple(str(item) for item in activity.assumptions) + (
+            ("No AUD market value was inferred; tax amounts remain explicitly incomplete.",)
+            if asset_type == "crypto"
+            and activity_type in {"crypto_swap", "staking_reward", "airdrop", "interest"}
+            and not has_crypto_aud_value
+            else ()
+        ),
+        warnings=tuple(str(item) for item in activity.warnings) + (
+            ("AUD market value is missing for this tax-sensitive crypto activity.",)
+            if asset_type == "crypto"
+            and activity_type in {"crypto_swap", "staking_reward", "airdrop", "interest"}
+            and not has_crypto_aud_value
+            else ()
+        ),
         metadata=sanitize_source_payload(activity.metadata),
     ), []
 
@@ -506,6 +560,9 @@ def _canonical_activity_payload(activity: CanonicalActivityInput) -> dict[str, A
         "currency": activity.currency,
         "fee_amount": activity.fee_amount,
         "fee_currency": activity.fee_currency,
+        "fee_aud_value": activity.fee_aud_value,
+        "fee_valuation_source": activity.fee_valuation_source,
+        "fee_valuation_timestamp": activity.fee_valuation_timestamp,
         "tax_amount": activity.tax_amount,
         "tax_currency": activity.tax_currency,
         "counter_asset_symbol": activity.counter_asset_symbol,
@@ -577,12 +634,23 @@ def _apply_trade_activity(
         symbol=activity.asset_symbol,
         instrument_type=_instrument_type(activity.asset_type),
         trade_date=activity.occurred_at.date(),
+        occurred_at=activity.occurred_at,
+        acquisition_date=activity.occurred_at.date(),
         side=side,
         quantity=activity.quantity,
         price=activity.price,
         currency=activity.currency,
         fees=fees,
         external_id=external_id,
+        economic_type="trade",
+        taxable_disposal=True,
+        aud_value=activity.aud_value,
+        valuation_source=activity.valuation_source,
+        valuation_timestamp=activity.valuation_timestamp,
+        valuation_missing=False,
+        assumptions=list(activity.assumptions or []),
+        source_activity_id=activity.id,
+        event_group_id=activity.external_group_id,
     )
     db.add(trade)
     db.flush()
@@ -680,6 +748,13 @@ def apply_batch(
     trade_activities: list[tuple[InvestmentActivity, str]] = []
     income_activities: list[tuple[InvestmentActivity, str]] = []
     affected_trade_instruments: set[tuple[str, str]] = set()
+    transfer_summary = {
+        "total_transfers": 0,
+        "matched_pairs": 0,
+        "ambiguous_transfers": 0,
+        "pending_transfers": 0,
+        "internal_transfers": 0,
+    }
 
     try:
         with db.begin_nested():
@@ -735,6 +810,9 @@ def apply_batch(
                         currency=canonical.currency,
                         fee_amount=canonical.fee_amount,
                         fee_currency=canonical.fee_currency,
+                        fee_aud_value=canonical.fee_aud_value,
+                        fee_valuation_source=canonical.fee_valuation_source,
+                        fee_valuation_timestamp=canonical.fee_valuation_timestamp,
                         tax_amount=canonical.tax_amount,
                         tax_currency=canonical.tax_currency,
                         counter_asset_symbol=canonical.counter_asset_symbol,
@@ -752,7 +830,25 @@ def apply_batch(
                     db.add(activity)
                     db.flush()
                     inserted_activities += 1
-                    if canonical.activity_type in {"buy", "sell", "drp"}:
+                    is_crypto_accounting = canonical.asset_type == "crypto" and canonical.activity_type in {
+                        "buy", "sell", "crypto_swap", "staking_reward", "airdrop", "interest",
+                        "transfer", "deposit", "withdrawal", "fee",
+                    }
+                    if is_crypto_accounting:
+                        from app.services.crypto_accounting_service import apply_crypto_activity
+
+                        crypto_result = apply_crypto_activity(
+                            db,
+                            account=account,
+                            activity=activity,
+                            idempotency_key=idempotency_key,
+                        )
+                        if crypto_result.trades:
+                            trade_activities.append((activity, idempotency_key))
+                        affected_trade_instruments.update(crypto_result.affected_instruments)
+                        if canonical.activity_type in {"transfer", "deposit", "withdrawal"}:
+                            affected_trade_instruments.add((canonical.asset_symbol, "crypto"))
+                    elif canonical.activity_type in {"buy", "sell", "drp"}:
                         _apply_trade_activity(
                             db,
                             account,
@@ -763,7 +859,7 @@ def apply_batch(
                         affected_trade_instruments.add(
                             (canonical.asset_symbol, _instrument_type(canonical.asset_type))
                         )
-                    if canonical.activity_type in {"dividend", "distribution", "drp"}:
+                    if not is_crypto_accounting and canonical.activity_type in {"dividend", "distribution", "drp"}:
                         income_activities.append((activity, idempotency_key))
 
             for symbol, instrument_type in sorted(affected_trade_instruments):
@@ -780,6 +876,9 @@ def apply_batch(
                     activity,
                     idempotency_key=idempotency_key,
                 )
+            from app.services.crypto_accounting_service import rebuild_owned_crypto_transfers
+
+            transfer_summary = rebuild_owned_crypto_transfers(db, user_id=user_id)
             applied_at = datetime.utcnow()
             for activity, _ in trade_activities:
                 activity.applied_at = applied_at
@@ -798,6 +897,7 @@ def apply_batch(
             "skipped_duplicate_records": skipped_records,
             "inserted_activities": inserted_activities,
             "affected_symbols": sorted({symbol for symbol, _ in affected_trade_instruments}),
+            **(transfer_summary if transfer_summary["total_transfers"] else {}),
         }
         if commit:
             db.commit()
@@ -886,6 +986,12 @@ def revert_run(
     )
     activity_ids = {activity.id for activity in activities}
     trade_ids = {activity.broker_trade_id for activity in activities if activity.broker_trade_id}
+    if activity_ids:
+        trade_ids.update(
+            trade_id for (trade_id,) in db.query(BrokerTrade.id).filter(
+                BrokerTrade.source_activity_id.in_(activity_ids)
+            ).all()
+        )
     income_ids = {
         event_id for (event_id,) in db.query(InvestmentIncomeEvent.id).filter(
             InvestmentIncomeEvent.created_by_activity_id.in_(activity_ids)
@@ -904,6 +1010,9 @@ def revert_run(
     ).all() if activity_ids else []
     reconciliation_items = db.query(InvestmentReconciliationItem).filter(
         InvestmentReconciliationItem.source_activity_id.in_(activity_ids)
+    ).all() if activity_ids else []
+    crypto_transfers = db.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.source_activity_id.in_(activity_ids)
     ).all() if activity_ids else []
     for event in income_events:
         later_external = db.query(InvestmentIncomeEnrichment.id).filter(
@@ -961,6 +1070,8 @@ def revert_run(
                 activity.applied_at = None
             for item in reconciliation_items:
                 db.delete(item)
+            for item in crypto_transfers:
+                db.delete(item)
             for item in adjustments:
                 db.delete(item)
             for enrichment in enrichments:
@@ -971,6 +1082,13 @@ def revert_run(
             for trade in trades:
                 db.delete(trade)
             db.flush()
+            # Transfer projections can depend on an acquisition from the run
+            # being reverted. Remove/rebuild them before recomputing holdings
+            # so a now-unsupported transfer-out cannot cause a transient
+            # oversell and block an otherwise valid reversal.
+            from app.services.crypto_accounting_service import rebuild_owned_crypto_transfers
+
+            rebuild_owned_crypto_transfers(db, user_id=user_id)
             for symbol, instrument_type in sorted(affected_instruments):
                 _recompute_holding(db, account, symbol, instrument_type)
             run.status = "reverted"
@@ -983,6 +1101,7 @@ def revert_run(
                 "reverted_income_enrichments": len(enrichments),
                 "reverted_cost_base_adjustments": len(adjustments),
                 "reverted_reconciliation_items": len(reconciliation_items),
+                "reverted_crypto_transfers": len(crypto_transfers),
                 "reverted_affected_symbols": sorted({symbol for symbol, _ in affected_instruments}),
             }
         if commit:
@@ -1005,5 +1124,6 @@ def revert_run(
         "removed_income_enrichments": len(enrichments),
         "removed_cost_base_adjustments": len(adjustments),
         "removed_reconciliation_items": len(reconciliation_items),
+        "removed_crypto_transfers": len(crypto_transfers),
         "affected_symbols": sorted({symbol for symbol, _ in affected_instruments}),
     }

@@ -33,6 +33,7 @@ from app.models import (
     User,
 )
 from app.services.pnl_service import (
+    CgtAudValues,
     CostBaseAdjustment,
     Trade,
     cgt_aud_values_for_closed_lot,
@@ -327,7 +328,7 @@ def _recompute_holding(
             BrokerTrade.symbol == symbol,
             BrokerTrade.instrument_type == instrument_type,
         )
-        .order_by(BrokerTrade.trade_date)
+        .order_by(BrokerTrade.trade_date, BrokerTrade.occurred_at, BrokerTrade.id)
         .all()
     )
     if not trades:
@@ -370,6 +371,10 @@ def _recompute_holding(
             price=Decimal(t.price),
             currency=t.currency,
             fees=Decimal(t.fees or 0),
+            trade_id=str(t.id),
+            sort_key=str(t.id),
+            occurred_at=t.occurred_at,
+            acquisition_date=t.acquisition_date,
         )
         for t in trades
     ]
@@ -382,7 +387,17 @@ def _recompute_holding(
             (l.quantity_remaining * l.cost_per_share_native for l in open_lots),
             Decimal("0"),
         )
-        avg_cost = (total_cost / quantity).quantize(Decimal("0.00000001"))
+        trades_by_id = {str(item.id): item for item in trades}
+        has_missing_open_valuation = instrument_type == "crypto" and any(
+            lot.acquisition_trade_id
+            and trades_by_id[lot.acquisition_trade_id].valuation_missing
+            for lot in open_lots
+        )
+        avg_cost = (
+            None
+            if has_missing_open_valuation
+            else (total_cost / quantity).quantize(Decimal("0.00000001"))
+        )
         currency = open_lots[0].currency
     else:
         avg_cost = None
@@ -450,6 +465,8 @@ def _recompute_cgt_allocations(
             fees=Decimal(trade.fees or 0),
             trade_id=str(trade.id),
             sort_key=str(trade.id),
+            occurred_at=trade.occurred_at,
+            acquisition_date=trade.acquisition_date,
         )
         for trade in trades
     ], adjustments)
@@ -461,17 +478,29 @@ def _recompute_cgt_allocations(
     except ImportError:
         fx_service = None
 
+    trades_by_id = {str(item.id): item for item in trades}
     for lot in fifo.realized:
         # These IDs are populated for BrokerTrade-derived FIFO inputs. Guarding
         # avoids persisting an incomplete audit row if this service is reused.
         if not lot.acquisition_trade_id or not lot.disposal_trade_id:
             continue
-        aud_values = cgt_aud_values_for_closed_lot(
-            lot,
-            lambda source, target, on: (
-                None if fx_service is None else fx_service.get_exchange_rate(source, target, on)
-            ),
-        )
+        acquisition = trades_by_id[lot.acquisition_trade_id]
+        disposal = trades_by_id[lot.disposal_trade_id]
+        if not disposal.taxable_disposal:
+            continue
+        if acquisition.valuation_missing or disposal.valuation_missing:
+            aud_values = CgtAudValues(None, None, None, None, fx_missing=True)
+        else:
+            aud_values = cgt_aud_values_for_closed_lot(
+                lot,
+                lambda source, target, on: (
+                    None if fx_service is None else fx_service.get_exchange_rate(source, target, on)
+                ),
+            )
+        assumptions = list(CGT_ASSUMPTIONS)
+        for item in [*(acquisition.assumptions or []), *(disposal.assumptions or [])]:
+            if item not in assumptions:
+                assumptions.append(item)
         db.add(CgtAllocation(
             account_id=account.id,
             acquisition_trade_id=lot.acquisition_trade_id,
@@ -493,10 +522,16 @@ def _recompute_cgt_allocations(
             adjustment_ids=[
                 item.adjustment_id for item in lot.adjustments if item.adjustment_id
             ],
+            acquisition_valuation_source=acquisition.valuation_source,
+            disposal_valuation_source=disposal.valuation_source,
+            acquisition_valuation_timestamp=acquisition.valuation_timestamp,
+            disposal_valuation_timestamp=disposal.valuation_timestamp,
+            acquisition_economic_type=acquisition.economic_type,
+            disposal_economic_type=disposal.economic_type,
             fx_missing=aud_values.fx_missing,
             discount_eligible=is_cgt_discount_eligible(lot.open_date, lot.close_date),
             calculation_version=CGT_CALCULATION_VERSION,
-            assumptions=list(CGT_ASSUMPTIONS),
+            assumptions=assumptions,
         ))
 
 

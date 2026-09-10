@@ -116,6 +116,49 @@ f1;02/02/2025;Commission;USD;cash;;;;;USD;2,25;USD;;
     assert fee.activity_type == "fee" and fee.fee_amount == Decimal("2.25")
 
 
+def test_parser_preserves_crypto_market_value_and_fee_provenance():
+    content = """Reference,Timestamp,Type,Symbol,Asset type,Quantity,Counter asset,Counter quantity,AUD value,Value source,Value timestamp,Fee,Fee currency,Fee AUD,Fee source,Fee timestamp,Transaction hash
+swap-1,2025-01-31 10:15:00,Swap,BTC,crypto,1,ETH,10,15000,execution_report,2025-01-31 10:15:00,0.001,BTC,15,execution_report,2025-01-31 10:15:00,chain-1
+reward-1,2025-02-01 11:00:00,Staking reward,ETH,crypto,0.2,,,,,,,,,,,
+"""
+    mapping = {
+        "source_reference": "Reference",
+        "occurred_at": "Timestamp",
+        "activity_type": "Type",
+        "asset_symbol": "Symbol",
+        "asset_type": "Asset type",
+        "quantity": "Quantity",
+        "counter_asset_symbol": "Counter asset",
+        "counter_quantity": "Counter quantity",
+        "aud_value": "AUD value",
+        "valuation_source": "Value source",
+        "valuation_timestamp": "Value timestamp",
+        "fee_amount": "Fee",
+        "fee_currency": "Fee currency",
+        "fee_aud_value": "Fee AUD",
+        "fee_valuation_source": "Fee source",
+        "fee_valuation_timestamp": "Fee timestamp",
+        "transaction_hash": "Transaction hash",
+    }
+
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "mapping": mapping,
+        "default_asset_type": "crypto",
+    })
+
+    swap = parsed.batch.records[0].activities[0]
+    assert swap.activity_type == "crypto_swap"
+    assert swap.aud_value == Decimal("15000")
+    assert swap.valuation_source == "execution_report"
+    assert swap.fee_aud_value == Decimal("15")
+    assert swap.fee_valuation_source == "execution_report"
+    assert swap.external_group_id == "chain-1"
+    assert swap.metadata["transaction_hash"] == "chain-1"
+    reward = parsed.batch.records[1].activities[0]
+    assert "AUD market value is missing" in reward.warnings[0]
+
+
 def test_parser_maps_final_statement_tax_and_amma_fields_without_inference():
     content = '''Reference,Date,Type,Symbol,Asset type,Gross,Net,Currency,Franked,Unfranked,Franking,Foreign income,Foreign tax,TFN,AMMA,Increase,Decrease,Adjustment date,Statement ref,Interest
 amma-1,2025-06-30,Distribution,VAS,ETF,50,50,AUD,30,20,12.86,4,0.60,1.25,"{""capital_gains_discounted"":""8""}",100,0,2025-06-30,AMMA-2025,3

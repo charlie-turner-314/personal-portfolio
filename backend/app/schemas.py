@@ -368,6 +368,12 @@ class HoldingTrade(BaseModel):
     currency: str
     fees: Decimal
     external_id: Optional[str] = None
+    economic_type: str = "trade"
+    taxable_disposal: bool = True
+    aud_value: Optional[Decimal] = None
+    valuation_source: Optional[str] = None
+    valuation_timestamp: Optional[datetime] = None
+    valuation_missing: bool = False
     cost_native: Optional[Decimal] = None
     proceeds_native: Optional[Decimal] = None
     running_quantity: Decimal
@@ -384,6 +390,7 @@ class HoldingLot(BaseModel):
     cost_per_share_user: Optional[Decimal] = None
     age_days: int
     currency: str
+    acquisition_trade_id: Optional[UUID] = None
 
 
 class CgtAllocationResponse(BaseModel):
@@ -405,6 +412,12 @@ class CgtAllocationResponse(BaseModel):
     gain_aud: Optional[Decimal] = None
     cost_base_adjustment_aud: Optional[Decimal] = None
     adjustment_ids: list[str]
+    acquisition_valuation_source: Optional[str] = None
+    disposal_valuation_source: Optional[str] = None
+    acquisition_valuation_timestamp: Optional[datetime] = None
+    disposal_valuation_timestamp: Optional[datetime] = None
+    acquisition_economic_type: str = "trade"
+    disposal_economic_type: str = "trade"
     fx_missing: bool
     discount_eligible: bool
     calculation_version: str
@@ -432,6 +445,7 @@ class AustralianTaxReportResponse(BaseModel):
     investment_income: dict[str, Any]
     cgt: dict[str, Any]
     transactions: dict[str, Any]
+    crypto_transfers: dict[str, Any] = Field(default_factory=dict)
     assumptions: list[str]
 
 
@@ -455,13 +469,18 @@ class InvestmentIncomeEventCreate(BaseModel):
     drp_price: Optional[Decimal] = None
     source_id: Optional[str] = None
     notes: Optional[str] = None
+    asset_quantity: Optional[Decimal] = None
+    aud_market_value: Optional[Decimal] = None
+    valuation_source: Optional[str] = None
+    valuation_timestamp: Optional[datetime] = None
+    valuation_missing: bool = False
 
     @field_validator("event_type")
     @classmethod
     def _income_event_type(cls, value: str) -> str:
         value = value.lower().strip()
-        if value not in {"dividend", "distribution"}:
-            raise ValueError("must be dividend or distribution")
+        if value not in {"dividend", "distribution", "interest", "staking_reward", "airdrop"}:
+            raise ValueError("must be dividend, distribution, interest, staking_reward, or airdrop")
         return value
 
     @field_validator("currency")
@@ -472,7 +491,11 @@ class InvestmentIncomeEventCreate(BaseModel):
             raise ValueError("must be a 3-letter ISO code")
         return value
 
-    @field_validator("cash_received", "franked_amount", "unfranked_amount", "franking_credit", "foreign_income", "foreign_tax_paid", "tfn_withholding")
+    @field_validator(
+        "cash_received", "franked_amount", "unfranked_amount", "franking_credit",
+        "foreign_income", "foreign_tax_paid", "tfn_withholding", "asset_quantity",
+        "aud_market_value",
+    )
     @classmethod
     def _income_amounts(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and value < 0:
@@ -485,6 +508,16 @@ class InvestmentIncomeEventCreate(BaseModel):
             raise ValueError("DRP events require a positive quantity and non-negative price")
         if not self.is_drp and (self.drp_quantity is not None or self.drp_price is not None):
             raise ValueError("DRP quantity and price are only valid for DRP events")
+        if self.event_type in {"staking_reward", "airdrop"} and (
+            self.asset_quantity is None or self.asset_quantity <= 0
+        ):
+            raise ValueError("staking and airdrop events require a positive asset quantity")
+        if self.aud_market_value is not None and (
+            not self.valuation_source or self.valuation_timestamp is None
+        ):
+            raise ValueError("AUD market values require valuation source and timestamp")
+        if self.valuation_missing and self.aud_market_value is not None:
+            raise ValueError("a missing valuation cannot also have an AUD market value")
         return self
 
 

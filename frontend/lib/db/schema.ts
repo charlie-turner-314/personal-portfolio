@@ -18,6 +18,7 @@ import {
   time,
   uniqueIndex,
   primaryKey,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -1047,14 +1048,29 @@ export const brokerTrades = pgTable("broker_trades", {
   symbol: text("symbol").notNull(),
   instrumentType: text("instrument_type").default("equity").notNull(),
   tradeDate: date("trade_date").notNull(),
+  occurredAt: timestamp("occurred_at"),
+  acquisitionDate: date("acquisition_date"),
   side: text("side").notNull(),
   quantity: numeric("quantity", { precision: 28, scale: 8 }).notNull(),
   price: numeric("price", { precision: 28, scale: 8 }).notNull(),
   currency: text("currency").notNull(),
   fees: numeric("fees", { precision: 28, scale: 8 }).default("0").notNull(),
   externalId: text("external_id").notNull(),
+  economicType: varchar("economic_type", { length: 32 }).default("trade").notNull(),
+  taxableDisposal: boolean("taxable_disposal").default(true).notNull(),
+  audValue: numeric("aud_value", { precision: 38, scale: 18 }),
+  valuationSource: varchar("valuation_source", { length: 64 }),
+  valuationTimestamp: timestamp("valuation_timestamp"),
+  valuationMissing: boolean("valuation_missing").default(false).notNull(),
+  assumptions: jsonb("assumptions").$type<string[]>().default([]).notNull(),
+  sourceActivityId: uuid("source_activity_id").references((): AnyPgColumn => investmentActivities.id, { onDelete: "set null" }),
+  eventGroupId: varchar("event_group_id", { length: 255 }),
+  sourceAcquisitionTradeId: uuid("source_acquisition_trade_id").references((): AnyPgColumn => brokerTrades.id, { onDelete: "set null" }),
 }, (t) => ({
   uniqTrade: uniqueIndex("broker_trades_account_external_uq").on(t.accountId, t.externalId),
+  bySourceActivity: index("idx_broker_trades_source_activity").on(t.sourceActivityId),
+  byEventGroup: index("idx_broker_trades_event_group").on(t.eventGroupId),
+  economicTypeCheck: check("broker_trades_economic_type_check", sql`${t.economicType} in ('trade', 'swap_disposal', 'swap_acquisition', 'reward_acquisition', 'network_fee', 'transfer_out', 'transfer_in')`),
 }));
 
 export const cgtAllocations = pgTable("cgt_allocations", {
@@ -1077,6 +1093,12 @@ export const cgtAllocations = pgTable("cgt_allocations", {
   gainAud: numeric("gain_aud", { precision: 28, scale: 8 }),
   costBaseAdjustmentAud: numeric("cost_base_adjustment_aud", { precision: 28, scale: 8 }),
   adjustmentIds: jsonb("adjustment_ids").$type<string[]>().default([]).notNull(),
+  acquisitionValuationSource: varchar("acquisition_valuation_source", { length: 64 }),
+  disposalValuationSource: varchar("disposal_valuation_source", { length: 64 }),
+  acquisitionValuationTimestamp: timestamp("acquisition_valuation_timestamp"),
+  disposalValuationTimestamp: timestamp("disposal_valuation_timestamp"),
+  acquisitionEconomicType: varchar("acquisition_economic_type", { length: 32 }).default("trade").notNull(),
+  disposalEconomicType: varchar("disposal_economic_type", { length: 32 }).default("trade").notNull(),
   fxMissing: boolean("fx_missing").default(false).notNull(),
   discountEligible: boolean("discount_eligible").default(false).notNull(),
   calculationVersion: varchar("calculation_version", { length: 32 }).default("fifo-v2").notNull(),
@@ -1117,7 +1139,12 @@ export const investmentIncomeEvents = pgTable("investment_income_events", {
   matchedTransactionId: uuid("matched_transaction_id").references(() => transactions.id, { onDelete: "set null" }),
   componentSources: jsonb("component_sources").$type<Record<string, unknown>>().default({}).notNull(),
   annualStatementReference: varchar("annual_statement_reference", { length: 255 }),
-  createdByActivityId: uuid("created_by_activity_id"),
+  assetQuantity: numeric("asset_quantity", { precision: 38, scale: 18 }),
+  audMarketValue: numeric("aud_market_value", { precision: 38, scale: 18 }),
+  valuationSource: varchar("valuation_source", { length: 64 }),
+  valuationTimestamp: timestamp("valuation_timestamp"),
+  valuationMissing: boolean("valuation_missing").default(false).notNull(),
+  createdByActivityId: uuid("created_by_activity_id").references((): AnyPgColumn => investmentActivities.id, { onDelete: "set null" }),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -1126,7 +1153,7 @@ export const investmentIncomeEvents = pgTable("investment_income_events", {
   byHoldingPayDate: index("idx_investment_income_events_holding_pay_date").on(t.holdingId, t.payDate),
   sourceUnique: uniqueIndex("investment_income_events_account_source_uq").on(t.accountId, t.sourceId),
   matchedTransactionUnique: uniqueIndex("investment_income_events_matched_transaction_uq").on(t.matchedTransactionId),
-  eventTypeCheck: check("investment_income_events_type_check", sql`${t.eventType} in ('dividend', 'distribution')`),
+  eventTypeCheck: check("investment_income_events_type_check", sql`${t.eventType} in ('dividend', 'distribution', 'interest', 'staking_reward', 'airdrop')`),
   cashReceivedCheck: check("investment_income_events_cash_received_check", sql`${t.cashReceived} >= 0`),
   drpCheck: check("investment_income_events_drp_check", sql`(${t.isDrp} = false) OR (${t.drpQuantity} > 0 AND ${t.drpPrice} >= 0)`),
   reconciliationStatusCheck: check("investment_income_events_reconciliation_status_check", sql`${t.reconciliationStatus} in ('provisional', 'confirmed', 'conflict')`),
@@ -1205,6 +1232,9 @@ export const investmentActivities = pgTable("investment_activities", {
   currency: varchar("currency", { length: 16 }),
   feeAmount: numeric("fee_amount", { precision: 38, scale: 18 }),
   feeCurrency: varchar("fee_currency", { length: 16 }),
+  feeAudValue: numeric("fee_aud_value", { precision: 38, scale: 18 }),
+  feeValuationSource: varchar("fee_valuation_source", { length: 64 }),
+  feeValuationTimestamp: timestamp("fee_valuation_timestamp"),
   taxAmount: numeric("tax_amount", { precision: 38, scale: 18 }),
   taxCurrency: varchar("tax_currency", { length: 16 }),
   counterAssetSymbol: varchar("counter_asset_symbol", { length: 64 }),
@@ -1231,7 +1261,7 @@ export const investmentActivities = pgTable("investment_activities", {
   directionCheck: check("investment_activities_direction_check", sql`${t.direction} is null OR ${t.direction} in ('in', 'out', 'internal')`),
   legIndexCheck: check("investment_activities_leg_index_check", sql`${t.legIndex} >= 0`),
   quantityCheck: check("investment_activities_quantity_check", sql`${t.quantity} is null OR ${t.quantity} > 0`),
-  amountCheck: check("investment_activities_amount_check", sql`(${t.grossAmount} is null OR ${t.grossAmount} >= 0) AND (${t.feeAmount} is null OR ${t.feeAmount} >= 0) AND (${t.taxAmount} is null OR ${t.taxAmount} >= 0)`),
+  amountCheck: check("investment_activities_amount_check", sql`(${t.grossAmount} is null OR ${t.grossAmount} >= 0) AND (${t.feeAmount} is null OR ${t.feeAmount} >= 0) AND (${t.taxAmount} is null OR ${t.taxAmount} >= 0) AND (${t.audValue} is null OR ${t.audValue} >= 0) AND (${t.feeAudValue} is null OR ${t.feeAudValue} >= 0)`),
 }));
 
 export const investmentIncomeEnrichments = pgTable("investment_income_enrichments", {
@@ -1290,6 +1320,52 @@ export const investmentReconciliationItems = pgTable("investment_reconciliation_
   byUserStatus: index("idx_investment_reconciliation_items_user_status").on(t.userId, t.status),
   kindCheck: check("investment_reconciliation_items_kind_check", sql`${t.kind} in ('cash_match', 'annual_statement', 'component_conflict')`),
   statusCheck: check("investment_reconciliation_items_status_check", sql`${t.status} in ('pending', 'resolved', 'ignored')`),
+}));
+
+export const investmentCryptoTransfers = pgTable("investment_crypto_transfers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  sourceActivityId: uuid("source_activity_id").notNull().references(() => investmentActivities.id, { onDelete: "cascade" }),
+  matchedTransferId: uuid("matched_transfer_id").references((): AnyPgColumn => investmentCryptoTransfers.id, { onDelete: "set null" }),
+  direction: varchar("direction", { length: 8 }).notNull(),
+  assetSymbol: varchar("asset_symbol", { length: 64 }).notNull(),
+  quantity: numeric("quantity", { precision: 38, scale: 18 }).notNull(),
+  occurredAt: timestamp("occurred_at").notNull(),
+  transactionHash: varchar("transaction_hash", { length: 255 }),
+  status: varchar("status", { length: 20 }).default("pending").notNull(),
+  matchMethod: varchar("match_method", { length: 32 }),
+  reason: text("reason"),
+  assumptions: jsonb("assumptions").$type<string[]>().default([]).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  activityUnique: uniqueIndex("investment_crypto_transfers_activity_uq").on(t.sourceActivityId),
+  byMatch: index("idx_investment_crypto_transfers_match").on(t.userId, t.assetSymbol, t.status),
+  byAccount: index("idx_investment_crypto_transfers_account").on(t.accountId, t.occurredAt),
+  directionCheck: check("investment_crypto_transfers_direction_check", sql`${t.direction} in ('in', 'out', 'internal')`),
+  statusCheck: check("investment_crypto_transfers_status_check", sql`${t.status} in ('pending', 'matched', 'ambiguous', 'internal')`),
+  quantityCheck: check("investment_crypto_transfers_quantity_check", sql`${t.quantity} > 0`),
+}));
+
+export const investmentCryptoTransferLots = pgTable("investment_crypto_transfer_lots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  transferOutId: uuid("transfer_out_id").notNull().references(() => investmentCryptoTransfers.id, { onDelete: "cascade" }),
+  transferInId: uuid("transfer_in_id").notNull().references(() => investmentCryptoTransfers.id, { onDelete: "cascade" }),
+  sourceBrokerTradeId: uuid("source_broker_trade_id").notNull().references(() => brokerTrades.id, { onDelete: "cascade" }),
+  destinationBrokerTradeId: uuid("destination_broker_trade_id").notNull().references(() => brokerTrades.id, { onDelete: "cascade" }),
+  originalAcquisitionTradeId: uuid("original_acquisition_trade_id").references(() => brokerTrades.id, { onDelete: "set null" }),
+  quantity: numeric("quantity", { precision: 38, scale: 18 }).notNull(),
+  acquisitionDate: date("acquisition_date").notNull(),
+  sourceCurrency: varchar("source_currency", { length: 3 }).notNull(),
+  unitCostNative: numeric("unit_cost_native", { precision: 38, scale: 18 }).notNull(),
+  costBaseAud: numeric("cost_base_aud", { precision: 38, scale: 18 }),
+  valuationSource: varchar("valuation_source", { length: 64 }),
+  provenance: jsonb("provenance").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  byPair: index("idx_investment_crypto_transfer_lots_pair").on(t.transferOutId, t.transferInId),
+  quantityCheck: check("investment_crypto_transfer_lots_quantity_check", sql`${t.quantity} > 0`),
 }));
 
 export const priceSnapshots = pgTable("price_snapshots", {

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import csv
 from io import StringIO
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -27,6 +27,7 @@ from app.models import (
     HoldingValuation,
     InvestmentIncomeEvent,
     InvestmentCostBaseAdjustment,
+    InvestmentCryptoTransfer,
     InvestmentIngestionRun,
     InvestmentReconciliationItem,
     InvestmentSourceRecord,
@@ -71,6 +72,7 @@ from app.services.investment_income_reconciliation_service import (
     reconciliation_item_view,
     resolve_reconciliation_item,
 )
+from app.services.crypto_accounting_service import transfer_view
 
 logger = __import__("logging").getLogger(__name__)
 
@@ -361,6 +363,14 @@ def _save_income_event(
     payload: InvestmentIncomeEventCreate,
     event: InvestmentIncomeEvent | None = None,
 ) -> InvestmentIncomeEvent:
+    if payload.event_type in {"interest", "staking_reward", "airdrop"}:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Crypto income is managed through activity imports so its receipt-time value "
+                "and acquisition cost base stay linked."
+            ),
+        )
     account, holding = _owned_income_event_context(db, user_id, payload)
     if payload.source_id:
         existing = db.query(InvestmentIncomeEvent).filter(
@@ -378,7 +388,7 @@ def _save_income_event(
     now = datetime.utcnow()
     manual_source = {"kind": "manual", "confirmed_at": now.isoformat()}
     component_sources = dict(event.component_sources or {}) if event is not None else {}
-    for field in ("cash_received", *INCOME_COMPONENT_FIELDS):
+    for field in ("cash_received", "asset_quantity", "aud_market_value", *INCOME_COMPONENT_FIELDS):
         if values.get(field) is None:
             continue
         entries = component_sources.get(field, [])
@@ -652,6 +662,36 @@ def list_investment_cost_base_adjustments(
         InvestmentCostBaseAdjustment.effective_date,
         InvestmentCostBaseAdjustment.id,
     ).all()]
+
+
+@router.get("/crypto-transfers")
+def list_investment_crypto_transfers(
+    account_id: Optional[UUID] = None,
+    status: Optional[str] = Query(default="all", pattern="^(pending|matched|ambiguous|internal|all)$"),
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.user_id == user_id
+    )
+    if account_id is not None:
+        account = db.query(Account.id).filter(
+            Account.id == account_id,
+            Account.user_id == user_id,
+        ).one_or_none()
+        if account is None:
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(InvestmentCryptoTransfer.account_id == account_id)
+    if status and status != "all":
+        query = query.filter(InvestmentCryptoTransfer.status == status)
+    return [
+        transfer_view(item)
+        for item in query.order_by(
+            InvestmentCryptoTransfer.occurred_at.desc(),
+            InvestmentCryptoTransfer.id,
+        ).limit(500).all()
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1238,9 +1278,17 @@ def holding_trades(
             BrokerTrade.symbol == holding.symbol,
             BrokerTrade.instrument_type == holding.instrument_type,
         )
-        .order_by(BrokerTrade.trade_date.asc(), BrokerTrade.id.asc())
+        .order_by(BrokerTrade.trade_date.asc(), BrokerTrade.occurred_at.asc(), BrokerTrade.id.asc())
         .all()
     )
+    trades.sort(key=lambda trade: (
+        trade.occurred_at or datetime.combine(
+            trade.trade_date,
+            time.min if trade.side == "buy" else time.max,
+        ),
+        0 if trade.side == "buy" else 1,
+        str(trade.id),
+    ))
 
     out: list[HoldingTrade] = []
     running = Decimal("0")
@@ -1267,6 +1315,12 @@ def holding_trades(
                 currency=t.currency,
                 fees=fees,
                 external_id=t.external_id,
+                economic_type=t.economic_type,
+                taxable_disposal=t.taxable_disposal,
+                aud_value=t.aud_value,
+                valuation_source=t.valuation_source,
+                valuation_timestamp=t.valuation_timestamp,
+                valuation_missing=t.valuation_missing,
                 cost_native=cost_native,
                 proceeds_native=proceeds_native,
                 running_quantity=running,
@@ -1313,6 +1367,10 @@ def holding_lots(
             price=Decimal(t.price),
             currency=t.currency,
             fees=Decimal(t.fees or 0),
+            trade_id=str(t.id),
+            sort_key=str(t.id),
+            occurred_at=t.occurred_at,
+            acquisition_date=t.acquisition_date,
         )
         for t in trades
     ]
@@ -1369,6 +1427,7 @@ def holding_lots(
                 cost_per_share_user=cost_per_share_user,
                 age_days=(today - lot.open_date).days,
                 currency=lot.currency,
+                acquisition_trade_id=lot.acquisition_trade_id,
             )
         )
     return out

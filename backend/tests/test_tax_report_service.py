@@ -72,7 +72,7 @@ def test_report_excludes_transfers_and_reimbursements_and_groups_recorded_totals
     retained_expense = _transaction("rent-expense", "-250", "debit", rental=True)
     transfer = _transaction("transfer", "500", "credit", excluded=True)
     reimbursed = _transaction("reimbursed", "-40", "debit")
-    db = _Db([[], [], [], [("reimbursed",)], [retained_income, retained_expense, transfer, reimbursed]])
+    db = _Db([[], [], [], [], [("reimbursed",)], [retained_income, retained_expense, transfer, reimbursed]])
 
     report = build_australian_tax_report(db, "user-1", 2025)
 
@@ -115,7 +115,7 @@ def test_report_exposes_statement_components_adjustments_and_excludes_matched_ca
         currency="AUD", amount_native=Decimal("100"), amount_aud=Decimal("100"),
         valuation_source="identity", calculation_version="amit-v1", assumptions=["recorded"],
     )
-    db = _Db([[income], [], [adjustment], [], [cash]])
+    db = _Db([[income], [], [adjustment], [], [], [cash]])
 
     report = build_australian_tax_report(db, "user-1", 2024)
 

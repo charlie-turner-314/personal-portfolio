@@ -175,6 +175,12 @@ export type HoldingTrade = {
   currency: string;
   fees: string;
   external_id?: string | null;
+  economic_type?: string;
+  taxable_disposal?: boolean;
+  aud_value?: string | null;
+  valuation_source?: string | null;
+  valuation_timestamp?: string | null;
+  valuation_missing?: boolean;
   cost_native?: string | null;
   proceeds_native?: string | null;
   running_quantity: string;
@@ -187,6 +193,7 @@ export type HoldingLot = {
   original_cost_per_share_native: string;
   cost_base_adjustment_per_share_native: string;
   adjustment_ids: string[];
+  acquisition_trade_id?: string | null;
   cost_per_share_user?: string | null;
   age_days: number;
   currency: string;
@@ -211,6 +218,12 @@ export type CgtAllocation = {
   gain_aud?: string | null;
   cost_base_adjustment_aud?: string | null;
   adjustment_ids: string[];
+  acquisition_valuation_source?: string | null;
+  disposal_valuation_source?: string | null;
+  acquisition_valuation_timestamp?: string | null;
+  disposal_valuation_timestamp?: string | null;
+  acquisition_economic_type: string;
+  disposal_economic_type: string;
   fx_missing: boolean;
   discount_eligible: boolean;
   calculation_version: string;
@@ -235,6 +248,7 @@ export type AustralianTaxReport = {
   investment_income: Record<string, unknown>;
   cgt: Record<string, unknown>;
   transactions: Record<string, unknown>;
+  crypto_transfers: Record<string, unknown>;
   assumptions: string[];
 };
 
@@ -259,7 +273,7 @@ export type InvestmentIncomeEvent = {
   id: string;
   account_id: string;
   holding_id: string;
-  event_type: "dividend" | "distribution";
+  event_type: "dividend" | "distribution" | "interest" | "staking_reward" | "airdrop";
   pay_date: string;
   ex_date?: string | null;
   currency: string;
@@ -282,6 +296,11 @@ export type InvestmentIncomeEvent = {
   matched_transaction_id?: string | null;
   component_sources: Record<string, unknown>;
   annual_statement_reference?: string | null;
+  asset_quantity?: string | null;
+  aud_market_value?: string | null;
+  valuation_source?: string | null;
+  valuation_timestamp?: string | null;
+  valuation_missing: boolean;
 };
 
 export type InvestmentIncomeSummary = {
@@ -303,6 +322,7 @@ export type CreateInvestmentIncomeEvent = Omit<
   | "matched_transaction_id"
   | "component_sources"
   | "annual_statement_reference"
+  | "valuation_missing"
 >;
 
 export async function listHoldingIncomeEvents(holdingId: string): Promise<InvestmentIncomeEvent[]> {
@@ -477,12 +497,20 @@ export type InvestmentImportMapping = {
   currency: string | null;
   fee_amount: string | null;
   fee_currency: string | null;
+  fee_aud_value: string | null;
+  fee_valuation_source: string | null;
+  fee_valuation_timestamp: string | null;
   tax_amount: string | null;
   tax_currency: string | null;
   source_reference: string | null;
   counter_asset_symbol: string | null;
   counter_quantity: string | null;
   direction: string | null;
+  external_group_id: string | null;
+  transaction_hash: string | null;
+  aud_value: string | null;
+  valuation_source: string | null;
+  valuation_timestamp: string | null;
   description: string | null;
   ex_date: string | null;
   franked_amount: string | null;
@@ -568,6 +596,22 @@ export type InvestmentImportRun = {
   reverted_at: string | null;
 };
 
+export type InvestmentCryptoTransfer = {
+  id: string;
+  account_id: string;
+  source_activity_id: string;
+  matched_transfer_id: string | null;
+  direction: "in" | "out" | "internal";
+  asset_symbol: string;
+  quantity: string;
+  occurred_at: string;
+  transaction_hash: string | null;
+  status: "pending" | "matched" | "ambiguous" | "internal";
+  match_method: "transaction_hash" | "quantity_time_window" | null;
+  reason: string | null;
+  assumptions: string[];
+};
+
 export type InvestmentImportProfile = {
   id: string;
   account_id: string;
@@ -611,6 +655,16 @@ export async function applyInvestmentImport(
 export async function listInvestmentImports(accountId: string): Promise<InvestmentImportRun[]> {
   const resp = await signedFetch("GET", "/api/investments/imports", {
     query: { account_id: accountId },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentCryptoTransfers(
+  accountId?: string,
+  status: InvestmentCryptoTransfer["status"] | "all" = "all",
+): Promise<InvestmentCryptoTransfer[]> {
+  const resp = await signedFetch("GET", "/api/investments/crypto-transfers", {
+    query: { account_id: accountId, status },
   });
   return readJsonOrThrow(resp);
 }

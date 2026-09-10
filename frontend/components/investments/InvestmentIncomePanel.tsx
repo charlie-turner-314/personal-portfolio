@@ -25,6 +25,14 @@ function optional(value: string | null | undefined, currency: string) {
   return value == null || value === "" ? "Not provided" : amount(value, currency);
 }
 
+function assetReceipt(income: InvestmentIncomeEvent) {
+  if (!income.asset_quantity) return "—";
+  const valuation = income.valuation_missing
+    ? "AUD value missing"
+    : optional(income.aud_market_value, "AUD");
+  return `${income.asset_quantity} units · ${valuation}`;
+}
+
 const initialForm: IncomeFormInput = {
   event_type: "dividend",
   pay_date: "",
@@ -82,7 +90,7 @@ export function InvestmentIncomePanel({
           <div><dt className="text-xs text-muted-foreground">Foreign tax paid</dt><dd className="mt-1 font-medium tabular-nums">{amount(totals.foreign_tax_paid, totals.currency)}</dd></div>
           <div><dt className="text-xs text-muted-foreground">TFN withholding</dt><dd className="mt-1 font-medium tabular-nums">{amount(totals.tfn_withholding ?? "0", totals.currency)}</dd></div>
         </dl>}
-        {events.length === 0 ? <p className="text-sm text-muted-foreground">No dividend or distribution income recorded for this holding.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left text-xs uppercase tracking-wider text-muted-foreground"><th className="py-2 pr-4">Pay date</th><th className="py-2 pr-4">Type</th><th className="py-2 pr-4">Status</th><th className="py-2 pr-4 text-right">Cash</th><th className="py-2 pr-4 text-right">Franking credit</th><th className="py-2 pr-4 text-right">Foreign tax</th><th className="py-2 pr-4 text-right">TFN withheld</th><th className="py-2 pr-4">AMIT/AMMA</th></tr></thead><tbody>{events.map((income) => <tr key={income.id} className="border-b last:border-b-0"><td className="py-2 pr-4 tabular-nums">{income.pay_date}</td><td className="py-2 pr-4 capitalize">{income.event_type}{income.is_drp ? " · DRP" : ""}</td><td className="py-2 pr-4 capitalize text-muted-foreground">{income.reconciliation_status ?? "confirmed"}</td><td className="py-2 pr-4 text-right tabular-nums">{amount(income.cash_received, income.currency)}</td><td className="py-2 pr-4 text-right tabular-nums">{optional(income.franking_credit, income.currency)}</td><td className="py-2 pr-4 text-right tabular-nums">{optional(income.foreign_tax_paid, income.currency)}</td><td className="py-2 pr-4 text-right tabular-nums">{optional(income.tfn_withholding, income.currency)}</td><td className="py-2 pr-4 text-muted-foreground">{income.amit_amma_components && Object.keys(income.amit_amma_components).length > 0 ? "Provided" : "Not provided"}</td></tr>)}</tbody></table></div>}
+        {events.length === 0 ? <p className="text-sm text-muted-foreground">No investment income recorded for this holding.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left text-xs uppercase tracking-wider text-muted-foreground"><th className="py-2 pr-4">Pay date</th><th className="py-2 pr-4">Type</th><th className="py-2 pr-4">Status</th><th className="py-2 pr-4 text-right">Cash</th><th className="py-2 pr-4">Asset / AUD value</th><th className="py-2 pr-4 text-right">Franking credit</th><th className="py-2 pr-4 text-right">Foreign tax</th><th className="py-2 pr-4 text-right">TFN withheld</th><th className="py-2 pr-4">AMIT/AMMA</th></tr></thead><tbody>{events.map((income) => <tr key={income.id} className="border-b last:border-b-0"><td className="py-2 pr-4 tabular-nums">{income.pay_date}</td><td className="py-2 pr-4 capitalize">{income.event_type.replaceAll("_", " ")}{income.is_drp ? " · DRP" : ""}</td><td className="py-2 pr-4 capitalize text-muted-foreground">{income.reconciliation_status ?? "confirmed"}</td><td className="py-2 pr-4 text-right tabular-nums">{amount(income.cash_received, income.currency)}</td><td className="py-2 pr-4 tabular-nums text-muted-foreground">{assetReceipt(income)}</td><td className="py-2 pr-4 text-right tabular-nums">{optional(income.franking_credit, income.currency)}</td><td className="py-2 pr-4 text-right tabular-nums">{optional(income.foreign_tax_paid, income.currency)}</td><td className="py-2 pr-4 text-right tabular-nums">{optional(income.tfn_withholding, income.currency)}</td><td className="py-2 pr-4 text-muted-foreground">{income.amit_amma_components && Object.keys(income.amit_amma_components).length > 0 ? "Provided" : "Not provided"}</td></tr>)}</tbody></table></div>}
         {onCreate && <InvestmentIncomeCsvImport defaultCurrency={defaultCurrency} existingEvents={events} onCreate={onCreate} />}
       </CardContent>
     </Card>

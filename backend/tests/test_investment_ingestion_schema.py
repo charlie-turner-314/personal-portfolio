@@ -2,10 +2,14 @@ from pathlib import Path
 
 from app.models import (
     BrokerTrade,
+    CgtAllocation,
     CsvImportProfile,
     InvestmentActivity,
     InvestmentCostBaseAdjustment,
+    InvestmentCryptoTransfer,
+    InvestmentCryptoTransferLot,
     InvestmentIncomeEnrichment,
+    InvestmentIncomeEvent,
     InvestmentIngestionRun,
     InvestmentReconciliationItem,
     InvestmentSourceRecord,
@@ -22,7 +26,11 @@ def test_drizzle_and_sqlalchemy_foundation_columns_stay_in_parity():
         "investment_activities": set(InvestmentActivity.__table__.columns.keys()),
     }
     schema = (ROOT / "frontend/lib/db/schema.ts").read_text()
-    migration = (ROOT / "frontend/lib/db/migrations/0038_investment_ingestion_foundation.manual.sql").read_text()
+    migration = "\n".join(
+        path.read_text()
+        for path in sorted((ROOT / "frontend/lib/db/migrations").glob("00*_*.sql"))
+        if path.name >= "0038_investment_ingestion_foundation.manual.sql"
+    )
 
     for table_name, columns in expected.items():
         assert f'pgTable("{table_name}"' in schema
@@ -111,3 +119,44 @@ def test_income_reconciliation_models_match_drizzle_schema_and_migration():
     assert "profile_variant" in CsvImportProfile.__table__.columns.keys()
     assert 'profileVariant: varchar("profile_variant", { length: 32 })' in schema
     assert 'UNIQUE ("user_id", "account_id", "import_kind", "provider", "profile_variant")' in migration
+
+
+def test_crypto_accounting_models_match_drizzle_schema_and_migration():
+    schema = (ROOT / "frontend/lib/db/schema.ts").read_text()
+    migration = (ROOT / "frontend/lib/db/migrations/0041_crypto_accounting.manual.sql").read_text()
+    for model in (InvestmentCryptoTransfer, InvestmentCryptoTransferLot):
+        table_name = model.__tablename__
+        assert f'pgTable("{table_name}"' in schema
+        assert f'CREATE TABLE IF NOT EXISTS "{table_name}"' in migration
+        for column in model.__table__.columns.keys():
+            assert f'"{column}"' in schema, f"Drizzle schema missing {table_name}.{column}"
+            assert f'"{column}"' in migration, f"migration missing {table_name}.{column}"
+
+    altered_columns = {
+        BrokerTrade: {
+            "occurred_at", "acquisition_date", "economic_type", "taxable_disposal",
+            "aud_value", "valuation_source", "valuation_timestamp", "valuation_missing",
+            "assumptions", "source_activity_id", "event_group_id",
+            "source_acquisition_trade_id",
+        },
+        CgtAllocation: {
+            "acquisition_valuation_source", "disposal_valuation_source",
+            "acquisition_valuation_timestamp", "disposal_valuation_timestamp",
+            "acquisition_economic_type", "disposal_economic_type",
+        },
+        InvestmentIncomeEvent: {
+            "asset_quantity", "aud_market_value", "valuation_source",
+            "valuation_timestamp", "valuation_missing",
+        },
+        InvestmentActivity: {
+            "fee_aud_value", "fee_valuation_source", "fee_valuation_timestamp",
+        },
+    }
+    for model, columns in altered_columns.items():
+        assert columns.issubset(model.__table__.columns.keys())
+        for column in columns:
+            assert f'"{column}"' in schema
+            assert f'"{column}"' in migration
+
+    assert "broker_trades_economic_type_check" in migration
+    assert "investment_crypto_transfers_matched_transfer_fk" in migration
