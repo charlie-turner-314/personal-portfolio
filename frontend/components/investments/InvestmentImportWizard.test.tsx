@@ -94,4 +94,14 @@ describe("InvestmentImportWizard", () => {
     fireEvent.click(undo);
     await waitFor(() => expect(mocks.revertInvestmentImport).toHaveBeenCalledWith("run-1"));
   });
+
+  it("shows only documented Superhero export guidance", async () => {
+    render(<InvestmentImportWizard accounts={accounts} />);
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "Superhero" } });
+
+    expect(await screen.findByText("Superhero report guidance")).toBeTruthy();
+    expect(screen.getByText(/Transaction Statement for buys and sells/)).toBeTruthy();
+    expect(screen.getByText(/Full Portfolio Report does not include AMIT\/AMMA/)).toBeTruthy();
+    expect(screen.getByText(/does not offer DRP/)).toBeTruthy();
+  });
 });

@@ -57,6 +57,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   const [completedMessage, setCompletedMessage] = useState<string | null>(null);
 
   const account = accounts.find((item) => item.id === accountId);
+  const isSuperhero = provider.trim().toLowerCase().replace(/[\s_-]+/g, "") === "superhero";
 
   const requestPayload = useCallback((): InvestmentImportRequest => ({
     account_id: accountId,
@@ -215,13 +216,32 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
             </div>
             <div className="space-y-2">
               <Label htmlFor="investment-import-provider">Provider</Label>
-              <Input id="investment-import-provider" value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Broker or exchange name" />
+              <Input id="investment-import-provider" list="investment-import-providers" value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Broker or exchange name" />
+              <datalist id="investment-import-providers"><option value="Superhero" /><option value="Generic" /></datalist>
             </div>
             <div className="space-y-2">
               <Label htmlFor="investment-import-currency">Default currency</Label>
               <Input id="investment-import-currency" value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value)} maxLength={16} />
             </div>
           </div>
+          {isSuperhero && (
+            <div className="space-y-2 border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
+              <div className="font-medium text-foreground">Superhero report guidance</div>
+              <p>
+                In Superhero, open Reports on the web, or Profile → Tax Reports in the app, and download CSV rather than PDF.
+                Use a Transaction Statement for buys and sells, and an Income Report for dividends. Upload each report separately.
+              </p>
+              <p>
+                The Full Portfolio Report does not include AMIT/AMMA data. Import the separate AMIT/AMMA statement when Superhero makes it available.
+                Superhero does not offer DRP, so its income rows should not be mapped as dividend reinvestments.
+              </p>
+              <p>
+                Current CSV column schemas are not published by Superhero, so review the suggested mapping before preview.
+                See <a className="underline underline-offset-2" href="https://www.superhero.com.au/support/articles/13648478865167-tax-reporting/" target="_blank" rel="noreferrer">Tax Reporting</a>
+                {" and "}<a className="underline underline-offset-2" href="https://support.superhero.com.au/hc/en-au/articles/14787654257807-Dividends" target="_blank" rel="noreferrer">Dividends</a>.
+              </p>
+            </div>
+          )}
           <CsvUploadDropzone onFileSelect={onFileSelect} isUploading={busy === "preview" || busy === "import"} />
           {profileMessage && <p className="text-xs text-muted-foreground">{profileMessage}</p>}
         </CardContent>
