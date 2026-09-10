@@ -34,4 +34,24 @@ describe("investment import mapping", () => {
       asset_symbol: "Symbol",
     });
   });
+
+  it("recognises the Crypto.com App Token Wallet header signature", () => {
+    const mapping = suggestInvestmentImportMapping([
+      "Timestamp (UTC)", "Transaction Description", "Currency", "Amount",
+      "To Currency", "To Amount", "Native Currency", "Native Amount",
+      "Native Amount (in USD)", "Transaction Kind", "Transaction Hash",
+    ], "Crypto.com App");
+    expect(mapping).toMatchObject({
+      occurred_at: "Timestamp (UTC)",
+      activity_type: "Transaction Kind",
+      asset_symbol: "Currency",
+      quantity: "Amount",
+      counter_asset_symbol: "To Currency",
+      counter_quantity: "To Amount",
+      currency: "Native Currency",
+      aud_value: "Native Amount",
+      description: "Transaction Description",
+      transaction_hash: "Transaction Hash",
+    });
+  });
 });

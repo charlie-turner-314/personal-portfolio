@@ -31,6 +31,10 @@ from app.services.investment_activity_service import (
     source_idempotency_key,
     validate_batch,
 )
+from app.services.investment_csv_presets.crypto_com_app import (
+    is_crypto_com_app_provider,
+    normalize_crypto_com_app_rows,
+)
 
 
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
@@ -451,6 +455,32 @@ def parse_investment_csv(
     if income_data_kind not in {"cash_activity", "annual_statement"}:
         raise InvestmentCsvImportError(f"Unsupported income data kind {income_data_kind!r}.")
     headers, source_rows = _read_csv(file_content)
+    if is_crypto_com_app_provider(provider):
+        if income_data_kind != "cash_activity":
+            raise InvestmentCsvImportError("Crypto.com App exports are activity files, not annual tax statements.")
+        try:
+            preset = normalize_crypto_com_app_rows(
+                headers=headers,
+                source_rows=source_rows,
+                file_name=file_name,
+            )
+        except ValueError as exc:
+            raise InvestmentCsvImportError(str(exc)) from exc
+        source_hash = hashlib.sha256(file_content.encode("utf-8")).hexdigest()
+        return ParsedInvestmentImport(
+            batch=InvestmentActivityBatch(
+                provider="crypto.com_app",
+                ingestion_type="csv_import",
+                source_name=file_name[:255],
+                source_hash=source_hash,
+                records=preset.records,
+                warnings=("Crypto.com App Token Wallet preset applied.",),
+            ),
+            rows=preset.rows,
+            rejected_rows=preset.rejected_rows,
+            headers=tuple(headers),
+            amount_format="DOT_DECIMAL",
+        )
     defaults = {"activity_type": default_activity_type}
     indices = _mapping_indices(headers, mapping, defaults)
     inferred = _infer_amount_format(source_rows, indices)

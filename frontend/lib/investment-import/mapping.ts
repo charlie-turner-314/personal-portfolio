@@ -103,8 +103,8 @@ export const INVESTMENT_IMPORT_FIELDS: Array<{
 ];
 
 const HEADER_ALIASES: Record<keyof InvestmentImportMapping, string[]> = {
-  occurred_at: ["date", "trade date", "transaction date", "timestamp", "time", "occurred at"],
-  activity_type: ["type", "activity", "activity type", "transaction type", "side", "action"],
+  occurred_at: ["date", "trade date", "transaction date", "timestamp", "timestamp (utc)", "time", "occurred at"],
+  activity_type: ["type", "activity", "activity type", "transaction type", "transaction kind", "side", "action"],
   asset_symbol: ["symbol", "ticker", "asset", "coin", "instrument", "code"],
   asset_name: ["asset name", "security name", "instrument name", "name"],
   asset_type: ["asset type", "instrument type", "security type"],
@@ -121,15 +121,15 @@ const HEADER_ALIASES: Record<keyof InvestmentImportMapping, string[]> = {
   tax_amount: ["tax", "tax amount", "withholding tax", "tax withheld"],
   tax_currency: ["tax currency", "withholding currency"],
   source_reference: ["reference", "id", "transaction id", "trade id", "order id", "reference id"],
-  counter_asset_symbol: ["counter asset", "counter currency", "quote asset"],
-  counter_quantity: ["counter quantity", "quote quantity", "quote amount"],
+  counter_asset_symbol: ["counter asset", "counter currency", "quote asset", "to currency"],
+  counter_quantity: ["counter quantity", "quote quantity", "quote amount", "to amount"],
   direction: ["direction", "transfer direction"],
   external_group_id: ["external group id", "event group", "related transaction id"],
   transaction_hash: ["transaction hash", "tx hash", "txid", "blockchain hash"],
-  aud_value: ["aud value", "value aud", "market value aud", "aud market value"],
+  aud_value: ["aud value", "value aud", "market value aud", "aud market value", "native amount"],
   valuation_source: ["valuation source", "price source", "market value source"],
   valuation_timestamp: ["valuation timestamp", "price timestamp", "market value timestamp"],
-  description: ["description", "details", "memo", "notes"],
+  description: ["description", "transaction description", "details", "memo", "notes"],
   ex_date: ["ex date", "ex dividend date"],
   franked_amount: ["franked amount", "franked dividend"],
   unfranked_amount: ["unfranked amount", "unfranked dividend"],
@@ -155,7 +155,7 @@ function normalized(value: string): string {
   return value.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 }
 
-export function suggestInvestmentImportMapping(headers: string[]): InvestmentImportMapping {
+export function suggestInvestmentImportMapping(headers: string[], provider = "generic"): InvestmentImportMapping {
   const headerByNormalized = new Map(headers.map((header) => [normalized(header), header]));
   const mapping = { ...EMPTY_INVESTMENT_IMPORT_MAPPING };
   for (const field of INVESTMENT_IMPORT_FIELDS) {
@@ -163,6 +163,27 @@ export function suggestInvestmentImportMapping(headers: string[]): InvestmentImp
       .map((alias) => headerByNormalized.get(alias))
       .find(Boolean);
     mapping[field.key] = match ?? null;
+  }
+  const providerKey = provider.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const cryptoComAppHeaders = {
+    occurred_at: "Timestamp (UTC)",
+    activity_type: "Transaction Kind",
+    asset_symbol: "Currency",
+    quantity: "Amount",
+    counter_asset_symbol: "To Currency",
+    counter_quantity: "To Amount",
+    currency: "Native Currency",
+    aud_value: "Native Amount",
+    description: "Transaction Description",
+    transaction_hash: "Transaction Hash",
+  } as const;
+  if (providerKey === "cryptocom" || providerKey === "cryptocomapp") {
+    for (const [field, header] of Object.entries(cryptoComAppHeaders) as Array<[
+      keyof typeof cryptoComAppHeaders,
+      string,
+    ]>) {
+      mapping[field] = headerByNormalized.get(normalized(header)) ?? null;
+    }
   }
   return mapping;
 }

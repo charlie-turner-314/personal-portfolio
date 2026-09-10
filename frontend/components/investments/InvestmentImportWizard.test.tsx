@@ -113,6 +113,16 @@ describe("InvestmentImportWizard", () => {
     expect(screen.getByText(/does not offer DRP/)).toBeTruthy();
   });
 
+  it("shows the Crypto.com App preset scope and configures crypto import defaults", async () => {
+    render(<InvestmentImportWizard accounts={accounts} />);
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "Crypto.com App" } });
+
+    expect(await screen.findByText("Crypto.com App preset")).toBeTruthy();
+    expect(screen.getByText(/original Token Wallet CSV/)).toBeTruthy();
+    expect(screen.getByText(/card cashback or reimbursements/)).toBeTruthy();
+    expect(screen.getByText(/Exchange and Onchain exports use different formats/)).toBeTruthy();
+  });
+
   it("surfaces annual-statement conflicts for explicit resolution", async () => {
     mocks.listInvestmentReconciliationItems.mockResolvedValueOnce([{
       id: "review-1",

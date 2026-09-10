@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 import uuid
 
 import pytest
@@ -157,6 +158,111 @@ reward-1,2025-02-01 11:00:00,Staking reward,ETH,crypto,0.2,,,,,,,,,,,
     assert swap.metadata["transaction_hash"] == "chain-1"
     reward = parsed.batch.records[1].activities[0]
     assert "AUD market value is missing" in reward.warnings[0]
+
+
+def test_crypto_com_app_preset_normalizes_major_token_wallet_kinds_and_flags_review_rows():
+    content = (Path(__file__).parent / "fixtures" / "crypto_com_app_token_wallet.csv").read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "crypto_transactions_record_20250114.csv",
+        "provider": "Crypto.com App",
+        "mapping": {},
+        "default_asset_type": "equity",
+    })
+
+    activities = [record.activities[0] for record in parsed.batch.records]
+    by_kind = {
+        activity.metadata["crypto_com_transaction_kind"]: activity
+        for activity in activities
+    }
+    assert parsed.batch.provider == "crypto.com_app"
+    assert parsed.amount_format == "DOT_DECIMAL"
+    assert len(parsed.batch.records) == 11
+    assert len(parsed.rejected_rows) == 3
+    btc_purchase = next(activity for activity in activities if activity.asset_symbol == "BTC" and activity.activity_type == "buy")
+    assert btc_purchase.aud_value == Decimal("1000.00")
+    assert by_kind["crypto_exchange"].activity_type == "crypto_swap"
+    assert by_kind["crypto_exchange"].counter_asset_symbol == "ETH"
+    assert by_kind["crypto_earn_interest_paid"].activity_type == "interest"
+    assert by_kind["finance.lockup.dpos_compound_interest.crypto_wallet"].activity_type == "staking_reward"
+    assert by_kind["campaign_reward"].activity_type == "airdrop"
+    assert by_kind["crypto_deposit"].activity_type == "deposit"
+    assert by_kind["crypto_withdrawal"].activity_type == "withdrawal"
+    assert by_kind["card_top_up"].activity_type == "sell"
+    assert by_kind["crypto_network_fee"].activity_type == "fee"
+    paired = by_kind["crypto_wallet_swap"]
+    assert (paired.activity_type, paired.asset_symbol, paired.counter_asset_symbol) == (
+        "crypto_swap", "LUNA", "LUNC"
+    )
+    reasons = " ".join(reason for row in parsed.rejected_rows for reason in row["reasons"])
+    assert "cashback/reimbursement" in reasons
+    assert "beneficial ownership" in reasons
+    assert "Unsupported Crypto.com App Transaction Kind" in reasons
+
+
+def test_crypto_com_app_overlapping_exports_are_idempotent(db_session, investment_account):
+    user, account = investment_account
+    content = (Path(__file__).parent / "fixtures" / "crypto_com_app_token_wallet.csv").read_text()
+    options = {
+        **_options(content),
+        "file_name": "crypto_transactions_record_20250114.csv",
+        "provider": "Crypto.com App",
+        "mapping": {},
+    }
+
+    first = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=options
+    )
+    second = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=options
+    )
+
+    assert first["inserted_records"] == 11
+    assert first["inserted_activities"] == 11
+    assert first["status"] == "partial"
+    assert first["rejected_rows"] == 3
+    assert second["inserted_records"] == 0
+    assert second["skipped_duplicate_records"] == 11
+    holdings = {
+        holding.symbol: Decimal(holding.quantity)
+        for holding in db_session.query(Holding).filter(Holding.account_id == account.id).all()
+    }
+    assert holdings == {
+        "ABC": Decimal("2"),
+        "BTC": Decimal("0.0069"),
+        "CRO": Decimal("10"),
+        "ETH": Decimal("0.031"),
+        "LUNA": Decimal("10"),
+        "LUNC": Decimal("10"),
+    }
+    assert sorted(
+        event.event_type
+        for event in db_session.query(InvestmentIncomeEvent).filter(
+            InvestmentIncomeEvent.account_id == account.id
+        ).all()
+    ) == ["airdrop", "interest", "staking_reward"]
+    assert db_session.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.account_id == account.id,
+        InvestmentSourceRecord.provider == "crypto.com_app",
+    ).count() == 11
+
+
+def test_crypto_com_app_preset_retains_cash_funding_but_rejects_untyped_spending():
+    content = (Path(__file__).parent / "fixtures" / "crypto_com_app_cash_wallet.csv").read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "fiat_transactions_record_20250103.csv",
+        "provider": "Crypto.com App",
+        "mapping": {},
+    })
+
+    assert [record.activities[0].activity_type for record in parsed.batch.records] == [
+        "deposit", "withdrawal"
+    ]
+    assert all(record.activities[0].asset_type == "cash" for record in parsed.batch.records)
+    assert all("does not alter crypto holdings" in record.activities[0].warnings[0] for record in parsed.batch.records)
+    assert len(parsed.rejected_rows) == 1
+    assert "card or cash spending" in parsed.rejected_rows[0]["reasons"][0]
 
 
 def test_parser_maps_final_statement_tax_and_amma_fields_without_inference():

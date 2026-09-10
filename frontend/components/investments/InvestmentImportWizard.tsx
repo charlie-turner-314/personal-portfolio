@@ -69,7 +69,9 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   const [completedMessage, setCompletedMessage] = useState<string | null>(null);
 
   const account = accounts.find((item) => item.id === accountId);
-  const isSuperhero = provider.trim().toLowerCase().replace(/[\s_-]+/g, "") === "superhero";
+  const providerKey = provider.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const isSuperhero = providerKey === "superhero";
+  const isCryptoComApp = providerKey === "cryptocom" || providerKey === "cryptocomapp";
 
   const requestPayload = useCallback((): InvestmentImportRequest => ({
     account_id: accountId,
@@ -144,11 +146,16 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     setFileName(file.name);
     setFileContent(content);
     setHeaders(parsed.headers);
-    setMapping(suggestInvestmentImportMapping(parsed.headers));
+    setMapping(suggestInvestmentImportMapping(parsed.headers, provider));
+    if (isCryptoComApp) {
+      setAssetType("crypto");
+      setIncomeDataKind("cash_activity");
+      setAmountFormat("DOT_DECIMAL");
+    }
     setPreview(null);
     setCompletedMessage(null);
     setError(parsed.headers.length ? null : "The file has no header row.");
-  }, []);
+  }, [isCryptoComApp, provider]);
 
   const missingRequired = useMemo(
     () => INVESTMENT_IMPORT_FIELDS.filter((field) => field.required && !mapping[field.key]),
@@ -266,8 +273,24 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
             </div>
             <div className="space-y-2">
               <Label htmlFor="investment-import-provider">Provider</Label>
-              <Input id="investment-import-provider" list="investment-import-providers" value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Broker or exchange name" />
-              <datalist id="investment-import-providers"><option value="Superhero" /><option value="Generic" /></datalist>
+              <Input
+                id="investment-import-provider"
+                list="investment-import-providers"
+                value={provider}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setProvider(value);
+                  if (headers.length > 0) setMapping(suggestInvestmentImportMapping(headers, value));
+                  const key = value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+                  if (key === "cryptocom" || key === "cryptocomapp") {
+                    setAssetType("crypto");
+                    setIncomeDataKind("cash_activity");
+                    setAmountFormat("DOT_DECIMAL");
+                  }
+                }}
+                placeholder="Broker or exchange name"
+              />
+              <datalist id="investment-import-providers"><option value="Crypto.com App" /><option value="Superhero" /><option value="Generic" /></datalist>
             </div>
             <div className="space-y-2">
               <Label htmlFor="investment-import-currency">Default currency</Label>
@@ -289,6 +312,24 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                 Current CSV column schemas are not published by Superhero, so review the suggested mapping before preview.
                 See <a className="underline underline-offset-2" href="https://www.superhero.com.au/support/articles/13648478865167-tax-reporting/" target="_blank" rel="noreferrer">Tax Reporting</a>
                 {" and "}<a className="underline underline-offset-2" href="https://support.superhero.com.au/hc/en-au/articles/14787654257807-Dividends" target="_blank" rel="noreferrer">Dividends</a>.
+              </p>
+            </div>
+          )}
+          {isCryptoComApp && (
+            <div className="space-y-2 border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
+              <div className="font-medium text-foreground">Crypto.com App preset</div>
+              <p>
+                Export the original Token Wallet CSV from Accounts → History → Export. The preset reads Crypto.com transaction kinds,
+                pairs supported conversion rows, and uses Native Amount only when Native Currency is AUD.
+              </p>
+              <p>The mapped columns below are shown for audit; this preset validates and interprets the provider schema directly.</p>
+              <p>
+                Cash-wallet-only movements, card cashback or reimbursements, lock/stake bookkeeping, and unknown transaction kinds stay rejected for review.
+                Import a complete history so later disposals retain their acquisition cost base; each App report can cover up to three years.
+              </p>
+              <p>
+                Crypto.com Exchange and Onchain exports use different formats and are not accepted by this App preset. See the{" "}
+                <a className="underline underline-offset-2" href="https://help.crypto.com/en/articles/3438579-how-do-i-export-my-transaction-history-app" target="_blank" rel="noreferrer">official App export guide</a>.
               </p>
             </div>
           )}
