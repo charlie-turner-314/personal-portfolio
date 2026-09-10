@@ -99,6 +99,7 @@ class ImportError(Exception):
 class _ValidatedTrade:
     index: int
     symbol: str
+    instrument_type: str
     trade_date: date
     side: str
     quantity: Decimal
@@ -115,6 +116,11 @@ def _validate_trade(index: int, raw: dict[str, Any]) -> tuple[_ValidatedTrade | 
         symbol = str(raw["symbol"]).strip()
         if not symbol:
             raise ValueError("symbol required")
+        instrument_type = str(raw.get("instrument_type") or "equity").strip().lower()
+        if instrument_type == "fund":
+            instrument_type = "etf"
+        if instrument_type not in {"equity", "etf", "cash", "crypto", "option", "bond", "other"}:
+            raise ValueError(f"unsupported instrument_type {instrument_type!r}")
         trade_date = date.fromisoformat(str(raw["trade_date"]))
         side = str(raw["side"]).lower()
         if side not in VALID_SIDES:
@@ -140,6 +146,7 @@ def _validate_trade(index: int, raw: dict[str, Any]) -> tuple[_ValidatedTrade | 
     return _ValidatedTrade(
         index=index,
         symbol=symbol,
+        instrument_type=instrument_type,
         trade_date=trade_date,
         side=side,
         quantity=quantity,
@@ -238,6 +245,7 @@ def import_trades(
         {
             "account_id": account.id,
             "symbol": vt.symbol.upper(),
+            "instrument_type": vt.instrument_type,
             "trade_date": vt.trade_date,
             "side": vt.side,
             "quantity": vt.quantity,
@@ -258,12 +266,13 @@ def import_trades(
     inserted_rows = db.execute(stmt).fetchall()
     inserted = len(inserted_rows)
     skipped = len(validated) - inserted
-    affected_symbols = sorted({vt.symbol.upper() for vt in validated})
+    affected_instruments = sorted({(vt.symbol.upper(), vt.instrument_type) for vt in validated})
+    affected_symbols = sorted({symbol for symbol, _ in affected_instruments})
 
     # Recompute holdings before deciding whether to commit so dry_run still
     # surfaces FIFO oversell errors and any other recompute failures.
-    for symbol in affected_symbols:
-        _recompute_holding(db, account, symbol)
+    for symbol, instrument_type in affected_instruments:
+        _recompute_holding(db, account, symbol, instrument_type)
 
     if dry_run:
         db.rollback()
@@ -292,11 +301,20 @@ def import_trades(
     }
 
 
-def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
+def _recompute_holding(
+    db: Session,
+    account: Account,
+    symbol: str,
+    instrument_type: str = "equity",
+) -> None:
     """Rebuild Holding(account, symbol) from full BrokerTrade history using FIFO."""
     trades = (
         db.query(BrokerTrade)
-        .filter(BrokerTrade.account_id == account.id, BrokerTrade.symbol == symbol)
+        .filter(
+            BrokerTrade.account_id == account.id,
+            BrokerTrade.symbol == symbol,
+            BrokerTrade.instrument_type == instrument_type,
+        )
         .order_by(BrokerTrade.trade_date)
         .all()
     )
@@ -307,7 +325,11 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
         ).delete(synchronize_session=False)
         holding = (
             db.query(Holding)
-            .filter(Holding.account_id == account.id, Holding.symbol == symbol, Holding.instrument_type == "equity")
+            .filter(
+                Holding.account_id == account.id,
+                Holding.symbol == symbol,
+                Holding.instrument_type == instrument_type,
+            )
             .first()
         )
         if holding is not None and holding.source == "trade_import":
@@ -349,7 +371,7 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
         .filter(
             Holding.account_id == account.id,
             Holding.symbol == symbol,
-            Holding.instrument_type == "equity",
+            Holding.instrument_type == instrument_type,
         )
         .first()
     )
@@ -359,7 +381,7 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
             account_id=account.id,
             symbol=symbol,
             currency=currency,
-            instrument_type="equity",
+            instrument_type=instrument_type,
             quantity=quantity,
             avg_cost=avg_cost,
             as_of_date=last_date,
@@ -464,7 +486,7 @@ def remove_trade(
     symbol = trade.symbol
     db.delete(trade)
     db.flush()
-    _recompute_holding(db, account, symbol)
+    _recompute_holding(db, account, symbol, trade.instrument_type)
     if commit:
         db.commit()
     return True

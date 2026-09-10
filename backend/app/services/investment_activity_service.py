@@ -519,7 +519,9 @@ def _canonical_activity_payload(activity: CanonicalActivityInput) -> dict[str, A
 
 
 def _instrument_type(asset_type: str) -> str:
-    if asset_type in {"equity", "fund", "crypto", "cash"}:
+    if asset_type == "fund":
+        return "etf"
+    if asset_type in {"equity", "crypto", "cash"}:
         return asset_type
     return "other"
 
@@ -570,6 +572,7 @@ def _apply_trade_activity(
     trade = BrokerTrade(
         account_id=account.id,
         symbol=activity.asset_symbol,
+        instrument_type=_instrument_type(activity.asset_type),
         trade_date=activity.occurred_at.date(),
         side=side,
         quantity=activity.quantity,
@@ -689,7 +692,7 @@ def apply_batch(
     inserted_activities = 0
     trade_activities: list[tuple[InvestmentActivity, str]] = []
     income_activities: list[tuple[InvestmentActivity, str]] = []
-    affected_trade_symbols: set[str] = set()
+    affected_trade_instruments: set[tuple[str, str]] = set()
 
     try:
         with db.begin_nested():
@@ -770,16 +773,18 @@ def apply_batch(
                             idempotency_key=idempotency_key,
                         )
                         trade_activities.append((activity, idempotency_key))
-                        affected_trade_symbols.add(canonical.asset_symbol)
+                        affected_trade_instruments.add(
+                            (canonical.asset_symbol, _instrument_type(canonical.asset_type))
+                        )
                     if canonical.activity_type in {"dividend", "distribution", "drp"}:
                         income_activities.append((activity, idempotency_key))
 
-            for symbol in sorted(affected_trade_symbols):
-                _recompute_holding(db, account, symbol)
+            for symbol, instrument_type in sorted(affected_trade_instruments):
+                _recompute_holding(db, account, symbol, instrument_type)
             # SessionLocal disables autoflush. Make trade-derived holdings
             # visible to the income phase so a same-batch dividend/DRP links
             # to the existing row instead of attempting a duplicate insert.
-            if affected_trade_symbols:
+            if affected_trade_instruments:
                 db.flush()
             for activity, idempotency_key in income_activities:
                 _apply_income_activity(
@@ -805,7 +810,7 @@ def apply_batch(
             "inserted_records": inserted_records,
             "skipped_duplicate_records": skipped_records,
             "inserted_activities": inserted_activities,
-            "affected_symbols": sorted(affected_trade_symbols),
+            "affected_symbols": sorted({symbol for symbol, _ in affected_trade_instruments}),
         }
         if commit:
             db.commit()
@@ -851,4 +856,95 @@ def source_record_view(record: InvestmentSourceRecord) -> dict[str, Any]:
         "source_metadata": sanitize_source_payload(record.source_metadata),
         "normalization_version": record.normalization_version,
         "created_at": record.created_at.isoformat(),
+    }
+
+
+def revert_run(
+    db: Session,
+    *,
+    user_id: str,
+    run_id: str | UUID,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Remove only the economic records created by one ingestion run.
+
+    Immutable source rows and canonical activities remain as an audit trail and
+    continue to deduplicate the same provider record if it is uploaded again.
+    """
+    run = (
+        db.query(InvestmentIngestionRun)
+        .filter(InvestmentIngestionRun.id == run_id, InvestmentIngestionRun.user_id == user_id)
+        .one_or_none()
+    )
+    if run is None:
+        raise ActivityApplicationError("investment ingestion run not found")
+    if run.ingestion_type != "csv_import":
+        raise ActivityApplicationError("only CSV import runs can be reverted from this workflow")
+    if run.status == "reverted":
+        return {
+            "run_id": str(run.id),
+            "status": "reverted",
+            "removed_trades": 0,
+            "removed_income_events": 0,
+            "affected_symbols": [],
+        }
+    if run.status not in {"completed", "partial"}:
+        raise ActivityApplicationError(f"run cannot be reverted while its status is {run.status!r}")
+
+    activities = (
+        db.query(InvestmentActivity)
+        .filter(InvestmentActivity.run_id == run.id, InvestmentActivity.user_id == user_id)
+        .all()
+    )
+    trade_ids = {activity.broker_trade_id for activity in activities if activity.broker_trade_id}
+    income_ids = {activity.income_event_id for activity in activities if activity.income_event_id}
+    trades = db.query(BrokerTrade).filter(BrokerTrade.id.in_(trade_ids)).all() if trade_ids else []
+    income_events = (
+        db.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.id.in_(income_ids)).all()
+        if income_ids else []
+    )
+    affected_instruments = {(trade.symbol, trade.instrument_type) for trade in trades}
+    account = db.query(Account).filter(Account.id == run.account_id, Account.user_id == user_id).one()
+
+    try:
+        with db.begin_nested():
+            for activity in activities:
+                activity.income_event_id = None
+                activity.broker_trade_id = None
+                activity.applied_at = None
+            for event in income_events:
+                db.delete(event)
+            db.flush()
+            for trade in trades:
+                db.delete(trade)
+            db.flush()
+            for symbol, instrument_type in sorted(affected_instruments):
+                _recompute_holding(db, account, symbol, instrument_type)
+            run.status = "reverted"
+            run.reverted_at = datetime.utcnow()
+            previous_summary = dict(run.summary or {})
+            run.summary = {
+                **previous_summary,
+                "reverted_trades": len(trades),
+                "reverted_income_events": len(income_events),
+                "reverted_affected_symbols": sorted({symbol for symbol, _ in affected_instruments}),
+            }
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+    except Exception as exc:
+        if commit:
+            db.rollback()
+        raise ActivityApplicationError(
+            f"investment import reversal failed atomically: {_safe_error(exc)}",
+            run_id=run.id,
+        ) from exc
+
+    return {
+        "run_id": str(run.id),
+        "status": run.status,
+        "removed_trades": len(trades),
+        "removed_income_events": len(income_events),
+        "affected_symbols": sorted({symbol for symbol, _ in affected_instruments}),
     }

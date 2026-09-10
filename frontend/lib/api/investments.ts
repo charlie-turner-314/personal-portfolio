@@ -100,7 +100,15 @@ async function signedFetch(
 async function readJsonOrThrow<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(text || `Request failed: ${resp.status}`);
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      throw new Error(parsed.detail || text || `Request failed: ${resp.status}`);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(text || `Request failed: ${resp.status}`);
+      }
+      throw error;
+    }
   }
   return (await resp.json()) as T;
 }
@@ -427,4 +435,154 @@ export async function updateHolding(
     const text = await resp.text().catch(() => "");
     throw new Error(text || `Request failed: ${resp.status}`);
   }
+}
+
+export type InvestmentImportMapping = {
+  occurred_at: string | null;
+  activity_type: string | null;
+  asset_symbol: string | null;
+  asset_name: string | null;
+  asset_type: string | null;
+  quantity: string | null;
+  price: string | null;
+  gross_amount: string | null;
+  net_amount: string | null;
+  currency: string | null;
+  fee_amount: string | null;
+  fee_currency: string | null;
+  tax_amount: string | null;
+  tax_currency: string | null;
+  source_reference: string | null;
+  counter_asset_symbol: string | null;
+  counter_quantity: string | null;
+  direction: string | null;
+  description: string | null;
+};
+
+export type InvestmentImportRequest = {
+  account_id: string;
+  provider: string;
+  file_name: string;
+  file_content: string;
+  mapping: InvestmentImportMapping;
+  date_format: "AUTO" | "DD-MM-YYYY" | "MM-DD-YYYY";
+  amount_format: "AUTO" | "DOT_DECIMAL" | "COMMA_DECIMAL";
+  default_asset_type: "equity" | "fund" | "crypto" | "cash" | "option" | "bond" | "other";
+  default_currency?: string | null;
+  default_activity_type?: string | null;
+  activity_type_aliases?: Record<string, string>;
+};
+
+export type InvestmentImportPreviewRow = {
+  row_number: number;
+  status: "ready" | "duplicate" | "conflict";
+  duplicate_reason?: string;
+  conflict_reason?: string;
+  asset_status: "existing" | "new";
+  normalized: Record<string, string | string[] | null>;
+  warnings: string[];
+  raw: Record<string, string>;
+};
+
+export type InvestmentImportPreview = {
+  provider: string;
+  file_name: string;
+  source_hash: string;
+  headers: string[];
+  resolved_amount_format: string;
+  rows: InvestmentImportPreviewRow[];
+  rejected_rows: Array<{
+    row_number: number;
+    reasons: string[];
+    raw: Record<string, string>;
+  }>;
+  unmatched_assets: string[];
+  summary: {
+    total_rows: number;
+    ready_rows: number;
+    duplicate_rows: number;
+    rejected_rows: number;
+    conflict_rows: number;
+    warning_rows: number;
+  };
+};
+
+export type InvestmentImportRun = {
+  id: string;
+  account_id: string;
+  provider: string;
+  status: "applying" | "completed" | "partial" | "failed" | "reverted";
+  source_name: string | null;
+  summary: Record<string, number | string | string[]>;
+  warnings: string[];
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+  reverted_at: string | null;
+};
+
+export type InvestmentImportProfile = {
+  id: string;
+  account_id: string;
+  provider: string;
+  name: string;
+  mapping: {
+    columns: InvestmentImportMapping;
+    date_format?: InvestmentImportRequest["date_format"];
+    amount_format?: InvestmentImportRequest["amount_format"];
+    default_asset_type?: InvestmentImportRequest["default_asset_type"];
+    default_currency?: string | null;
+    default_activity_type?: string | null;
+    activity_type_aliases?: Record<string, string>;
+  };
+  header_signature: string[];
+  last_used_at: string | null;
+};
+
+export async function previewInvestmentImport(
+  payload: InvestmentImportRequest,
+): Promise<InvestmentImportPreview> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", "/api/investments/imports/preview", { body: payload });
+  return readJsonOrThrow<InvestmentImportPreview>(resp);
+}
+
+export async function applyInvestmentImport(
+  payload: InvestmentImportRequest & {
+    selected_row_numbers?: number[];
+    save_mapping?: boolean;
+    mapping_name?: string;
+  },
+): Promise<{ run_id: string; inserted_records: number; skipped_duplicate_records: number; inserted_activities: number }> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", "/api/investments/imports", { body: payload });
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentImports(accountId: string): Promise<InvestmentImportRun[]> {
+  const resp = await signedFetch("GET", "/api/investments/imports", {
+    query: { account_id: accountId },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentImportProfiles(
+  accountId: string,
+  provider?: string,
+): Promise<InvestmentImportProfile[]> {
+  const resp = await signedFetch("GET", "/api/investments/import-profiles", {
+    query: { account_id: accountId, provider },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function revertInvestmentImport(runId: string): Promise<{
+  run_id: string;
+  status: "reverted";
+  removed_trades: number;
+  removed_income_events: number;
+}> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", `/api/investments/imports/${runId}/revert`);
+  return readJsonOrThrow(resp);
 }

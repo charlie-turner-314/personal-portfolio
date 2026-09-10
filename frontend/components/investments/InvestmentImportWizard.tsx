@@ -1,0 +1,407 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { RiAlertLine, RiCheckLine, RiDeleteBinLine, RiLoader4Line } from "@remixicon/react";
+import { toast } from "sonner";
+import {
+  applyInvestmentImport,
+  listInvestmentImportProfiles,
+  listInvestmentImports,
+  previewInvestmentImport,
+  revertInvestmentImport,
+  type InvestmentAccount,
+  type InvestmentImportMapping,
+  type InvestmentImportPreview,
+  type InvestmentImportRequest,
+  type InvestmentImportRun,
+} from "@/lib/api/investments";
+import { detectCsvDelimiter, parseDelimitedText } from "@/lib/import/parsing";
+import {
+  EMPTY_INVESTMENT_IMPORT_MAPPING,
+  INVESTMENT_IMPORT_FIELDS,
+  reconcileSavedInvestmentMapping,
+  suggestInvestmentImportMapping,
+} from "@/lib/investment-import/mapping";
+import { CsvUploadDropzone } from "@/components/transactions/csv-upload-dropzone";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+type BusyState = "profiles" | "preview" | "import" | "history" | "revert" | null;
+
+function formattedDate(value: string): string {
+  return new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccount[] }) {
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [provider, setProvider] = useState("generic");
+  const [fileName, setFileName] = useState("");
+  const [fileContent, setFileContent] = useState("");
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [mapping, setMapping] = useState<InvestmentImportMapping>(EMPTY_INVESTMENT_IMPORT_MAPPING);
+  const [dateFormat, setDateFormat] = useState<InvestmentImportRequest["date_format"]>("AUTO");
+  const [amountFormat, setAmountFormat] = useState<InvestmentImportRequest["amount_format"]>("AUTO");
+  const [assetType, setAssetType] = useState<InvestmentImportRequest["default_asset_type"]>("equity");
+  const [defaultCurrency, setDefaultCurrency] = useState(accounts[0]?.base_currency ?? "AUD");
+  const [saveMapping, setSaveMapping] = useState(true);
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [preview, setPreview] = useState<InvestmentImportPreview | null>(null);
+  const [runs, setRuns] = useState<InvestmentImportRun[]>([]);
+  const [busy, setBusy] = useState<BusyState>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [completedMessage, setCompletedMessage] = useState<string | null>(null);
+
+  const account = accounts.find((item) => item.id === accountId);
+
+  const requestPayload = useCallback((): InvestmentImportRequest => ({
+    account_id: accountId,
+    provider: provider.trim(),
+    file_name: fileName,
+    file_content: fileContent,
+    mapping,
+    date_format: dateFormat,
+    amount_format: amountFormat,
+    default_asset_type: assetType,
+    default_currency: defaultCurrency.trim().toUpperCase() || account?.base_currency || "AUD",
+  }), [account?.base_currency, accountId, amountFormat, assetType, dateFormat, defaultCurrency, fileContent, fileName, mapping, provider]);
+
+  const loadHistory = useCallback(async () => {
+    if (!accountId) return;
+    setBusy((current) => current ?? "history");
+    try {
+      setRuns(await listInvestmentImports(accountId));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load import history.");
+    } finally {
+      setBusy((current) => current === "history" ? null : current);
+    }
+  }, [accountId]);
+
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
+
+  useEffect(() => {
+    if (!accountId || !provider.trim()) return;
+    let cancelled = false;
+    setBusy((current) => current ?? "profiles");
+    listInvestmentImportProfiles(accountId, provider)
+      .then((profiles) => {
+        if (cancelled || profiles.length === 0) {
+          if (!cancelled) setProfileMessage(null);
+          return;
+        }
+        const profile = profiles[0];
+        if (headers.length > 0) {
+          setMapping(reconcileSavedInvestmentMapping(profile.mapping.columns, headers));
+        }
+        setDateFormat(profile.mapping.date_format ?? "AUTO");
+        setAmountFormat(profile.mapping.amount_format ?? "AUTO");
+        setAssetType(profile.mapping.default_asset_type ?? "equity");
+        setDefaultCurrency(profile.mapping.default_currency ?? account?.base_currency ?? "AUD");
+        setProfileMessage(`Using saved mapping: ${profile.name}`);
+      })
+      .catch(() => {
+        if (!cancelled) setProfileMessage(null);
+      })
+      .finally(() => {
+        if (!cancelled) setBusy((current) => current === "profiles" ? null : current);
+      });
+    return () => { cancelled = true; };
+  }, [account?.base_currency, accountId, headers, provider]);
+
+  const onFileSelect = useCallback((file: File, content: string) => {
+    const parsed = parseDelimitedText(content, detectCsvDelimiter(content));
+    setFileName(file.name);
+    setFileContent(content);
+    setHeaders(parsed.headers);
+    setMapping(suggestInvestmentImportMapping(parsed.headers));
+    setPreview(null);
+    setCompletedMessage(null);
+    setError(parsed.headers.length ? null : "The file has no header row.");
+  }, []);
+
+  const missingRequired = useMemo(
+    () => INVESTMENT_IMPORT_FIELDS.filter((field) => field.required && !mapping[field.key]),
+    [mapping],
+  );
+
+  const runPreview = async () => {
+    if (!accountId || !fileContent || !provider.trim() || missingRequired.length > 0) {
+      setError("Choose an account and file, then map Date, Activity type, and Symbol.");
+      return;
+    }
+    setBusy("preview");
+    setError(null);
+    setCompletedMessage(null);
+    try {
+      setPreview(await previewInvestmentImport(requestPayload()));
+    } catch (cause) {
+      setPreview(null);
+      setError(cause instanceof Error ? cause.message : "Preview failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const applyImport = async () => {
+    if (!preview || preview.summary.ready_rows === 0) return;
+    setBusy("import");
+    setError(null);
+    try {
+      const result = await applyInvestmentImport({
+        ...requestPayload(),
+        save_mapping: saveMapping,
+        mapping_name: `${provider.trim()} investment mapping`,
+      });
+      setCompletedMessage(
+        `Imported ${result.inserted_activities} activit${result.inserted_activities === 1 ? "y" : "ies"}. ` +
+        `${result.skipped_duplicate_records} duplicate source record${result.skipped_duplicate_records === 1 ? " was" : "s were"} skipped.`,
+      );
+      toast.success("Investment import completed");
+      setPreview(await previewInvestmentImport(requestPayload()));
+      await loadHistory();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Import failed.");
+      toast.error("Investment import failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const undoRun = async (run: InvestmentImportRun) => {
+    if (!window.confirm(`Undo ${run.source_name ?? "this import"}? Other import batches will remain.`)) return;
+    setBusy("revert");
+    setError(null);
+    try {
+      const result = await revertInvestmentImport(run.id);
+      toast.success(`Import undone: ${result.removed_trades} trades and ${result.removed_income_events} income events removed.`);
+      await loadHistory();
+      if (fileContent) setPreview(await previewInvestmentImport(requestPayload()));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not undo the import.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (accounts.length === 0) {
+    return (
+      <Card className="rounded-none">
+        <CardContent className="p-6 text-sm text-muted-foreground">
+          Create a manual investment account first, then return here to import its broker or exchange statement.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card className="rounded-none">
+        <CardHeader><CardTitle className="text-base">1. Source and account</CardTitle></CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Investment account</Label>
+              <Select value={accountId} onValueChange={(value) => value && setAccountId(value)}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>{accounts.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="investment-import-provider">Provider</Label>
+              <Input id="investment-import-provider" value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Broker or exchange name" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="investment-import-currency">Default currency</Label>
+              <Input id="investment-import-currency" value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value)} maxLength={16} />
+            </div>
+          </div>
+          <CsvUploadDropzone onFileSelect={onFileSelect} isUploading={busy === "preview" || busy === "import"} />
+          {profileMessage && <p className="text-xs text-muted-foreground">{profileMessage}</p>}
+        </CardContent>
+      </Card>
+
+      {headers.length > 0 && (
+        <Card className="rounded-none">
+          <CardHeader><CardTitle className="text-base">2. Map columns</CardTitle></CardHeader>
+          <CardContent className="space-y-5">
+            <div className="grid gap-x-5 gap-y-3 md:grid-cols-2">
+              {INVESTMENT_IMPORT_FIELDS.map((field) => (
+                <div key={field.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-3">
+                  <Label htmlFor={`investment-map-${field.key}`} className="text-xs">
+                    {field.label}{field.required ? " *" : ""}
+                  </Label>
+                  <select
+                    id={`investment-map-${field.key}`}
+                    className="h-9 w-full border border-input bg-background px-3 text-sm outline-none focus:border-ring"
+                    value={mapping[field.key] ?? ""}
+                    onChange={(event) => setMapping((current) => ({ ...current, [field.key]: event.target.value || null }))}
+                  >
+                    <option value="">Not mapped</option>
+                    {headers.map((header) => <option key={header} value={header}>{header}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-4 border-t border-border pt-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label>Date format</Label>
+                <Select value={dateFormat} onValueChange={(value) => value && setDateFormat(value as InvestmentImportRequest["date_format"])}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="AUTO">Auto-detect; reject ambiguous</SelectItem>
+                    <SelectItem value="DD-MM-YYYY">Day first (DD-MM-YYYY)</SelectItem>
+                    <SelectItem value="MM-DD-YYYY">Month first (MM-DD-YYYY)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Number format</Label>
+                <Select value={amountFormat} onValueChange={(value) => value && setAmountFormat(value as InvestmentImportRequest["amount_format"])}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="AUTO">Auto-detect; reject ambiguous</SelectItem>
+                    <SelectItem value="DOT_DECIMAL">1,234.56</SelectItem>
+                    <SelectItem value="COMMA_DECIMAL">1.234,56</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Default asset type</Label>
+                <Select value={assetType} onValueChange={(value) => value && setAssetType(value as InvestmentImportRequest["default_asset_type"])}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="equity">Equity</SelectItem>
+                    <SelectItem value="fund">Fund / ETF</SelectItem>
+                    <SelectItem value="crypto">Crypto</SelectItem>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="option">Option</SelectItem>
+                    <SelectItem value="bond">Bond</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Button onClick={runPreview} disabled={busy !== null || missingRequired.length > 0}>
+              {busy === "preview" && <RiLoader4Line className="size-4 animate-spin" />} Preview import
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {error && (
+        <div role="alert" className="flex gap-2 border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+          <RiAlertLine className="mt-0.5 size-4 shrink-0" /> {error}
+        </div>
+      )}
+      {completedMessage && (
+        <div className="flex gap-2 border border-emerald-500/40 bg-emerald-500/5 p-4 text-sm text-emerald-700 dark:text-emerald-300">
+          <RiCheckLine className="mt-0.5 size-4 shrink-0" /> {completedMessage}
+        </div>
+      )}
+
+      {preview && (
+        <Card className="rounded-none">
+          <CardHeader><CardTitle className="text-base">3. Dry-run preview</CardTitle></CardHeader>
+          <CardContent className="space-y-5">
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+              {[
+                ["Ready", preview.summary.ready_rows],
+                ["Duplicates", preview.summary.duplicate_rows],
+                ["Rejected", preview.summary.rejected_rows],
+                ["Source conflicts", preview.summary.conflict_rows],
+                ["Warnings", preview.summary.warning_rows],
+                ["Total", preview.summary.total_rows],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="border border-border p-3">
+                  <div className="text-xl font-semibold tabular-nums">{value}</div>
+                  <div className="text-xs text-muted-foreground">{label}</div>
+                </div>
+              ))}
+            </div>
+            {preview.unmatched_assets.length > 0 && (
+              <div className="border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-200">
+                New assets will be created from valid activity: {preview.unmatched_assets.join(", ")}.
+              </div>
+            )}
+            <div className="overflow-x-auto border border-border">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-muted/50 text-muted-foreground"><tr>
+                  <th className="p-2 font-medium">Row</th><th className="p-2 font-medium">Status</th><th className="p-2 font-medium">Date</th>
+                  <th className="p-2 font-medium">Activity</th><th className="p-2 font-medium">Asset</th><th className="p-2 font-medium">Quantity</th>
+                  <th className="p-2 font-medium">Amount / price</th><th className="p-2 font-medium">Currency</th><th className="p-2 font-medium">Notes</th>
+                </tr></thead>
+                <tbody>
+                  {preview.rows.map((row) => (
+                    <tr key={row.row_number} className="border-t border-border align-top">
+                      <td className="p-2 tabular-nums">{row.row_number}</td>
+                      <td className="p-2"><Badge variant={row.status === "ready" ? "secondary" : "outline"}>{row.status}</Badge></td>
+                      <td className="p-2 whitespace-nowrap">{String(row.normalized.occurred_at ?? "")}</td>
+                      <td className="p-2">{String(row.normalized.activity_type ?? "")}</td>
+                      <td className="p-2 font-medium">{String(row.normalized.asset_symbol ?? "")}{row.asset_status === "new" ? " · new" : ""}</td>
+                      <td className="p-2 tabular-nums">{String(row.normalized.quantity ?? "—")}</td>
+                      <td className="p-2 tabular-nums">{String(row.normalized.net_amount ?? row.normalized.gross_amount ?? row.normalized.price ?? "—")}</td>
+                      <td className="p-2">{String(row.normalized.currency ?? "—")}</td>
+                      <td className="max-w-64 p-2 text-muted-foreground">{row.conflict_reason ?? row.duplicate_reason ?? row.warnings.join("; ")}</td>
+                    </tr>
+                  ))}
+                  {preview.rejected_rows.map((row) => (
+                    <tr key={`rejected-${row.row_number}`} className="border-t border-border bg-destructive/5 align-top">
+                      <td className="p-2 tabular-nums">{row.row_number}</td>
+                      <td className="p-2"><Badge variant="destructive">rejected</Badge></td>
+                      <td className="p-2" colSpan={7}>{row.reasons.join("; ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Checkbox checked={saveMapping} onCheckedChange={(checked) => setSaveMapping(checked === true)} />
+                Save this mapping for {provider.trim() || "this provider"} and account
+              </label>
+              <Button onClick={applyImport} disabled={busy !== null || preview.summary.ready_rows === 0}>
+                {busy === "import" && <RiLoader4Line className="size-4 animate-spin" />}
+                Import {preview.summary.ready_rows} ready row{preview.summary.ready_rows === 1 ? "" : "s"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className="rounded-none">
+        <CardHeader><CardTitle className="text-base">Import history</CardTitle></CardHeader>
+        <CardContent>
+          {busy === "history" && runs.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground"><RiLoader4Line className="size-4 animate-spin" /> Loading history…</div>
+          ) : runs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No statement imports for this account yet.</p>
+          ) : (
+            <div className="divide-y divide-border border border-border">
+              {runs.map((run) => (
+                <div key={run.id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-xs">
+                  <div>
+                    <div className="flex items-center gap-2 font-medium"><span>{run.source_name ?? "Investment import"}</span><Badge variant="outline">{run.status}</Badge></div>
+                    <div className="mt-1 text-muted-foreground">{run.provider} · {formattedDate(run.started_at)} · {String(run.summary.inserted_activities ?? 0)} activities</div>
+                    {run.error && <div className="mt-1 text-destructive">{run.error}</div>}
+                  </div>
+                  {(run.status === "completed" || run.status === "partial") && (
+                    <Button variant="outline" size="sm" onClick={() => void undoRun(run)} disabled={busy !== null}>
+                      <RiDeleteBinLine className="size-4" /> Undo batch
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

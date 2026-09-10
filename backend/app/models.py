@@ -602,14 +602,15 @@ class CsvImport(Base):
 
 class CsvImportProfile(Base):
     """
-    Saved CSV column mapping for an account.
-    At most one profile is stored per user/account pair.
+    Saved CSV column mapping for an account, workflow, and provider.
     """
     __tablename__ = "csv_import_profiles"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    import_kind = Column(String(24), nullable=False, default="transactions", server_default=text("'transactions'"))
+    provider = Column(String(64), nullable=False, default="generic", server_default=text("'generic'"))
     name = Column(String(255), nullable=False, default="Default CSV mapping", server_default=text("'Default CSV mapping'"))
     column_mapping = Column(JSONB, nullable=False)
     header_signature = Column(JSONB, nullable=True)
@@ -624,7 +625,17 @@ class CsvImportProfile(Base):
     __table_args__ = (
         Index("idx_csv_import_profiles_user", "user_id"),
         Index("idx_csv_import_profiles_account", "account_id"),
-        UniqueConstraint("user_id", "account_id", name="csv_import_profiles_user_account_unique"),
+        CheckConstraint(
+            "import_kind IN ('transactions', 'investments')",
+            name="csv_import_profiles_import_kind_check",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "account_id",
+            "import_kind",
+            "provider",
+            name="csv_import_profiles_scope_unique",
+        ),
     )
 
 
@@ -1143,6 +1154,7 @@ class BrokerTrade(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     symbol = Column(String(64), nullable=False)
+    instrument_type = Column(String(20), nullable=False, default="equity", server_default=text("'equity'"))
     trade_date = Column(Date, nullable=False)
     side = Column(String(10), nullable=False)
     quantity = Column(Numeric(28, 8), nullable=False)

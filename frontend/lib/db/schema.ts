@@ -580,6 +580,8 @@ export const csvImportProfiles = pgTable(
     accountId: uuid("account_id")
       .references(() => accounts.id, { onDelete: "cascade" })
       .notNull(),
+    importKind: varchar("import_kind", { length: 24 }).default("transactions").notNull(),
+    provider: varchar("provider", { length: 64 }).default("generic").notNull(),
     name: varchar("name", { length: 255 }).default("Default CSV mapping").notNull(),
     columnMapping: jsonb("column_mapping").notNull(),
     headerSignature: jsonb("header_signature"),
@@ -590,7 +592,16 @@ export const csvImportProfiles = pgTable(
   (table) => [
     index("idx_csv_import_profiles_user").on(table.userId),
     index("idx_csv_import_profiles_account").on(table.accountId),
-    unique("csv_import_profiles_user_account_unique").on(table.userId, table.accountId),
+    check(
+      "csv_import_profiles_import_kind_check",
+      sql`${table.importKind} IN ('transactions', 'investments')`
+    ),
+    unique("csv_import_profiles_scope_unique").on(
+      table.userId,
+      table.accountId,
+      table.importKind,
+      table.provider
+    ),
   ]
 );
 
@@ -1031,6 +1042,7 @@ export const brokerTrades = pgTable("broker_trades", {
   id: uuid("id").primaryKey().defaultRandom(),
   accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
   symbol: text("symbol").notNull(),
+  instrumentType: text("instrument_type").default("equity").notNull(),
   tradeDate: date("trade_date").notNull(),
   side: text("side").notNull(),
   quantity: numeric("quantity", { precision: 28, scale: 8 }).notNull(),

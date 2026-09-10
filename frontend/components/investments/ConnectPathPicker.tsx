@@ -1,14 +1,15 @@
 "use client";
 import { useState } from "react";
-import { RiArrowLeftLine, RiLinksLine, RiPencilLine } from "@remixicon/react";
+import { RiArrowLeftLine, RiLinksLine, RiPencilLine, RiUploadCloud2Line } from "@remixicon/react";
 import type { InvestmentAccount } from "@/lib/api/investments";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { BrokerForm } from "./BrokerForm";
 import { ManualForm } from "./ManualForm";
+import { InvestmentImportWizard } from "./InvestmentImportWizard";
 
-type Path = "broker" | "manual" | null;
+type Path = "broker" | "import" | "manual" | null;
 
 export function ConnectPathPicker({
   accounts,
@@ -18,13 +19,21 @@ export function ConnectPathPicker({
   const [picked, setPicked] = useState<Path>(null);
 
   const paths: {
-    id: "broker" | "manual";
+    id: "broker" | "import" | "manual";
     icon: React.ReactNode;
     title: string;
     sub: string;
     badge: string | null;
     detail: string;
   }[] = [
+    {
+      id: "import",
+      icon: <RiUploadCloud2Line size={17} />,
+      title: "Import statement",
+      sub: "Upload a broker or exchange CSV/XLSX and preview every activity.",
+      badge: null,
+      detail: "Reusable mappings, duplicate detection, provenance, and batch undo.",
+    },
     {
       id: "broker",
       icon: <RiLinksLine size={17} />,
@@ -54,7 +63,7 @@ export function ConnectPathPicker({
             across different accounts — a brokerage account synced from IBKR
             alongside a manually-managed account for assets held elsewhere.
           </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {paths.map((p) => (
               <Card
                 key={p.id}
@@ -111,6 +120,7 @@ export function ConnectPathPicker({
           <ManualForm accounts={accounts} onCancel={() => setPicked(null)} />
         )}
         {picked === "broker" && <BrokerForm onCancel={() => setPicked(null)} />}
+        {picked === "import" && <InvestmentImportWizard accounts={accounts} />}
       </div>
     </div>
   );

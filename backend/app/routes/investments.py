@@ -26,7 +26,15 @@ from app.models import (
     Holding,
     HoldingValuation,
     InvestmentIncomeEvent,
+    InvestmentIngestionRun,
+    InvestmentSourceRecord,
+    CsvImportProfile,
     User,
+)
+from app.investment_import_schemas import (
+    InvestmentImportApplyRequest,
+    InvestmentImportProfileSave,
+    InvestmentImportRequest,
 )
 from app.schemas import (
     BrokerConnectionCreate,
@@ -48,6 +56,13 @@ from app.schemas import (
 from app.services.pnl_service import Trade as _FifoTrade, compute_fifo
 from app.services.broker_trade_service import ImportError as BrokerTradeImportError, import_trades, remove_trade
 from app.services import credentials_crypto
+from app.services.investment_activity_service import ActivityApplicationError, revert_run, source_record_view
+from app.services.investment_csv_import_service import (
+    InvestmentCsvImportError,
+    apply_investment_csv,
+    normalize_provider,
+    preview_investment_csv,
+)
 
 logger = __import__("logging").getLogger(__name__)
 
@@ -94,6 +109,220 @@ def _run_sync_in_process(account_id: UUID) -> None:
 
 
 router = APIRouter()
+
+
+def _save_investment_import_profile(
+    db: Session,
+    *,
+    user_id: str,
+    payload: InvestmentImportProfileSave,
+) -> CsvImportProfile:
+    account = db.query(Account).filter(Account.id == payload.account_id, Account.user_id == user_id).one_or_none()
+    if account is None or account.account_type not in {"investment_manual", "investment_brokerage"}:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+    provider = normalize_provider(payload.provider)
+    profile = db.query(CsvImportProfile).filter(
+        CsvImportProfile.user_id == user_id,
+        CsvImportProfile.account_id == account.id,
+        CsvImportProfile.import_kind == "investments",
+        CsvImportProfile.provider == provider,
+    ).one_or_none()
+    if profile is None:
+        profile = CsvImportProfile(
+            user_id=user_id,
+            account_id=account.id,
+            import_kind="investments",
+            provider=provider,
+            name=payload.name,
+            column_mapping=payload.stored_mapping(),
+            header_signature=payload.header_signature,
+            last_used_at=datetime.utcnow(),
+        )
+        db.add(profile)
+    else:
+        profile.name = payload.name
+        profile.column_mapping = payload.stored_mapping()
+        profile.header_signature = payload.header_signature
+        profile.last_used_at = datetime.utcnow()
+        profile.updated_at = datetime.utcnow()
+    db.flush()
+    return profile
+
+
+def _import_profile_view(profile: CsvImportProfile) -> dict:
+    return {
+        "id": str(profile.id),
+        "account_id": str(profile.account_id),
+        "provider": profile.provider,
+        "name": profile.name,
+        "mapping": profile.column_mapping,
+        "header_signature": profile.header_signature or [],
+        "last_used_at": profile.last_used_at.isoformat() if profile.last_used_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Generic investment file imports
+# ---------------------------------------------------------------------------
+
+
+@router.post("/imports/preview")
+def preview_investment_import(
+    payload: InvestmentImportRequest,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        _, response = preview_investment_csv(
+            db,
+            user_id=user_id,
+            account_id=payload.account_id,
+            parse_options=payload.parse_options(),
+        )
+        return response
+    except InvestmentCsvImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/imports")
+def apply_investment_import(
+    payload: InvestmentImportApplyRequest,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        result = apply_investment_csv(
+            db,
+            user_id=user_id,
+            account_id=payload.account_id,
+            parse_options=payload.parse_options(),
+            selected_row_numbers=payload.selected_row_numbers,
+        )
+        if payload.save_mapping:
+            profile_payload = InvestmentImportProfileSave(
+                account_id=payload.account_id,
+                provider=payload.provider,
+                name=payload.mapping_name,
+                mapping=payload.mapping,
+                date_format=payload.date_format,
+                amount_format=payload.amount_format,
+                default_asset_type=payload.default_asset_type,
+                default_currency=payload.default_currency,
+                default_activity_type=payload.default_activity_type,
+                activity_type_aliases=payload.activity_type_aliases,
+                header_signature=result["headers"],
+            )
+            profile = _save_investment_import_profile(db, user_id=user_id, payload=profile_payload)
+            db.commit()
+            result["profile_id"] = str(profile.id)
+        return result
+    except (InvestmentCsvImportError, ActivityApplicationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/imports")
+def list_investment_imports(
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.user_id == user_id,
+        InvestmentIngestionRun.ingestion_type == "csv_import",
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentIngestionRun.account_id == account_id)
+    return [
+        {
+            "id": str(run.id),
+            "account_id": str(run.account_id),
+            "provider": run.provider,
+            "status": run.status,
+            "source_name": run.source_name,
+            "summary": run.summary or {},
+            "warnings": run.warnings or [],
+            "error": run.error,
+            "started_at": run.started_at.isoformat(),
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "reverted_at": run.reverted_at.isoformat() if run.reverted_at else None,
+        }
+        for run in query.order_by(InvestmentIngestionRun.started_at.desc()).limit(100).all()
+    ]
+
+
+@router.get("/imports/{run_id:uuid}/source-records")
+def list_investment_import_source_records(
+    run_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    run = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.id == run_id,
+        InvestmentIngestionRun.user_id == user_id,
+        InvestmentIngestionRun.ingestion_type == "csv_import",
+    ).one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Investment import not found")
+    records = db.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.run_id == run.id,
+        InvestmentSourceRecord.user_id == user_id,
+    ).order_by(InvestmentSourceRecord.occurred_at, InvestmentSourceRecord.created_at).all()
+    return [source_record_view(record) for record in records]
+
+
+@router.post("/imports/{run_id:uuid}/revert")
+def revert_investment_import(
+    run_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        return revert_run(db, user_id=user_id, run_id=run_id)
+    except ActivityApplicationError as exc:
+        status_code = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.get("/import-profiles")
+def list_investment_import_profiles(
+    account_id: UUID,
+    provider: Optional[str] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).one_or_none()
+    if account is None:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+    query = db.query(CsvImportProfile).filter(
+        CsvImportProfile.user_id == user_id,
+        CsvImportProfile.account_id == account.id,
+        CsvImportProfile.import_kind == "investments",
+    )
+    if provider:
+        query = query.filter(CsvImportProfile.provider == normalize_provider(provider))
+    return [_import_profile_view(profile) for profile in query.order_by(CsvImportProfile.last_used_at.desc()).all()]
+
+
+@router.put("/import-profiles")
+def save_investment_import_profile(
+    payload: InvestmentImportProfileSave,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        profile = _save_investment_import_profile(db, user_id=user_id, payload=payload)
+        db.commit()
+        db.refresh(profile)
+        return _import_profile_view(profile)
+    except InvestmentCsvImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _owned_income_event_context(db: Session, user_id: str, payload: InvestmentIncomeEventCreate):

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.models import InvestmentActivity, InvestmentIngestionRun, InvestmentSourceRecord
+from app.models import BrokerTrade, CsvImportProfile, InvestmentActivity, InvestmentIngestionRun, InvestmentSourceRecord
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,3 +59,18 @@ def test_source_records_are_database_immutable():
 
     assert 'CREATE OR REPLACE FUNCTION "prevent_investment_source_record_update"()' in migration
     assert 'BEFORE UPDATE ON "investment_source_records"' in migration
+
+
+def test_csv_mapping_profiles_are_scoped_by_workflow_and_provider():
+    schema = (ROOT / "frontend/lib/db/schema.ts").read_text()
+    migration = (ROOT / "frontend/lib/db/migrations/0039_generic_investment_csv_import.manual.sql").read_text()
+
+    assert {"import_kind", "provider"}.issubset(CsvImportProfile.__table__.columns.keys())
+    assert 'importKind: varchar("import_kind", { length: 24 })' in schema
+    assert 'provider: varchar("provider", { length: 64 })' in schema
+    assert 'DROP CONSTRAINT IF EXISTS "csv_import_profiles_user_account_unique"' in migration
+    assert '"csv_import_profiles_scope_unique"' in schema
+    assert "UNIQUE (\"user_id\", \"account_id\", \"import_kind\", \"provider\")" in migration
+    assert "instrument_type" in BrokerTrade.__table__.columns.keys()
+    assert 'instrumentType: text("instrument_type").default("equity").notNull()' in schema
+    assert 'ADD COLUMN IF NOT EXISTS "instrument_type" varchar(20)' in migration
