@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from app.models import BrokerTrade, CsvImportProfile, InvestmentActivity, InvestmentIngestionRun, InvestmentSourceRecord
+from app.models import (
+    BrokerTrade,
+    CsvImportProfile,
+    InvestmentActivity,
+    InvestmentCostBaseAdjustment,
+    InvestmentIncomeEnrichment,
+    InvestmentIngestionRun,
+    InvestmentReconciliationItem,
+    InvestmentSourceRecord,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,3 +83,31 @@ def test_csv_mapping_profiles_are_scoped_by_workflow_and_provider():
     assert "instrument_type" in BrokerTrade.__table__.columns.keys()
     assert 'instrumentType: text("instrument_type").default("equity").notNull()' in schema
     assert 'ADD COLUMN IF NOT EXISTS "instrument_type" varchar(20)' in migration
+
+
+def test_income_reconciliation_models_match_drizzle_schema_and_migration():
+    schema = (ROOT / "frontend/lib/db/schema.ts").read_text()
+    migration = (ROOT / "frontend/lib/db/migrations/0040_investment_income_reconciliation.manual.sql").read_text()
+    models = (
+        InvestmentIncomeEnrichment,
+        InvestmentCostBaseAdjustment,
+        InvestmentReconciliationItem,
+    )
+    for model in models:
+        table_name = model.__tablename__
+        assert f'pgTable("{table_name}"' in schema
+        assert f'CREATE TABLE IF NOT EXISTS "{table_name}"' in migration
+        for column in model.__table__.columns.keys():
+            assert f'"{column}"' in schema
+            assert f'"{column}"' in migration
+    for column in (
+        "tfn_withholding", "reconciliation_status", "user_confirmed_at",
+        "matched_transaction_id", "component_sources", "annual_statement_reference",
+        "created_by_activity_id", "instrument_type", "cost_base_adjustment_native",
+        "cost_base_adjustment_aud", "adjustment_ids",
+    ):
+        assert f'"{column}"' in schema
+        assert f'"{column}"' in migration
+    assert "profile_variant" in CsvImportProfile.__table__.columns.keys()
+    assert 'profileVariant: varchar("profile_variant", { length: 32 })' in schema
+    assert 'UNIQUE ("user_id", "account_id", "import_kind", "provider", "profile_variant")' in migration

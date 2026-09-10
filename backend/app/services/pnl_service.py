@@ -27,6 +27,29 @@ class Trade:
 
 
 @dataclass(frozen=True)
+class CostBaseAdjustment:
+    """A signed adjustment applied across units open on its effective date.
+
+    Positive amounts increase cost base (AMIT shortfall); negative amounts
+    decrease it (AMIT excess). The signed convention is deliberately stored
+    at the domain boundary so statement labels cannot be misinterpreted later.
+    """
+    symbol: str
+    effective_date: date
+    amount: Decimal
+    currency: str
+    adjustment_id: Optional[str] = None
+    sort_key: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class AppliedCostBaseAdjustment:
+    adjustment_id: Optional[str]
+    effective_date: date
+    amount_native: Decimal
+
+
+@dataclass(frozen=True)
 class ClosedLot:
     """A realized P&L lot — the result of a sell matching against open buy lots."""
     symbol: str
@@ -35,10 +58,13 @@ class ClosedLot:
     close_date: date
     quantity: Decimal
     cost_native: Decimal
+    original_cost_native: Decimal
+    cost_base_adjustment_native: Decimal
     proceeds_native: Decimal
     pnl_native: Decimal
     acquisition_trade_id: Optional[str] = None
     disposal_trade_id: Optional[str] = None
+    adjustments: tuple[AppliedCostBaseAdjustment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,6 +75,9 @@ class OpenLot:
     open_date: date
     quantity_remaining: Decimal
     cost_per_share_native: Decimal
+    original_cost_per_share_native: Decimal = Decimal("0")
+    cost_base_adjustment_per_share_native: Decimal = Decimal("0")
+    adjustments: tuple[AppliedCostBaseAdjustment, ...] = ()
 
 
 @dataclass
@@ -63,6 +92,7 @@ class CgtAudValues:
     cost_base_aud: Optional[Decimal]
     proceeds_aud: Optional[Decimal]
     gain_aud: Optional[Decimal]
+    cost_base_adjustment_aud: Optional[Decimal]
     fx_missing: bool
 
 
@@ -78,16 +108,31 @@ class OverSellError(Exception):
         )
 
 
+class CostBaseAdjustmentError(Exception):
+    """Raised when an adjustment cannot safely be applied to open units."""
+
+    def __init__(self, symbol: str, effective_date: date, reason: str):
+        self.symbol = symbol
+        self.effective_date = effective_date
+        self.reason = reason
+        super().__init__(f"Cost-base adjustment for {symbol} on {effective_date} {reason}")
+
+
 @dataclass
 class _MutableLot:
     open_date: date
     quantity_remaining: Decimal
     cost_per_share_native: Decimal
+    original_cost_per_share_native: Decimal
     currency: str
     trade_id: Optional[str]
+    adjustments_per_share: list[AppliedCostBaseAdjustment] = field(default_factory=list)
 
 
-def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
+def compute_fifo(
+    trades: Iterable[Trade],
+    adjustments: Iterable[CostBaseAdjustment] = (),
+) -> FifoResult:
     """
     Apply FIFO matching to a sequence of trades.
 
@@ -98,15 +143,41 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
     they are still matched (currency redenomination is out of scope for the
     pure engine — caller decides whether to split).
     """
-    sorted_trades = sorted(
-        trades,
-        key=lambda t: (t.trade_date, 0 if t.side == "buy" else 1, t.sort_key or t.trade_id or ""),
+    events: list[tuple[date, int, str, Trade | CostBaseAdjustment]] = [
+        (trade.trade_date, 0 if trade.side == "buy" else 2, trade.sort_key or trade.trade_id or "", trade)
+        for trade in trades
+    ]
+    events.extend(
+        (item.effective_date, 1, item.sort_key or item.adjustment_id or "", item)
+        for item in adjustments
     )
+    events.sort(key=lambda item: item[:3])
 
     open_by_key: dict[tuple[str, str], list[_MutableLot]] = {}
     realized: list[ClosedLot] = []
 
-    for t in sorted_trades:
+    for _, _, _, t in events:
+        if isinstance(t, CostBaseAdjustment):
+            lots = open_by_key.setdefault((t.symbol, t.currency), [])
+            open_quantity = sum((lot.quantity_remaining for lot in lots), Decimal("0"))
+            if open_quantity <= 0:
+                raise CostBaseAdjustmentError(t.symbol, t.effective_date, "has no open units")
+            per_share = t.amount / open_quantity
+            if any(lot.cost_per_share_native + per_share < 0 for lot in lots):
+                raise CostBaseAdjustmentError(
+                    t.symbol,
+                    t.effective_date,
+                    "would reduce an open lot below a zero cost base; review possible CGT event E10",
+                )
+            for lot in lots:
+                lot.cost_per_share_native += per_share
+                lot.adjustments_per_share.append(AppliedCostBaseAdjustment(
+                    adjustment_id=t.adjustment_id,
+                    effective_date=t.effective_date,
+                    amount_native=per_share,
+                ))
+            continue
+
         lots = open_by_key.setdefault((t.symbol, t.currency), [])
         if t.side == "buy":
             # Buy fees increase cost basis: cost_per_share = (price*qty + fees) / qty
@@ -119,6 +190,7 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
                 open_date=t.trade_date,
                 quantity_remaining=t.quantity,
                 cost_per_share_native=cost_per_share,
+                original_cost_per_share_native=cost_per_share,
                 currency=t.currency,
                 trade_id=t.trade_id,
             ))
@@ -135,6 +207,16 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
             lot = lots[0]
             consumed = min(lot.quantity_remaining, remaining)
             cost = consumed * lot.cost_per_share_native
+            original_cost = consumed * lot.original_cost_per_share_native
+            applied_adjustments = tuple(
+                AppliedCostBaseAdjustment(
+                    adjustment_id=item.adjustment_id,
+                    effective_date=item.effective_date,
+                    amount_native=item.amount_native * consumed,
+                )
+                for item in lot.adjustments_per_share
+            )
+            adjustment_cost = cost - original_cost
             fee_share = (t.fees * consumed / sell_total_qty) if sell_total_qty > 0 else Decimal("0")
             proceeds = consumed * t.price - fee_share
             realized.append(ClosedLot(
@@ -144,10 +226,13 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
                 close_date=t.trade_date,
                 quantity=consumed,
                 cost_native=cost,
+                original_cost_native=original_cost,
+                cost_base_adjustment_native=adjustment_cost,
                 proceeds_native=proceeds,
                 pnl_native=proceeds - cost,
                 acquisition_trade_id=lot.trade_id,
                 disposal_trade_id=t.trade_id,
+                adjustments=applied_adjustments,
             ))
             lot.quantity_remaining -= consumed
             remaining -= consumed
@@ -163,6 +248,11 @@ def compute_fifo(trades: Iterable[Trade]) -> FifoResult:
                 open_date=lot.open_date,
                 quantity_remaining=lot.quantity_remaining,
                 cost_per_share_native=lot.cost_per_share_native,
+                original_cost_per_share_native=lot.original_cost_per_share_native,
+                cost_base_adjustment_per_share_native=(
+                    lot.cost_per_share_native - lot.original_cost_per_share_native
+                ),
+                adjustments=tuple(lot.adjustments_per_share),
             ))
 
     return FifoResult(realized=realized, open_lots=open_lots)
@@ -188,14 +278,26 @@ def cgt_aud_values_for_closed_lot(
         rate = fx_rate_for(lot.currency.upper(), "AUD", on)
         return (amount * Decimal(rate)).quantize(Decimal("0.01")) if rate is not None else None
 
-    cost_base_aud = convert(lot.cost_native, lot.open_date)
+    original_cost_aud = convert(lot.original_cost_native, lot.open_date)
+    converted_adjustments = [
+        convert(adjustment.amount_native, adjustment.effective_date)
+        for adjustment in lot.adjustments
+    ]
     proceeds_aud = convert(lot.proceeds_native, lot.close_date)
-    if cost_base_aud is None or proceeds_aud is None:
-        return CgtAudValues(None, None, None, fx_missing=True)
+    if original_cost_aud is None or proceeds_aud is None or any(
+        value is None for value in converted_adjustments
+    ):
+        return CgtAudValues(None, None, None, None, fx_missing=True)
+    adjustment_aud = sum(
+        (value for value in converted_adjustments if value is not None),
+        Decimal("0"),
+    ).quantize(Decimal("0.01"))
+    cost_base_aud = original_cost_aud + adjustment_aud
     return CgtAudValues(
         cost_base_aud=cost_base_aud,
         proceeds_aud=proceeds_aud,
         gain_aud=proceeds_aud - cost_base_aud,
+        cost_base_adjustment_aud=adjustment_aud,
         fx_missing=False,
     )
 

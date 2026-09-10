@@ -378,6 +378,9 @@ class HoldingLot(BaseModel):
     open_date: _date_date
     quantity_remaining: Decimal
     cost_per_share_native: Decimal
+    original_cost_per_share_native: Decimal = Decimal("0")
+    cost_base_adjustment_per_share_native: Decimal = Decimal("0")
+    adjustment_ids: list[str] = Field(default_factory=list)
     cost_per_share_user: Optional[Decimal] = None
     age_days: int
     currency: str
@@ -388,6 +391,7 @@ class CgtAllocationResponse(BaseModel):
     acquisition_trade_id: UUID
     disposal_trade_id: UUID
     symbol: str
+    instrument_type: str
     acquisition_date: _date_date
     disposal_date: _date_date
     quantity: Decimal
@@ -395,9 +399,12 @@ class CgtAllocationResponse(BaseModel):
     cost_base_native: Decimal
     proceeds_native: Decimal
     gain_native: Decimal
+    cost_base_adjustment_native: Decimal
     cost_base_aud: Optional[Decimal] = None
     proceeds_aud: Optional[Decimal] = None
     gain_aud: Optional[Decimal] = None
+    cost_base_adjustment_aud: Optional[Decimal] = None
+    adjustment_ids: list[str]
     fx_missing: bool
     discount_eligible: bool
     calculation_version: str
@@ -441,6 +448,7 @@ class InvestmentIncomeEventCreate(BaseModel):
     franking_credit: Optional[Decimal] = None
     foreign_income: Optional[Decimal] = None
     foreign_tax_paid: Optional[Decimal] = None
+    tfn_withholding: Optional[Decimal] = None
     amit_amma_components: Optional[dict] = None
     is_drp: bool = False
     drp_quantity: Optional[Decimal] = None
@@ -464,7 +472,7 @@ class InvestmentIncomeEventCreate(BaseModel):
             raise ValueError("must be a 3-letter ISO code")
         return value
 
-    @field_validator("cash_received", "franked_amount", "unfranked_amount", "franking_credit", "foreign_income", "foreign_tax_paid")
+    @field_validator("cash_received", "franked_amount", "unfranked_amount", "franking_credit", "foreign_income", "foreign_tax_paid", "tfn_withholding")
     @classmethod
     def _income_amounts(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and value < 0:
@@ -484,6 +492,11 @@ class InvestmentIncomeEventResponse(InvestmentIncomeEventCreate):
     id: UUID
     user_id: str
     reinvestment_trade_id: Optional[UUID] = None
+    reconciliation_status: str
+    user_confirmed_at: Optional[datetime] = None
+    matched_transaction_id: Optional[UUID] = None
+    component_sources: dict[str, Any] = Field(default_factory=dict)
+    annual_statement_reference: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -497,6 +510,13 @@ class InvestmentIncomeSummary(BaseModel):
     franking_credits: Decimal
     foreign_income: Decimal
     foreign_tax_paid: Decimal
+    tfn_withholding: Decimal
+
+
+class InvestmentReconciliationResolve(BaseModel):
+    action: str
+    income_event_id: Optional[UUID] = None
+    transaction_id: Optional[UUID] = None
 
 
 class SymbolSearchResult(BaseModel):

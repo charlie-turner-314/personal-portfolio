@@ -184,6 +184,9 @@ export type HoldingLot = {
   open_date: string;
   quantity_remaining: string;
   cost_per_share_native: string;
+  original_cost_per_share_native: string;
+  cost_base_adjustment_per_share_native: string;
+  adjustment_ids: string[];
   cost_per_share_user?: string | null;
   age_days: number;
   currency: string;
@@ -194,6 +197,7 @@ export type CgtAllocation = {
   acquisition_trade_id: string;
   disposal_trade_id: string;
   symbol: string;
+  instrument_type: string;
   acquisition_date: string;
   disposal_date: string;
   quantity: string;
@@ -201,9 +205,12 @@ export type CgtAllocation = {
   cost_base_native: string;
   proceeds_native: string;
   gain_native: string;
+  cost_base_adjustment_native: string;
   cost_base_aud?: string | null;
   proceeds_aud?: string | null;
   gain_aud?: string | null;
+  cost_base_adjustment_aud?: string | null;
+  adjustment_ids: string[];
   fx_missing: boolean;
   discount_eligible: boolean;
   calculation_version: string;
@@ -262,6 +269,7 @@ export type InvestmentIncomeEvent = {
   franking_credit?: string | null;
   foreign_income?: string | null;
   foreign_tax_paid?: string | null;
+  tfn_withholding?: string | null;
   amit_amma_components?: Record<string, string | null> | null;
   is_drp: boolean;
   drp_quantity?: string | null;
@@ -269,6 +277,11 @@ export type InvestmentIncomeEvent = {
   source_id?: string | null;
   notes?: string | null;
   reinvestment_trade_id?: string | null;
+  reconciliation_status: "provisional" | "confirmed" | "conflict";
+  user_confirmed_at?: string | null;
+  matched_transaction_id?: string | null;
+  component_sources: Record<string, unknown>;
+  annual_statement_reference?: string | null;
 };
 
 export type InvestmentIncomeSummary = {
@@ -278,16 +291,30 @@ export type InvestmentIncomeSummary = {
   franking_credits: string;
   foreign_income: string;
   foreign_tax_paid: string;
+  tfn_withholding: string;
 };
 
 export type CreateInvestmentIncomeEvent = Omit<
   InvestmentIncomeEvent,
-  "id" | "reinvestment_trade_id"
+  | "id"
+  | "reinvestment_trade_id"
+  | "reconciliation_status"
+  | "user_confirmed_at"
+  | "matched_transaction_id"
+  | "component_sources"
+  | "annual_statement_reference"
 >;
 
 export async function listHoldingIncomeEvents(holdingId: string): Promise<InvestmentIncomeEvent[]> {
   const resp = await signedFetch("GET", "/api/investments/income-events", {
     query: { holding_id: holdingId },
+  });
+  return readJsonOrThrow<InvestmentIncomeEvent[]>(resp);
+}
+
+export async function listAccountIncomeEvents(accountId: string): Promise<InvestmentIncomeEvent[]> {
+  const resp = await signedFetch("GET", "/api/investments/income-events", {
+    query: { account_id: accountId },
   });
   return readJsonOrThrow<InvestmentIncomeEvent[]>(resp);
 }
@@ -457,6 +484,25 @@ export type InvestmentImportMapping = {
   counter_quantity: string | null;
   direction: string | null;
   description: string | null;
+  ex_date: string | null;
+  franked_amount: string | null;
+  unfranked_amount: string | null;
+  franking_credit: string | null;
+  foreign_income: string | null;
+  foreign_tax_paid: string | null;
+  tfn_withholding: string | null;
+  amit_amma_components: string | null;
+  cost_base_increase: string | null;
+  cost_base_decrease: string | null;
+  cost_base_effective_date: string | null;
+  annual_statement_reference: string | null;
+  amma_interest: string | null;
+  amma_capital_gains_discounted: string | null;
+  amma_capital_gains_other: string | null;
+  amma_capital_gains_discount: string | null;
+  amma_tax_deferred: string | null;
+  amma_tax_free: string | null;
+  amma_other_non_assessable: string | null;
 };
 
 export type InvestmentImportRequest = {
@@ -471,6 +517,7 @@ export type InvestmentImportRequest = {
   default_currency?: string | null;
   default_activity_type?: string | null;
   activity_type_aliases?: Record<string, string>;
+  income_data_kind?: "cash_activity" | "annual_statement";
 };
 
 export type InvestmentImportPreviewRow = {
@@ -525,6 +572,7 @@ export type InvestmentImportProfile = {
   id: string;
   account_id: string;
   provider: string;
+  profile_variant: "cash_activity" | "annual_statement" | "default";
   name: string;
   mapping: {
     columns: InvestmentImportMapping;
@@ -534,6 +582,7 @@ export type InvestmentImportProfile = {
     default_currency?: string | null;
     default_activity_type?: string | null;
     activity_type_aliases?: Record<string, string>;
+    income_data_kind?: InvestmentImportRequest["income_data_kind"];
   };
   header_signature: string[];
   last_used_at: string | null;
@@ -569,9 +618,10 @@ export async function listInvestmentImports(accountId: string): Promise<Investme
 export async function listInvestmentImportProfiles(
   accountId: string,
   provider?: string,
+  incomeDataKind?: "cash_activity" | "annual_statement",
 ): Promise<InvestmentImportProfile[]> {
   const resp = await signedFetch("GET", "/api/investments/import-profiles", {
-    query: { account_id: accountId, provider },
+    query: { account_id: accountId, provider, income_data_kind: incomeDataKind },
   });
   return readJsonOrThrow(resp);
 }
@@ -581,8 +631,50 @@ export async function revertInvestmentImport(runId: string): Promise<{
   status: "reverted";
   removed_trades: number;
   removed_income_events: number;
+  removed_income_enrichments?: number;
+  removed_cost_base_adjustments?: number;
+  removed_reconciliation_items?: number;
 }> {
   await assertNotDemoRestricted();
   const resp = await signedFetch("POST", `/api/investments/imports/${runId}/revert`);
+  return readJsonOrThrow(resp);
+}
+
+export type InvestmentReconciliationItem = {
+  id: string;
+  account_id: string;
+  source_activity_id: string;
+  income_event_id: string | null;
+  kind: "cash_match" | "annual_statement" | "component_conflict";
+  status: "pending" | "resolved" | "ignored";
+  reason: string;
+  candidate_income_event_ids: string[];
+  candidate_transaction_ids: string[];
+  details: Record<string, unknown>;
+  resolution: Record<string, unknown> | null;
+  resolved_at: string | null;
+  created_at: string;
+};
+
+export async function listInvestmentReconciliationItems(
+  accountId: string,
+  status: "pending" | "resolved" | "ignored" | "all" = "pending",
+): Promise<InvestmentReconciliationItem[]> {
+  const resp = await signedFetch("GET", "/api/investments/reconciliation-items", {
+    query: { account_id: accountId, status },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function resolveInvestmentReconciliationItem(
+  itemId: string,
+  payload: {
+    action: "ignore" | "link_transaction" | "link_income_event" | "keep_existing" | "apply_statement";
+    income_event_id?: string;
+    transaction_id?: string;
+  },
+): Promise<InvestmentReconciliationItem> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", `/api/investments/reconciliation-items/${itemId}/resolve`, { body: payload });
   return readJsonOrThrow(resp);
 }

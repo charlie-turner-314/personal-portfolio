@@ -154,3 +154,63 @@ def test_import_routes_do_not_expose_another_users_runs(route_context):
     path = f"/api/investments/imports/{run_id}/source-records"
     response = _request_json(client, "GET", path, other_user)
     assert response.status_code == 404
+
+
+def test_reconciliation_routes_surface_and_resolve_owned_income_review(route_context):
+    client, user, account = route_context
+    payload = _request(str(account.id))
+    payload["file_content"] = (
+        "Reference,Date,Type,Symbol,Quantity,Price,Gross,Net,Currency,Fee,Franked\n"
+        "trade-1,2025-05-01,Buy,VAS,4,99.50,,,AUD,2.50,\n"
+        "income-1,2025-06-30,Distribution,VAS,,,50,50,AUD,,5\n"
+    )
+    payload["mapping"].update({
+        "gross_amount": "Gross",
+        "net_amount": "Net",
+        "franked_amount": "Franked",
+    })
+    applied = _request_json(
+        client, "POST", "/api/investments/imports", user.id, json=payload,
+    )
+    assert applied.status_code == 200, applied.text
+
+    path = f"/api/investments/reconciliation-items?account_id={account.id}&status=pending"
+    listed = _request_json(client, "GET", path, user.id)
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()) == 1
+    item = listed.json()[0]
+    assert item["kind"] == "cash_match"
+    assert item["income_event_id"]
+
+    resolve_path = f"/api/investments/reconciliation-items/{item['id']}/resolve"
+    resolved = _request_json(
+        client, "POST", resolve_path, user.id, json={"action": "ignore"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["status"] == "ignored"
+
+    events_path = f"/api/investments/income-events?account_id={account.id}"
+    events = _request_json(client, "GET", events_path, user.id)
+    assert events.status_code == 200, events.text
+    income = events.json()[0]
+    update_payload = {
+        key: income[key]
+        for key in (
+            "account_id", "holding_id", "event_type", "pay_date", "ex_date",
+            "currency", "cash_received", "franked_amount", "unfranked_amount",
+            "franking_credit", "foreign_income", "foreign_tax_paid", "tfn_withholding",
+            "amit_amma_components", "is_drp", "drp_quantity", "drp_price", "source_id", "notes",
+        )
+    }
+    update_payload["franked_amount"] = "10"
+    update_path = f"/api/investments/income-events/{income['id']}"
+    updated = _request_json(client, "PUT", update_path, user.id, json=update_payload)
+    assert updated.status_code == 200, updated.text
+    sources = updated.json()["component_sources"]["franked_amount"]
+    assert sources[0]["kind"] == "cash_activity"
+    assert sources[-1]["kind"] == "manual"
+
+    other_user = f"other-{uuid.uuid4()}"
+    hidden = _request_json(client, "GET", path, other_user)
+    assert hidden.status_code == 200
+    assert hidden.json() == []

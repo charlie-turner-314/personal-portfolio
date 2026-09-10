@@ -116,6 +116,55 @@ f1;02/02/2025;Commission;USD;cash;;;;;USD;2,25;USD;;
     assert fee.activity_type == "fee" and fee.fee_amount == Decimal("2.25")
 
 
+def test_parser_maps_final_statement_tax_and_amma_fields_without_inference():
+    content = '''Reference,Date,Type,Symbol,Asset type,Gross,Net,Currency,Franked,Unfranked,Franking,Foreign income,Foreign tax,TFN,AMMA,Increase,Decrease,Adjustment date,Statement ref,Interest
+amma-1,2025-06-30,Distribution,VAS,ETF,50,50,AUD,30,20,12.86,4,0.60,1.25,"{""capital_gains_discounted"":""8""}",100,0,2025-06-30,AMMA-2025,3
+'''
+    mapping = {
+        "occurred_at": "Date", "activity_type": "Type", "asset_symbol": "Symbol",
+        "asset_type": "Asset type", "gross_amount": "Gross", "net_amount": "Net",
+        "currency": "Currency", "source_reference": "Reference",
+        "franked_amount": "Franked", "unfranked_amount": "Unfranked",
+        "franking_credit": "Franking", "foreign_income": "Foreign income",
+        "foreign_tax_paid": "Foreign tax", "tfn_withholding": "TFN",
+        "amit_amma_components": "AMMA", "cost_base_increase": "Increase",
+        "cost_base_decrease": "Decrease", "cost_base_effective_date": "Adjustment date",
+        "annual_statement_reference": "Statement ref",
+        "amma_interest": "Interest",
+    }
+
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "mapping": mapping,
+        "income_data_kind": "annual_statement",
+    })
+
+    metadata = parsed.batch.records[0].activities[0].metadata
+    assert metadata["is_annual_statement"] is True
+    assert metadata["franking_credit"] == "12.86"
+    assert metadata["foreign_tax_paid"] == "0.6"
+    assert metadata["tfn_withholding"] == "1.25"
+    assert metadata["amit_amma_components"] == {"capital_gains_discounted": "8", "interest": "3"}
+    assert metadata["cost_base_increase"] == "100"
+    assert metadata["cost_base_effective_date"] == "2025-06-30"
+
+
+def test_parser_rejects_non_object_amma_components():
+    parsed = parse_investment_csv(**{
+        **_options("Date,Type,Symbol,AMMA\n2025-06-30,Distribution,VAS,[]\n"),
+        "mapping": {
+            "occurred_at": "Date",
+            "activity_type": "Type",
+            "asset_symbol": "Symbol",
+            "amit_amma_components": "AMMA",
+        },
+        "income_data_kind": "annual_statement",
+    })
+
+    assert parsed.batch.records == ()
+    assert "must be a JSON object" in parsed.rejected_rows[0]["reasons"][0]
+
+
 def test_fund_trade_rebuilds_an_etf_holding(db_session, investment_account):
     user, account = investment_account
     content = _content().splitlines()[0] + "\n" + _content().splitlines()[1].replace(",shares,", ",ETF,") + "\n"

@@ -611,6 +611,7 @@ class CsvImportProfile(Base):
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     import_kind = Column(String(24), nullable=False, default="transactions", server_default=text("'transactions'"))
     provider = Column(String(64), nullable=False, default="generic", server_default=text("'generic'"))
+    profile_variant = Column(String(32), nullable=False, default="default", server_default=text("'default'"))
     name = Column(String(255), nullable=False, default="Default CSV mapping", server_default=text("'Default CSV mapping'"))
     column_mapping = Column(JSONB, nullable=False)
     header_signature = Column(JSONB, nullable=True)
@@ -634,6 +635,7 @@ class CsvImportProfile(Base):
             "account_id",
             "import_kind",
             "provider",
+            "profile_variant",
             name="csv_import_profiles_scope_unique",
         ),
     )
@@ -1178,6 +1180,7 @@ class CgtAllocation(Base):
     acquisition_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
     disposal_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
     symbol = Column(String(64), nullable=False)
+    instrument_type = Column(String(20), nullable=False, default="equity", server_default=text("'equity'"))
     acquisition_date = Column(Date, nullable=False)
     disposal_date = Column(Date, nullable=False)
     quantity = Column(Numeric(28, 8), nullable=False)
@@ -1185,12 +1188,15 @@ class CgtAllocation(Base):
     cost_base_native = Column(Numeric(28, 8), nullable=False)
     proceeds_native = Column(Numeric(28, 8), nullable=False)
     gain_native = Column(Numeric(28, 8), nullable=False)
+    cost_base_adjustment_native = Column(Numeric(28, 8), nullable=False, default=0, server_default=text("0"))
     cost_base_aud = Column(Numeric(28, 8), nullable=True)
     proceeds_aud = Column(Numeric(28, 8), nullable=True)
     gain_aud = Column(Numeric(28, 8), nullable=True)
+    cost_base_adjustment_aud = Column(Numeric(28, 8), nullable=True)
+    adjustment_ids = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     fx_missing = Column(Boolean, nullable=False, default=False)
     discount_eligible = Column(Boolean, nullable=False, default=False)
-    calculation_version = Column(String(32), nullable=False, default="fifo-v1")
+    calculation_version = Column(String(32), nullable=False, default="fifo-v2", server_default=text("'fifo-v2'"))
     assumptions = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -1218,12 +1224,23 @@ class InvestmentIncomeEvent(Base):
     franking_credit = Column(Numeric(18, 2), nullable=True)
     foreign_income = Column(Numeric(18, 2), nullable=True)
     foreign_tax_paid = Column(Numeric(18, 2), nullable=True)
-    amit_amma_components = Column(JSON, nullable=True)
+    tfn_withholding = Column(Numeric(18, 2), nullable=True)
+    amit_amma_components = Column(JSONB, nullable=True)
     is_drp = Column(Boolean, nullable=False, default=False)
     drp_quantity = Column(Numeric(28, 8), nullable=True)
     drp_price = Column(Numeric(28, 8), nullable=True)
     reinvestment_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="SET NULL"), nullable=True)
     source_id = Column(String(255), nullable=True)
+    reconciliation_status = Column(String(20), nullable=False, default="provisional", server_default=text("'provisional'"))
+    user_confirmed_at = Column(DateTime, nullable=True)
+    matched_transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True)
+    component_sources = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    annual_statement_reference = Column(String(255), nullable=True)
+    created_by_activity_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("investment_activities.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1233,8 +1250,86 @@ class InvestmentIncomeEvent(Base):
         CheckConstraint("event_type IN ('dividend', 'distribution')", name="investment_income_events_type_check"),
         CheckConstraint("cash_received >= 0", name="investment_income_events_cash_received_check"),
         CheckConstraint("is_drp = false OR (drp_quantity > 0 AND drp_price >= 0)", name="investment_income_events_drp_check"),
+        CheckConstraint("reconciliation_status IN ('provisional', 'confirmed', 'conflict')", name="investment_income_events_reconciliation_status_check"),
+        UniqueConstraint("matched_transaction_id", name="investment_income_events_matched_transaction_uq"),
         Index("idx_investment_income_events_user_pay_date", "user_id", "pay_date"),
         Index("idx_investment_income_events_holding_pay_date", "holding_id", "pay_date"),
+    )
+
+
+class InvestmentIncomeEnrichment(Base):
+    """Reversible annual-statement changes applied to a provisional cash event."""
+
+    __tablename__ = "investment_income_enrichments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    income_event_id = Column(UUID(as_uuid=True), ForeignKey("investment_income_events.id", ondelete="CASCADE"), nullable=False)
+    source_activity_id = Column(UUID(as_uuid=True), ForeignKey("investment_activities.id", ondelete="CASCADE"), nullable=False)
+    previous_values = Column(JSONB, nullable=False, default=dict)
+    applied_values = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_activity_id", name="investment_income_enrichments_activity_uq"),
+        Index("idx_investment_income_enrichments_event", "income_event_id"),
+    )
+
+
+class InvestmentCostBaseAdjustment(Base):
+    """A signed, statement-supplied AMIT/AMMA cost-base adjustment."""
+
+    __tablename__ = "investment_cost_base_adjustments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    holding_id = Column(UUID(as_uuid=True), ForeignKey("holdings.id", ondelete="CASCADE"), nullable=False)
+    income_event_id = Column(UUID(as_uuid=True), ForeignKey("investment_income_events.id", ondelete="SET NULL"), nullable=True)
+    source_activity_id = Column(UUID(as_uuid=True), ForeignKey("investment_activities.id", ondelete="CASCADE"), nullable=False)
+    effective_date = Column(Date, nullable=False)
+    currency = Column(String(3), nullable=False)
+    amount_native = Column(Numeric(28, 8), nullable=False)
+    amount_aud = Column(Numeric(28, 8), nullable=True)
+    valuation_source = Column(String(64), nullable=True)
+    valuation_timestamp = Column(DateTime, nullable=True)
+    calculation_version = Column(String(32), nullable=False, default="amit-v1")
+    assumptions = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_activity_id", name="investment_cost_base_adjustments_activity_uq"),
+        CheckConstraint("amount_native <> 0", name="investment_cost_base_adjustments_nonzero_check"),
+        Index("idx_investment_cost_base_adjustments_holding_date", "holding_id", "effective_date"),
+    )
+
+
+class InvestmentReconciliationItem(Base):
+    """An unmatched, ambiguous, or conflicting investment-income review item."""
+
+    __tablename__ = "investment_reconciliation_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    source_activity_id = Column(UUID(as_uuid=True), ForeignKey("investment_activities.id", ondelete="CASCADE"), nullable=False)
+    income_event_id = Column(UUID(as_uuid=True), ForeignKey("investment_income_events.id", ondelete="SET NULL"), nullable=True)
+    kind = Column(String(32), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    reason = Column(Text, nullable=False)
+    candidate_income_event_ids = Column(JSONB, nullable=False, default=list)
+    candidate_transaction_ids = Column(JSONB, nullable=False, default=list)
+    details = Column(JSONB, nullable=False, default=dict)
+    resolution = Column(JSONB, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_activity_id", "kind", name="investment_reconciliation_items_activity_kind_uq"),
+        CheckConstraint("kind IN ('cash_match', 'annual_statement', 'component_conflict')", name="investment_reconciliation_items_kind_check"),
+        CheckConstraint("status IN ('pending', 'resolved', 'ignored')", name="investment_reconciliation_items_status_check"),
+        Index("idx_investment_reconciliation_items_user_status", "user_id", "status"),
     )
 
 
@@ -1377,7 +1472,7 @@ class InvestmentActivity(Base):
     source_record = relationship("InvestmentSourceRecord", back_populates="activities")
     run = relationship("InvestmentIngestionRun", back_populates="activities")
     broker_trade = relationship("BrokerTrade")
-    income_event = relationship("InvestmentIncomeEvent")
+    income_event = relationship("InvestmentIncomeEvent", foreign_keys=[income_event_id])
 
     __table_args__ = (
         UniqueConstraint(

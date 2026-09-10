@@ -1,7 +1,7 @@
 """HTTP request contracts for the generic investment import workflow."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -27,6 +27,25 @@ class InvestmentImportColumnMapping(BaseModel):
     counter_quantity: Optional[str] = None
     direction: Optional[str] = None
     description: Optional[str] = None
+    ex_date: Optional[str] = None
+    franked_amount: Optional[str] = None
+    unfranked_amount: Optional[str] = None
+    franking_credit: Optional[str] = None
+    foreign_income: Optional[str] = None
+    foreign_tax_paid: Optional[str] = None
+    tfn_withholding: Optional[str] = None
+    amit_amma_components: Optional[str] = None
+    cost_base_increase: Optional[str] = None
+    cost_base_decrease: Optional[str] = None
+    cost_base_effective_date: Optional[str] = None
+    annual_statement_reference: Optional[str] = None
+    amma_interest: Optional[str] = None
+    amma_capital_gains_discounted: Optional[str] = None
+    amma_capital_gains_other: Optional[str] = None
+    amma_capital_gains_discount: Optional[str] = None
+    amma_tax_deferred: Optional[str] = None
+    amma_tax_free: Optional[str] = None
+    amma_other_non_assessable: Optional[str] = None
 
 
 class InvestmentImportRequest(BaseModel):
@@ -41,6 +60,7 @@ class InvestmentImportRequest(BaseModel):
     default_currency: Optional[str] = None
     default_activity_type: Optional[str] = None
     activity_type_aliases: dict[str, str] = Field(default_factory=dict)
+    income_data_kind: Literal["cash_activity", "annual_statement"] = "cash_activity"
 
     @field_validator("date_format", "amount_format")
     @classmethod
@@ -59,6 +79,7 @@ class InvestmentImportRequest(BaseModel):
             "default_currency": self.default_currency,
             "default_activity_type": self.default_activity_type,
             "activity_type_aliases": self.activity_type_aliases,
+            "income_data_kind": self.income_data_kind,
         }
 
 
@@ -91,6 +112,7 @@ class InvestmentImportProfileSave(BaseModel):
     default_activity_type: Optional[str] = None
     activity_type_aliases: dict[str, str] = Field(default_factory=dict)
     header_signature: list[str] = Field(default_factory=list)
+    income_data_kind: Literal["cash_activity", "annual_statement"] = "cash_activity"
 
     @field_validator("date_format", "amount_format")
     @classmethod
@@ -106,4 +128,5 @@ class InvestmentImportProfileSave(BaseModel):
             "default_currency": self.default_currency,
             "default_activity_type": self.default_activity_type,
             "activity_type_aliases": self.activity_type_aliases,
+            "income_data_kind": self.income_data_kind,
         }

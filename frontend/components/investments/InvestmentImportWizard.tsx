@@ -5,15 +5,20 @@ import { RiAlertLine, RiCheckLine, RiDeleteBinLine, RiLoader4Line } from "@remix
 import { toast } from "sonner";
 import {
   applyInvestmentImport,
+  listAccountIncomeEvents,
   listInvestmentImportProfiles,
   listInvestmentImports,
+  listInvestmentReconciliationItems,
   previewInvestmentImport,
+  resolveInvestmentReconciliationItem,
   revertInvestmentImport,
   type InvestmentAccount,
   type InvestmentImportMapping,
   type InvestmentImportPreview,
   type InvestmentImportRequest,
   type InvestmentImportRun,
+  type InvestmentIncomeEvent,
+  type InvestmentReconciliationItem,
 } from "@/lib/api/investments";
 import { detectCsvDelimiter, parseDelimitedText } from "@/lib/import/parsing";
 import {
@@ -31,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-type BusyState = "profiles" | "preview" | "import" | "history" | "revert" | null;
+type BusyState = "profiles" | "preview" | "import" | "history" | "revert" | "reconcile" | null;
 
 function formattedDate(value: string): string {
   return new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
@@ -47,11 +52,15 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   const [dateFormat, setDateFormat] = useState<InvestmentImportRequest["date_format"]>("AUTO");
   const [amountFormat, setAmountFormat] = useState<InvestmentImportRequest["amount_format"]>("AUTO");
   const [assetType, setAssetType] = useState<InvestmentImportRequest["default_asset_type"]>("equity");
+  const [incomeDataKind, setIncomeDataKind] = useState<NonNullable<InvestmentImportRequest["income_data_kind"]>>("cash_activity");
   const [defaultCurrency, setDefaultCurrency] = useState(accounts[0]?.base_currency ?? "AUD");
   const [saveMapping, setSaveMapping] = useState(true);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<InvestmentImportPreview | null>(null);
   const [runs, setRuns] = useState<InvestmentImportRun[]>([]);
+  const [reconciliationItems, setReconciliationItems] = useState<InvestmentReconciliationItem[]>([]);
+  const [incomeEvents, setIncomeEvents] = useState<InvestmentIncomeEvent[]>([]);
+  const [selectedIncomeEvents, setSelectedIncomeEvents] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [completedMessage, setCompletedMessage] = useState<string | null>(null);
@@ -69,13 +78,21 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     amount_format: amountFormat,
     default_asset_type: assetType,
     default_currency: defaultCurrency.trim().toUpperCase() || account?.base_currency || "AUD",
-  }), [account?.base_currency, accountId, amountFormat, assetType, dateFormat, defaultCurrency, fileContent, fileName, mapping, provider]);
+    income_data_kind: incomeDataKind,
+  }), [account?.base_currency, accountId, amountFormat, assetType, dateFormat, defaultCurrency, fileContent, fileName, incomeDataKind, mapping, provider]);
 
   const loadHistory = useCallback(async () => {
     if (!accountId) return;
     setBusy((current) => current ?? "history");
     try {
-      setRuns(await listInvestmentImports(accountId));
+      const [history, pending, events] = await Promise.all([
+        listInvestmentImports(accountId),
+        listInvestmentReconciliationItems(accountId),
+        listAccountIncomeEvents(accountId),
+      ]);
+      setRuns(history);
+      setReconciliationItems(pending);
+      setIncomeEvents(events);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load import history.");
     } finally {
@@ -91,7 +108,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     if (!accountId || !provider.trim()) return;
     let cancelled = false;
     setBusy((current) => current ?? "profiles");
-    listInvestmentImportProfiles(accountId, provider)
+    listInvestmentImportProfiles(accountId, provider, incomeDataKind)
       .then((profiles) => {
         if (cancelled || profiles.length === 0) {
           if (!cancelled) setProfileMessage(null);
@@ -105,6 +122,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
         setAmountFormat(profile.mapping.amount_format ?? "AUTO");
         setAssetType(profile.mapping.default_asset_type ?? "equity");
         setDefaultCurrency(profile.mapping.default_currency ?? account?.base_currency ?? "AUD");
+        setIncomeDataKind(profile.mapping.income_data_kind ?? "cash_activity");
         setProfileMessage(`Using saved mapping: ${profile.name}`);
       })
       .catch(() => {
@@ -114,7 +132,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
         if (!cancelled) setBusy((current) => current === "profiles" ? null : current);
       });
     return () => { cancelled = true; };
-  }, [account?.base_currency, accountId, headers, provider]);
+  }, [account?.base_currency, accountId, headers, incomeDataKind, provider]);
 
   const onFileSelect = useCallback((file: File, content: string) => {
     const parsed = parseDelimitedText(content, detectCsvDelimiter(content));
@@ -191,6 +209,23 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     }
   };
 
+  const resolveItem = async (
+    item: InvestmentReconciliationItem,
+    payload: Parameters<typeof resolveInvestmentReconciliationItem>[1],
+  ) => {
+    setBusy("reconcile");
+    setError(null);
+    try {
+      await resolveInvestmentReconciliationItem(item.id, payload);
+      toast.success("Reconciliation updated");
+      await loadHistory();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not update reconciliation.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (accounts.length === 0) {
     return (
       <Card className="rounded-none">
@@ -206,12 +241,22 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
       <Card className="rounded-none">
         <CardHeader><CardTitle className="text-base">1. Source and account</CardTitle></CardHeader>
         <CardContent className="space-y-5">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <div className="space-y-2">
               <Label>Investment account</Label>
               <Select value={accountId} onValueChange={(value) => value && setAccountId(value)}>
                 <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>{accounts.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>File contents</Label>
+              <Select value={incomeDataKind} onValueChange={(value) => value && setIncomeDataKind(value as typeof incomeDataKind)}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash_activity">Cash-year activity</SelectItem>
+                  <SelectItem value="annual_statement">Final annual tax statement</SelectItem>
+                </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
@@ -240,6 +285,12 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                 See <a className="underline underline-offset-2" href="https://www.superhero.com.au/support/articles/13648478865167-tax-reporting/" target="_blank" rel="noreferrer">Tax Reporting</a>
                 {" and "}<a className="underline underline-offset-2" href="https://support.superhero.com.au/hc/en-au/articles/14787654257807-Dividends" target="_blank" rel="noreferrer">Dividends</a>.
               </p>
+            </div>
+          )}
+          {incomeDataKind === "annual_statement" && (
+            <div className="border border-amber-500/30 bg-amber-500/5 p-4 text-xs text-muted-foreground">
+              Final statement rows enrich matching cash dividends and distributions; they do not create another income event.
+              Map the AMIT cost-base shortfall as an increase and excess as a decrease. Unmatched or conflicting rows stay in reconciliation review.
             </div>
           )}
           <CsvUploadDropzone onFileSelect={onFileSelect} isUploading={busy === "preview" || busy === "import"} />
@@ -394,6 +445,67 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
           </CardContent>
         </Card>
       )}
+
+      <Card className="rounded-none">
+        <CardHeader><CardTitle className="text-base">Reconciliation review</CardTitle></CardHeader>
+        <CardContent>
+          {reconciliationItems.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No unmatched or conflicting income records need review.</p>
+          ) : (
+            <div className="divide-y divide-border border border-border">
+              {reconciliationItems.map((item) => {
+                const candidateEvents = item.candidate_income_event_ids.length > 0
+                  ? incomeEvents.filter((event) => item.candidate_income_event_ids.includes(event.id))
+                  : incomeEvents;
+                const selectedEvent = selectedIncomeEvents[item.id] ?? candidateEvents[0]?.id ?? "";
+                const conflicts = item.details.conflicts && typeof item.details.conflicts === "object"
+                  ? item.details.conflicts as Record<string, unknown>
+                  : {};
+                const hasUnsafeCostBaseConflict = "cost_base_adjustment" in conflicts;
+                return (
+                  <div key={item.id} className="space-y-3 p-3 text-xs">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div><Badge variant="outline">{item.kind.replaceAll("_", " ")}</Badge><p className="mt-2 text-muted-foreground">{item.reason}</p></div>
+                      <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => void resolveItem(item, { action: "ignore" })}>Ignore</Button>
+                    </div>
+                    {item.kind === "cash_match" && item.candidate_transaction_ids.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {item.candidate_transaction_ids.map((transactionId) => (
+                          <Button key={transactionId} variant="outline" size="sm" disabled={busy !== null} onClick={() => void resolveItem(item, { action: "link_transaction", transaction_id: transactionId })}>
+                            Link cash credit {transactionId.slice(0, 8)}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    {item.kind === "annual_statement" && candidateEvents.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Select value={selectedEvent} onValueChange={(value) => value && setSelectedIncomeEvents((current) => ({ ...current, [item.id]: value }))}>
+                          <SelectTrigger className="w-72"><SelectValue /></SelectTrigger>
+                          <SelectContent>{candidateEvents.map((event) => <SelectItem key={event.id} value={event.id}>{event.pay_date} · {event.event_type} · {event.cash_received} {event.currency}</SelectItem>)}</SelectContent>
+                        </Select>
+                        <Button variant="outline" size="sm" disabled={busy !== null || !selectedEvent} onClick={() => void resolveItem(item, { action: "link_income_event", income_event_id: selectedEvent })}>Link and enrich</Button>
+                      </div>
+                    )}
+                    {item.kind === "component_conflict" && (
+                      <div className="space-y-2">
+                        {hasUnsafeCostBaseConflict && (
+                          <p className="text-amber-700 dark:text-amber-300">This cost-base decrease may create CGT event E10. Keep the recorded values and review it outside automatic reconciliation.</p>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void resolveItem(item, { action: "keep_existing" })}>Keep recorded values</Button>
+                          {!hasUnsafeCostBaseConflict && (
+                            <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void resolveItem(item, { action: "apply_statement" })}>Use statement values</Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="rounded-none">
         <CardHeader><CardTitle className="text-base">Import history</CardTitle></CardHeader>

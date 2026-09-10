@@ -16,7 +16,14 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Account, CgtAllocation, InvestmentIncomeEvent, Transaction, TransactionLink
+from app.models import (
+    Account,
+    CgtAllocation,
+    InvestmentCostBaseAdjustment,
+    InvestmentIncomeEvent,
+    Transaction,
+    TransactionLink,
+)
 
 
 def financial_year_bounds(year: int) -> tuple[datetime, datetime]:
@@ -79,9 +86,15 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
         "source_id": str(event.id), "account_id": str(event.account_id), "holding_id": str(event.holding_id),
         "event_type": event.event_type, "pay_date": event.pay_date.isoformat(), "currency": event.currency,
         "cash_income": _number(event.cash_received), "franking_credits": _number(event.franking_credit or Decimal("0")),
+        "franked_amount": _number(event.franked_amount), "unfranked_amount": _number(event.unfranked_amount),
         "foreign_income": _number(event.foreign_income or Decimal("0")),
         "foreign_tax_paid": _number(event.foreign_tax_paid or Decimal("0")),
-        "source_reference": event.source_id, "is_drp": bool(event.is_drp),
+        "tfn_withholding": _number(event.tfn_withholding or Decimal("0")),
+        "amit_amma_components": event.amit_amma_components,
+        "source_reference": event.source_id, "annual_statement_reference": event.annual_statement_reference,
+        "is_drp": bool(event.is_drp), "reconciliation_status": event.reconciliation_status,
+        "matched_transaction_id": str(event.matched_transaction_id) if event.matched_transaction_id else None,
+        "component_sources": event.component_sources or {},
     } for event in income_events]
 
     cgt_events = (
@@ -96,10 +109,44 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
         "disposal_trade_id": str(row.disposal_trade_id), "symbol": row.symbol,
         "acquisition_date": row.acquisition_date.isoformat(), "disposal_date": row.disposal_date.isoformat(),
         "currency": row.currency, "quantity": _number(row.quantity), "gain_native": _number(row.gain_native),
+        "cost_base_native": _number(row.cost_base_native), "proceeds_native": _number(row.proceeds_native),
+        "cost_base_adjustment_native": _number(row.cost_base_adjustment_native),
         "gain_aud": _number(row.gain_aud), "fx_missing": bool(row.fx_missing),
+        "cost_base_aud": _number(row.cost_base_aud), "proceeds_aud": _number(row.proceeds_aud),
+        "cost_base_adjustment_aud": _number(row.cost_base_adjustment_aud),
+        "adjustment_ids": row.adjustment_ids or [], "instrument_type": row.instrument_type,
         "discount_eligible": bool(row.discount_eligible), "calculation_version": row.calculation_version,
         "assumptions": row.assumptions or [],
     } for row in cgt_events]
+
+    cost_base_adjustments = (
+        db.query(InvestmentCostBaseAdjustment)
+        .join(Account, Account.id == InvestmentCostBaseAdjustment.account_id)
+        .filter(
+            Account.user_id == user_id,
+            InvestmentCostBaseAdjustment.effective_date >= start.date(),
+            InvestmentCostBaseAdjustment.effective_date < end.date(),
+        )
+        .order_by(
+            InvestmentCostBaseAdjustment.effective_date,
+            InvestmentCostBaseAdjustment.id,
+        )
+        .all()
+    )
+    cost_base_rows = [{
+        "source_id": str(row.id),
+        "source_activity_id": str(row.source_activity_id),
+        "income_event_id": str(row.income_event_id) if row.income_event_id else None,
+        "account_id": str(row.account_id),
+        "holding_id": str(row.holding_id),
+        "effective_date": row.effective_date.isoformat(),
+        "currency": row.currency,
+        "amount_native": _number(row.amount_native),
+        "amount_aud": _number(row.amount_aud),
+        "valuation_source": row.valuation_source,
+        "calculation_version": row.calculation_version,
+        "assumptions": row.assumptions or [],
+    } for row in cost_base_adjustments]
 
     # TransactionLink membership is excluded as the data model does not say which
     # linked cash amount should survive a reimbursement.  The source is counted
@@ -107,6 +154,9 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     linked_ids = {
         transaction_id for (transaction_id,) in db.query(TransactionLink.transaction_id)
         .filter(TransactionLink.user_id == user_id).all()
+    }
+    matched_income_transaction_ids = {
+        event.matched_transaction_id for event in income_events if event.matched_transaction_id
     }
     transactions = (
         db.query(Transaction)
@@ -118,6 +168,9 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     for transaction in transactions:
         if transaction.internal_transfer_id is not None:
             excluded.append({"source_id": str(transaction.id), "reason": "internal_transfer"})
+            continue
+        if transaction.id in matched_income_transaction_ids:
+            excluded.append({"source_id": str(transaction.id), "reason": "investment_income_match"})
             continue
         if not transaction.include_in_analytics:
             excluded.append({"source_id": str(transaction.id), "reason": "analytics_excluded"})
@@ -156,11 +209,24 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             "franking_credits_by_currency": _sum_by_currency(income_rows, "franking_credits"),
             "foreign_income_by_currency": _sum_by_currency(income_rows, "foreign_income"),
             "foreign_tax_paid_by_currency": _sum_by_currency(income_rows, "foreign_tax_paid"),
+            "tfn_withholding_by_currency": _sum_by_currency(income_rows, "tfn_withholding"),
+            "unreconciled_source_ids": [
+                row["source_id"] for row in income_rows
+                if row["reconciliation_status"] != "confirmed"
+            ],
         },
         "cgt": {"rows": cgt_rows, "gross_gains_aud": _number(gains), "capital_losses_aud": _number(losses),
                 "gross_gain_source_ids": [row["source_id"] for row in cgt_known if Decimal(row["gain_aud"]) > 0],
                 "capital_loss_source_ids": [row["source_id"] for row in cgt_known if Decimal(row["gain_aud"]) < 0],
-                "missing_fx_source_ids": [row["source_id"] for row in cgt_rows if row["fx_missing"]]},
+                "missing_fx_source_ids": [row["source_id"] for row in cgt_rows if row["fx_missing"]],
+                "cost_base_adjustments": cost_base_rows,
+                "cost_base_adjustment_total_aud": _number(sum(
+                    (Decimal(row["amount_aud"]) for row in cost_base_rows if row["amount_aud"] is not None),
+                    Decimal("0"),
+                )),
+                "cost_base_adjustment_missing_fx_source_ids": [
+                    row["source_id"] for row in cost_base_rows if row["amount_aud"] is None
+                ]},
         "transactions": {"rows": transaction_rows, "excluded_rows": excluded,
                          "cashflow_by_currency": _sum_by_currency(transaction_rows, "amount"),
                          "expense_by_currency": _absolute_sum_by_currency((row for row in transaction_rows if row["transaction_type"] == "debit"), "amount"),
@@ -173,6 +239,8 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             "Transaction categories are labels only. Deductibility and interest treatment are unclassified or unavailable unless separately modelled. Rental rows are recorded cashflow for properties marked as rental; allocation, ownership, depreciation, and private-use treatment are not calculated.",
             "Transfers, analytics-excluded transactions, and reimbursement-linked transactions are excluded by default.",
             "CGT rows with missing transaction-date FX are excluded from AUD gain/loss totals.",
+            "Recorded AMIT/AMMA shortfalls increase cost base and excesses decrease it on their recorded effective dates.",
+            "Bank transactions linked to investment-income events are excluded from transaction cashflow totals to avoid duplicate economic income.",
         ],
     }
 
@@ -184,6 +252,10 @@ _DICTIONARY = [
     ("interest_treatment", "Unavailable: no canonical interest classification is inferred."),
     ("rental_treatment", "Unavailable for property-linked records; no rental allocation is inferred."),
     ("fx_missing", "True when CGT transaction-date AUD conversion is incomplete."),
+    ("reconciliation_status", "Whether cash activity has been confirmed by a final statement or needs review."),
+    ("component_sources", "Immutable activity references that supplied each recorded income component."),
+    ("cost_base_adjustment_native", "Signed AMIT/AMMA adjustment included in the allocation cost base."),
+    ("adjustment_ids", "Cost-base adjustment records included in the allocation."),
 ]
 
 
@@ -193,6 +265,7 @@ def tax_report_zip(report: dict) -> bytes:
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
         for name, rows in (("investment_income", report["investment_income"]["rows"]),
                            ("cgt_allocations", report["cgt"]["rows"]),
+                           ("cost_base_adjustments", report["cgt"].get("cost_base_adjustments", [])),
                            ("transactions", report["transactions"]["rows"]),
                            ("excluded_transactions", report["transactions"]["excluded_rows"])):
             fields = sorted({key for row in rows for key in row}) or ["source_id"]

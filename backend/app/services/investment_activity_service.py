@@ -24,8 +24,11 @@ from app.models import (
     BrokerTrade,
     Holding,
     InvestmentActivity,
+    InvestmentCostBaseAdjustment,
+    InvestmentIncomeEnrichment,
     InvestmentIncomeEvent,
     InvestmentIngestionRun,
+    InvestmentReconciliationItem,
     InvestmentSourceRecord,
 )
 from app.services.broker_trade_service import _recompute_holding
@@ -600,45 +603,29 @@ def _apply_income_activity(
     *,
     idempotency_key: str,
 ) -> None:
+    from app.services.investment_income_reconciliation_service import (
+        create_cash_income_event,
+        reconcile_annual_statement,
+    )
+
     holding = _ensure_holding(db, account, activity)
     metadata = activity.activity_metadata or {}
-    is_drp = activity.activity_type == "drp"
-    event_type = (
-        "distribution"
-        if activity.activity_type == "distribution" or metadata.get("income_type") == "distribution"
-        else "dividend"
-    )
-    cash_received = activity.net_amount
-    if cash_received is None:
-        cash_received = activity.gross_amount
-    if cash_received is None and is_drp and activity.quantity is not None and activity.price is not None:
-        cash_received = Decimal(activity.quantity) * Decimal(activity.price)
     source_id = f"ing:{idempotency_key}:{activity.leg_index}"
-    event = InvestmentIncomeEvent(
-        user_id=account.user_id,
-        account_id=account.id,
-        holding_id=holding.id,
-        event_type=event_type,
-        pay_date=activity.occurred_at.date(),
-        ex_date=(date.fromisoformat(metadata["ex_date"]) if metadata.get("ex_date") else None),
-        currency=activity.currency or account.currency or "AUD",
-        cash_received=cash_received or Decimal("0"),
-        franked_amount=_income_decimal(metadata, "franked_amount"),
-        unfranked_amount=_income_decimal(metadata, "unfranked_amount"),
-        franking_credit=_income_decimal(metadata, "franking_credit"),
-        foreign_income=_income_decimal(metadata, "foreign_income"),
-        foreign_tax_paid=_income_decimal(metadata, "foreign_tax_paid"),
-        amit_amma_components=metadata.get("amit_amma_components"),
-        is_drp=is_drp,
-        drp_quantity=activity.quantity if is_drp else None,
-        drp_price=activity.price if is_drp else None,
-        reinvestment_trade_id=activity.broker_trade_id if is_drp else None,
-        source_id=source_id,
-        notes=metadata.get("notes"),
-    )
-    db.add(event)
-    db.flush()
-    activity.income_event_id = event.id
+    if metadata.get("is_annual_statement") or metadata.get("income_data_kind") == "annual_statement":
+        reconcile_annual_statement(
+            db,
+            account=account,
+            holding=holding,
+            activity=activity,
+        )
+    else:
+        create_cash_income_event(
+            db,
+            account=account,
+            holding=holding,
+            activity=activity,
+            source_id=source_id,
+        )
 
 
 def _safe_error(exc: Exception) -> str:
@@ -886,6 +873,7 @@ def revert_run(
             "status": "reverted",
             "removed_trades": 0,
             "removed_income_events": 0,
+            "removed_cost_base_adjustments": 0,
             "affected_symbols": [],
         }
     if run.status not in {"completed", "partial"}:
@@ -896,22 +884,87 @@ def revert_run(
         .filter(InvestmentActivity.run_id == run.id, InvestmentActivity.user_id == user_id)
         .all()
     )
+    activity_ids = {activity.id for activity in activities}
     trade_ids = {activity.broker_trade_id for activity in activities if activity.broker_trade_id}
-    income_ids = {activity.income_event_id for activity in activities if activity.income_event_id}
+    income_ids = {
+        event_id for (event_id,) in db.query(InvestmentIncomeEvent.id).filter(
+            InvestmentIncomeEvent.created_by_activity_id.in_(activity_ids)
+        ).all()
+    } if activity_ids else set()
     trades = db.query(BrokerTrade).filter(BrokerTrade.id.in_(trade_ids)).all() if trade_ids else []
     income_events = (
         db.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.id.in_(income_ids)).all()
         if income_ids else []
     )
+    enrichments = db.query(InvestmentIncomeEnrichment).filter(
+        InvestmentIncomeEnrichment.source_activity_id.in_(activity_ids)
+    ).all() if activity_ids else []
+    adjustments = db.query(InvestmentCostBaseAdjustment).filter(
+        InvestmentCostBaseAdjustment.source_activity_id.in_(activity_ids)
+    ).all() if activity_ids else []
+    reconciliation_items = db.query(InvestmentReconciliationItem).filter(
+        InvestmentReconciliationItem.source_activity_id.in_(activity_ids)
+    ).all() if activity_ids else []
+    for event in income_events:
+        later_external = db.query(InvestmentIncomeEnrichment.id).filter(
+            InvestmentIncomeEnrichment.income_event_id == event.id,
+            InvestmentIncomeEnrichment.source_activity_id.notin_(activity_ids),
+        ).first()
+        if later_external:
+            raise ActivityApplicationError(
+                "run cannot be reverted because a later annual statement enriched one of its income events"
+            )
+    for enrichment in enrichments:
+        later_external = db.query(InvestmentIncomeEnrichment.id).filter(
+            InvestmentIncomeEnrichment.income_event_id == enrichment.income_event_id,
+            InvestmentIncomeEnrichment.created_at > enrichment.created_at,
+            InvestmentIncomeEnrichment.source_activity_id.notin_(activity_ids),
+        ).first()
+        if later_external:
+            raise ActivityApplicationError(
+                "run cannot be reverted before a later annual-statement enrichment is reverted"
+            )
     affected_instruments = {(trade.symbol, trade.instrument_type) for trade in trades}
+    adjustment_holdings = {
+        item.holding_id: db.query(Holding).filter(Holding.id == item.holding_id).one_or_none()
+        for item in adjustments
+    }
+    affected_instruments.update(
+        (holding.symbol, holding.instrument_type)
+        for holding in adjustment_holdings.values()
+        if holding is not None
+    )
     account = db.query(Account).filter(Account.id == run.account_id, Account.user_id == user_id).one()
 
     try:
         with db.begin_nested():
+            for enrichment in enrichments:
+                event = db.query(InvestmentIncomeEvent).filter(
+                    InvestmentIncomeEvent.id == enrichment.income_event_id
+                ).one_or_none()
+                if event is not None and (
+                    event.user_confirmed_at is None
+                    or event.user_confirmed_at <= enrichment.created_at
+                ):
+                    for field, value in (enrichment.previous_values or {}).items():
+                        if field in {
+                            "franked_amount", "unfranked_amount", "franking_credit",
+                            "foreign_income", "foreign_tax_paid", "tfn_withholding",
+                        } and value is not None:
+                            value = Decimal(str(value))
+                        elif field == "ex_date" and value:
+                            value = date.fromisoformat(str(value))
+                        setattr(event, field, value)
             for activity in activities:
                 activity.income_event_id = None
                 activity.broker_trade_id = None
                 activity.applied_at = None
+            for item in reconciliation_items:
+                db.delete(item)
+            for item in adjustments:
+                db.delete(item)
+            for enrichment in enrichments:
+                db.delete(enrichment)
             for event in income_events:
                 db.delete(event)
             db.flush()
@@ -927,6 +980,9 @@ def revert_run(
                 **previous_summary,
                 "reverted_trades": len(trades),
                 "reverted_income_events": len(income_events),
+                "reverted_income_enrichments": len(enrichments),
+                "reverted_cost_base_adjustments": len(adjustments),
+                "reverted_reconciliation_items": len(reconciliation_items),
                 "reverted_affected_symbols": sorted({symbol for symbol, _ in affected_instruments}),
             }
         if commit:
@@ -946,5 +1002,8 @@ def revert_run(
         "status": run.status,
         "removed_trades": len(trades),
         "removed_income_events": len(income_events),
+        "removed_income_enrichments": len(enrichments),
+        "removed_cost_base_adjustments": len(adjustments),
+        "removed_reconciliation_items": len(reconciliation_items),
         "affected_symbols": sorted({symbol for symbol, _ in affected_instruments}),
     }

@@ -28,10 +28,12 @@ from app.models import (
     CgtAllocation,
     Holding,
     HoldingValuation,
+    InvestmentCostBaseAdjustment,
     PriceSnapshot,
     User,
 )
 from app.services.pnl_service import (
+    CostBaseAdjustment,
     Trade,
     cgt_aud_values_for_closed_lot,
     compute_fifo,
@@ -44,10 +46,11 @@ logger = logging.getLogger(__name__)
 
 
 VALID_SIDES = ("buy", "sell")
-CGT_CALCULATION_VERSION = "fifo-v1"
+CGT_CALCULATION_VERSION = "fifo-v2"
 CGT_ASSUMPTIONS = [
     "FIFO matching is calculated from recorded broker trades and their recorded fees.",
-    "Corporate actions, managed-fund cost-base adjustments, and other tax elections are not calculated.",
+    "Statement-supplied AMIT/AMMA net amounts are applied across units open on the recorded effective date.",
+    "Corporate actions and tax elections other than recorded AMIT/AMMA adjustments are not calculated.",
 ]
 
 
@@ -308,6 +311,15 @@ def _recompute_holding(
     instrument_type: str = "equity",
 ) -> None:
     """Rebuild Holding(account, symbol) from full BrokerTrade history using FIFO."""
+    holding = (
+        db.query(Holding)
+        .filter(
+            Holding.account_id == account.id,
+            Holding.symbol == symbol,
+            Holding.instrument_type == instrument_type,
+        )
+        .first()
+    )
     trades = (
         db.query(BrokerTrade)
         .filter(
@@ -322,20 +334,32 @@ def _recompute_holding(
         db.query(CgtAllocation).filter(
             CgtAllocation.account_id == account.id,
             CgtAllocation.symbol == symbol,
+            CgtAllocation.instrument_type == instrument_type,
         ).delete(synchronize_session=False)
-        holding = (
-            db.query(Holding)
-            .filter(
-                Holding.account_id == account.id,
-                Holding.symbol == symbol,
-                Holding.instrument_type == instrument_type,
-            )
-            .first()
-        )
         if holding is not None and holding.source == "trade_import":
             holding.quantity = Decimal("0")
             holding.avg_cost = None
         return
+
+    adjustment_rows = (
+        db.query(InvestmentCostBaseAdjustment)
+        .filter(InvestmentCostBaseAdjustment.holding_id == holding.id)
+        .order_by(InvestmentCostBaseAdjustment.effective_date, InvestmentCostBaseAdjustment.id)
+        .all()
+        if holding is not None
+        else []
+    )
+    fifo_adjustments = [
+        CostBaseAdjustment(
+            symbol=symbol,
+            effective_date=item.effective_date,
+            amount=Decimal(item.amount_native),
+            currency=item.currency,
+            adjustment_id=str(item.id),
+            sort_key=str(item.id),
+        )
+        for item in adjustment_rows
+    ]
 
     fifo_trades = [
         Trade(
@@ -349,7 +373,7 @@ def _recompute_holding(
         )
         for t in trades
     ]
-    result = compute_fifo(fifo_trades)
+    result = compute_fifo(fifo_trades, fifo_adjustments)
     open_lots = [l for l in result.open_lots if l.symbol == symbol]
 
     quantity = sum((l.quantity_remaining for l in open_lots), Decimal("0"))
@@ -364,16 +388,8 @@ def _recompute_holding(
         avg_cost = None
         currency = trades[-1].currency
 
-    last_date = max(t.trade_date for t in trades)
-
-    holding = (
-        db.query(Holding)
-        .filter(
-            Holding.account_id == account.id,
-            Holding.symbol == symbol,
-            Holding.instrument_type == instrument_type,
-        )
-        .first()
+    last_date = max(
+        [t.trade_date for t in trades] + [item.effective_date for item in adjustment_rows]
     )
     if holding is None:
         holding = Holding(
@@ -396,19 +412,29 @@ def _recompute_holding(
         if not holding.currency:
             holding.currency = currency
 
-    _recompute_cgt_allocations(db, account, symbol, trades)
+    _recompute_cgt_allocations(
+        db,
+        account,
+        symbol,
+        instrument_type,
+        trades,
+        fifo_adjustments,
+    )
 
 
 def _recompute_cgt_allocations(
     db: Session,
     account: Account,
     symbol: str,
+    instrument_type: str,
     trades: list[BrokerTrade],
+    adjustments: list[CostBaseAdjustment],
 ) -> None:
     """Replace one symbol's derived CGT allocations from the authoritative trade ledger."""
     db.query(CgtAllocation).filter(
         CgtAllocation.account_id == account.id,
         CgtAllocation.symbol == symbol,
+        CgtAllocation.instrument_type == instrument_type,
     ).delete(synchronize_session=False)
     if not trades:
         return
@@ -426,7 +452,7 @@ def _recompute_cgt_allocations(
             sort_key=str(trade.id),
         )
         for trade in trades
-    ])
+    ], adjustments)
 
     # CGT must convert cost and proceeds at their respective transaction dates.
     from app.services.exchange_rate_service import ExchangeRateService
@@ -451,6 +477,7 @@ def _recompute_cgt_allocations(
             acquisition_trade_id=lot.acquisition_trade_id,
             disposal_trade_id=lot.disposal_trade_id,
             symbol=lot.symbol,
+            instrument_type=instrument_type,
             acquisition_date=lot.open_date,
             disposal_date=lot.close_date,
             quantity=lot.quantity,
@@ -458,9 +485,14 @@ def _recompute_cgt_allocations(
             cost_base_native=lot.cost_native,
             proceeds_native=lot.proceeds_native,
             gain_native=lot.pnl_native,
+            cost_base_adjustment_native=lot.cost_base_adjustment_native,
             cost_base_aud=aud_values.cost_base_aud,
             proceeds_aud=aud_values.proceeds_aud,
             gain_aud=aud_values.gain_aud,
+            cost_base_adjustment_aud=aud_values.cost_base_adjustment_aud,
+            adjustment_ids=[
+                item.adjustment_id for item in lot.adjustments if item.adjustment_id
+            ],
             fx_missing=aud_values.fx_missing,
             discount_eligible=is_cgt_discount_eligible(lot.open_date, lot.close_date),
             calculation_version=CGT_CALCULATION_VERSION,

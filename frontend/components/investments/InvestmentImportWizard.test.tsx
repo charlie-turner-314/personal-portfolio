@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   applyInvestmentImport: vi.fn(),
   listInvestmentImportProfiles: vi.fn(),
   listInvestmentImports: vi.fn(),
+  listInvestmentReconciliationItems: vi.fn(),
+  listAccountIncomeEvents: vi.fn(),
+  resolveInvestmentReconciliationItem: vi.fn(),
   revertInvestmentImport: vi.fn(),
 }));
 
@@ -47,6 +50,9 @@ describe("InvestmentImportWizard", () => {
     vi.clearAllMocks();
     mocks.listInvestmentImports.mockResolvedValue([]);
     mocks.listInvestmentImportProfiles.mockResolvedValue([]);
+    mocks.listInvestmentReconciliationItems.mockResolvedValue([]);
+    mocks.listAccountIncomeEvents.mockResolvedValue([]);
+    mocks.resolveInvestmentReconciliationItem.mockResolvedValue({});
     mocks.previewInvestmentImport.mockResolvedValue(preview);
     mocks.applyInvestmentImport.mockResolvedValue({ run_id: "run-1", inserted_records: 1, skipped_duplicate_records: 0, inserted_activities: 1 });
     mocks.revertInvestmentImport.mockResolvedValue({ run_id: "run-1", status: "reverted", removed_trades: 1, removed_income_events: 0 });
@@ -103,5 +109,55 @@ describe("InvestmentImportWizard", () => {
     expect(screen.getByText(/Transaction Statement for buys and sells/)).toBeTruthy();
     expect(screen.getByText(/Full Portfolio Report does not include AMIT\/AMMA/)).toBeTruthy();
     expect(screen.getByText(/does not offer DRP/)).toBeTruthy();
+  });
+
+  it("surfaces annual-statement conflicts for explicit resolution", async () => {
+    mocks.listInvestmentReconciliationItems.mockResolvedValueOnce([{
+      id: "review-1",
+      account_id: "account-1",
+      source_activity_id: "activity-1",
+      income_event_id: "income-1",
+      kind: "component_conflict",
+      status: "pending",
+      reason: "Annual statement values conflict with recorded data.",
+      candidate_income_event_ids: ["income-1"],
+      candidate_transaction_ids: [],
+      details: { conflicts: { franking_credit: { existing: "10", statement: "12" } } },
+      resolution: null,
+      resolved_at: null,
+      created_at: "2025-07-01T00:00:00Z",
+    }]);
+    render(<InvestmentImportWizard accounts={accounts} />);
+
+    expect(await screen.findByText(/Annual statement values conflict/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /use statement values/i }));
+
+    await waitFor(() => expect(mocks.resolveInvestmentReconciliationItem).toHaveBeenCalledWith(
+      "review-1",
+      { action: "apply_statement" },
+    ));
+  });
+
+  it("requires external review for a possible AMIT CGT event E10", async () => {
+    mocks.listInvestmentReconciliationItems.mockResolvedValueOnce([{
+      id: "review-e10",
+      account_id: "account-1",
+      source_activity_id: "activity-e10",
+      income_event_id: "income-1",
+      kind: "component_conflict",
+      status: "pending",
+      reason: "Cost-base adjustment needs review.",
+      candidate_income_event_ids: ["income-1"],
+      candidate_transaction_ids: [],
+      details: { conflicts: { cost_base_adjustment: { reason: "would reduce cost base below zero" } } },
+      resolution: null,
+      resolved_at: null,
+      created_at: "2025-07-01T00:00:00Z",
+    }]);
+    render(<InvestmentImportWizard accounts={accounts} />);
+
+    expect(await screen.findByText(/may create CGT event E10/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /use statement values/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /keep recorded values/i })).toBeTruthy();
   });
 });

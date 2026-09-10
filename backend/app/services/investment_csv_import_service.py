@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -57,6 +58,25 @@ MAPPING_FIELDS = (
     "counter_quantity",
     "direction",
     "description",
+    "ex_date",
+    "franked_amount",
+    "unfranked_amount",
+    "franking_credit",
+    "foreign_income",
+    "foreign_tax_paid",
+    "tfn_withholding",
+    "amit_amma_components",
+    "cost_base_increase",
+    "cost_base_decrease",
+    "cost_base_effective_date",
+    "annual_statement_reference",
+    "amma_interest",
+    "amma_capital_gains_discounted",
+    "amma_capital_gains_other",
+    "amma_capital_gains_discount",
+    "amma_tax_deferred",
+    "amma_tax_free",
+    "amma_other_non_assessable",
 )
 
 _NUMERIC_FIELDS = (
@@ -67,6 +87,21 @@ _NUMERIC_FIELDS = (
     "fee_amount",
     "tax_amount",
     "counter_quantity",
+    "franked_amount",
+    "unfranked_amount",
+    "franking_credit",
+    "foreign_income",
+    "foreign_tax_paid",
+    "tfn_withholding",
+    "cost_base_increase",
+    "cost_base_decrease",
+    "amma_interest",
+    "amma_capital_gains_discounted",
+    "amma_capital_gains_other",
+    "amma_capital_gains_discount",
+    "amma_tax_deferred",
+    "amma_tax_free",
+    "amma_other_non_assessable",
 )
 
 _ACTIVITY_ALIASES = {
@@ -394,6 +429,7 @@ def parse_investment_csv(
     default_currency: str | None = None,
     default_activity_type: str | None = None,
     activity_type_aliases: Mapping[str, str] | None = None,
+    income_data_kind: str = "cash_activity",
 ) -> ParsedInvestmentImport:
     """Parse independent rows and retain actionable rejection reasons."""
     date_format = date_format.upper()
@@ -402,6 +438,8 @@ def parse_investment_csv(
         raise InvestmentCsvImportError(f"Unsupported date format {date_format!r}.")
     if amount_format not in AMOUNT_FORMATS:
         raise InvestmentCsvImportError(f"Unsupported amount format {amount_format!r}.")
+    if income_data_kind not in {"cash_activity", "annual_statement"}:
+        raise InvestmentCsvImportError(f"Unsupported income data kind {income_data_kind!r}.")
     headers, source_rows = _read_csv(file_content)
     defaults = {"activity_type": default_activity_type}
     indices = _mapping_indices(headers, mapping, defaults)
@@ -457,6 +495,59 @@ def parse_investment_csv(
             if decimals["tax_amount"] is not None and indices.get("tax_currency", -1) < 0 and currency:
                 warnings.append("tax_currency defaulted to the activity currency")
             direction = _value(row, indices.get("direction", -1))
+            ex_date_raw = _value(row, indices.get("ex_date", -1))
+            effective_date_raw = _value(row, indices.get("cost_base_effective_date", -1))
+            components_raw = _value(row, indices.get("amit_amma_components", -1))
+            components = None
+            if components_raw:
+                try:
+                    components = json.loads(components_raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("amit_amma_components must be a JSON object") from exc
+                if not isinstance(components, dict):
+                    raise ValueError("amit_amma_components must be a JSON object")
+            components = dict(components or {})
+            component_fields = {
+                "interest": "amma_interest",
+                "capital_gains_discounted": "amma_capital_gains_discounted",
+                "capital_gains_other": "amma_capital_gains_other",
+                "capital_gains_discount": "amma_capital_gains_discount",
+                "tax_deferred": "amma_tax_deferred",
+                "tax_free": "amma_tax_free",
+                "other_non_assessable": "amma_other_non_assessable",
+            }
+            for component_name, field in component_fields.items():
+                component_value = decimals[field]
+                if component_value is not None:
+                    rendered = format(component_value, "f")
+                    existing_component = components.get(component_name)
+                    if existing_component is not None and Decimal(str(existing_component)) != component_value:
+                        raise ValueError(
+                            f"AMMA component {component_name} conflicts with the mapped JSON object"
+                        )
+                    components[component_name] = rendered
+            metadata = {
+                "description": _value(row, indices.get("description", -1)),
+                "source_row_number": row_number,
+                "income_data_kind": income_data_kind,
+                "is_annual_statement": income_data_kind == "annual_statement",
+                "ex_date": _parse_datetime(ex_date_raw, date_format).date().isoformat() if ex_date_raw else None,
+                "franked_amount": decimals["franked_amount"],
+                "unfranked_amount": decimals["unfranked_amount"],
+                "franking_credit": decimals["franking_credit"],
+                "foreign_income": decimals["foreign_income"],
+                "foreign_tax_paid": decimals["foreign_tax_paid"],
+                "tfn_withholding": decimals["tfn_withholding"],
+                "amit_amma_components": components or None,
+                "cost_base_increase": decimals["cost_base_increase"],
+                "cost_base_decrease": decimals["cost_base_decrease"],
+                "cost_base_effective_date": (
+                    _parse_datetime(effective_date_raw, date_format).date().isoformat()
+                    if effective_date_raw else None
+                ),
+                "annual_statement_reference": _value(row, indices.get("annual_statement_reference", -1)),
+            }
+            metadata = {key: value for key, value in metadata.items() if value is not None}
             activity = CanonicalActivityInput(
                 activity_type=activity_type,
                 occurred_at=occurred_at,
@@ -476,10 +567,7 @@ def parse_investment_csv(
                 counter_quantity=decimals["counter_quantity"],
                 direction=direction,
                 warnings=tuple(warnings),
-                metadata={
-                    "description": _value(row, indices.get("description", -1)),
-                    "source_row_number": row_number,
-                },
+                metadata=metadata,
             )
             record = SourceRecordEnvelope(
                 occurred_at=occurred_at,

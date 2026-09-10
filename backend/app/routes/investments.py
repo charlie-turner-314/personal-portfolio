@@ -26,7 +26,9 @@ from app.models import (
     Holding,
     HoldingValuation,
     InvestmentIncomeEvent,
+    InvestmentCostBaseAdjustment,
     InvestmentIngestionRun,
+    InvestmentReconciliationItem,
     InvestmentSourceRecord,
     CsvImportProfile,
     User,
@@ -48,12 +50,13 @@ from app.schemas import (
     InvestmentIncomeEventCreate,
     InvestmentIncomeEventResponse,
     InvestmentIncomeSummary,
+    InvestmentReconciliationResolve,
     ManualAccountCreate,
     PortfolioSummary,
     SymbolSearchResult,
     ValuationPoint,
 )
-from app.services.pnl_service import Trade as _FifoTrade, compute_fifo
+from app.services.pnl_service import CostBaseAdjustment as _FifoAdjustment, Trade as _FifoTrade, compute_fifo
 from app.services.broker_trade_service import ImportError as BrokerTradeImportError, import_trades, remove_trade
 from app.services import credentials_crypto
 from app.services.investment_activity_service import ActivityApplicationError, revert_run, source_record_view
@@ -62,6 +65,11 @@ from app.services.investment_csv_import_service import (
     apply_investment_csv,
     normalize_provider,
     preview_investment_csv,
+)
+from app.services.investment_income_reconciliation_service import (
+    INCOME_COMPONENT_FIELDS,
+    reconciliation_item_view,
+    resolve_reconciliation_item,
 )
 
 logger = __import__("logging").getLogger(__name__)
@@ -126,6 +134,7 @@ def _save_investment_import_profile(
         CsvImportProfile.account_id == account.id,
         CsvImportProfile.import_kind == "investments",
         CsvImportProfile.provider == provider,
+        CsvImportProfile.profile_variant == payload.income_data_kind,
     ).one_or_none()
     if profile is None:
         profile = CsvImportProfile(
@@ -133,6 +142,7 @@ def _save_investment_import_profile(
             account_id=account.id,
             import_kind="investments",
             provider=provider,
+            profile_variant=payload.income_data_kind,
             name=payload.name,
             column_mapping=payload.stored_mapping(),
             header_signature=payload.header_signature,
@@ -141,6 +151,7 @@ def _save_investment_import_profile(
         db.add(profile)
     else:
         profile.name = payload.name
+        profile.profile_variant = payload.income_data_kind
         profile.column_mapping = payload.stored_mapping()
         profile.header_signature = payload.header_signature
         profile.last_used_at = datetime.utcnow()
@@ -154,6 +165,7 @@ def _import_profile_view(profile: CsvImportProfile) -> dict:
         "id": str(profile.id),
         "account_id": str(profile.account_id),
         "provider": profile.provider,
+        "profile_variant": profile.profile_variant,
         "name": profile.name,
         "mapping": profile.column_mapping,
         "header_signature": profile.header_signature or [],
@@ -212,6 +224,7 @@ def apply_investment_import(
                 default_currency=payload.default_currency,
                 default_activity_type=payload.default_activity_type,
                 activity_type_aliases=payload.activity_type_aliases,
+                income_data_kind=payload.income_data_kind,
                 header_signature=result["headers"],
             )
             profile = _save_investment_import_profile(db, user_id=user_id, payload=profile_payload)
@@ -292,6 +305,7 @@ def revert_investment_import(
 def list_investment_import_profiles(
     account_id: UUID,
     provider: Optional[str] = None,
+    income_data_kind: Optional[str] = Query(default=None, pattern="^(cash_activity|annual_statement)$"),
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -306,6 +320,8 @@ def list_investment_import_profiles(
     )
     if provider:
         query = query.filter(CsvImportProfile.provider == normalize_provider(provider))
+    if income_data_kind:
+        query = query.filter(CsvImportProfile.profile_variant == income_data_kind)
     return [_import_profile_view(profile) for profile in query.order_by(CsvImportProfile.last_used_at.desc()).all()]
 
 
@@ -359,12 +375,41 @@ def _save_income_event(
         remove_trade(db, user_id, str(event.account_id), str(event.reinvestment_trade_id), commit=False)
         event.reinvestment_trade_id = None
     values = payload.model_dump()
+    now = datetime.utcnow()
+    manual_source = {"kind": "manual", "confirmed_at": now.isoformat()}
+    component_sources = dict(event.component_sources or {}) if event is not None else {}
+    for field in ("cash_received", *INCOME_COMPONENT_FIELDS):
+        if values.get(field) is None:
+            continue
+        entries = component_sources.get(field, [])
+        if isinstance(entries, dict):
+            entries = [entries]
+        elif not isinstance(entries, list):
+            entries = []
+        component_sources[field] = [*entries, manual_source]
     if event is None:
-        event = InvestmentIncomeEvent(user_id=user_id, **values)
+        event = InvestmentIncomeEvent(
+            user_id=user_id,
+            **values,
+            reconciliation_status="confirmed",
+            user_confirmed_at=now,
+            component_sources=component_sources,
+        )
         db.add(event)
     else:
         for key, value in values.items():
             setattr(event, key, value)
+        event.reconciliation_status = "confirmed"
+        event.user_confirmed_at = now
+        event.component_sources = component_sources
+        pending_items = db.query(InvestmentReconciliationItem).filter(
+            InvestmentReconciliationItem.income_event_id == event.id,
+            InvestmentReconciliationItem.status == "pending",
+        ).all()
+        for item in pending_items:
+            item.status = "resolved"
+            item.resolution = {"action": "manual_edit"}
+            item.resolved_at = now
     db.flush()
     if payload.is_drp:
         try:
@@ -497,6 +542,7 @@ def investment_income_summary(
         func.coalesce(func.sum(InvestmentIncomeEvent.franking_credit), 0).label("franking_credits"),
         func.coalesce(func.sum(InvestmentIncomeEvent.foreign_income), 0).label("foreign_income"),
         func.coalesce(func.sum(InvestmentIncomeEvent.foreign_tax_paid), 0).label("foreign_tax_paid"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.tfn_withholding), 0).label("tfn_withholding"),
     ).filter(
         InvestmentIncomeEvent.user_id == user_id,
         InvestmentIncomeEvent.pay_date >= start,
@@ -521,9 +567,91 @@ def investment_income_summary(
             franking_credits=Decimal(row.franking_credits),
             foreign_income=Decimal(row.foreign_income),
             foreign_tax_paid=Decimal(row.foreign_tax_paid),
+            tfn_withholding=Decimal(row.tfn_withholding),
         )
         for row in rows
     ]
+
+
+@router.get("/reconciliation-items")
+def list_investment_reconciliation_items(
+    account_id: Optional[UUID] = None,
+    status: Optional[str] = Query(default="pending", pattern="^(pending|resolved|ignored|all)$"),
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentReconciliationItem).filter(
+        InvestmentReconciliationItem.user_id == user_id
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentReconciliationItem.account_id == account_id)
+    if status and status != "all":
+        query = query.filter(InvestmentReconciliationItem.status == status)
+    return [
+        reconciliation_item_view(item)
+        for item in query.order_by(
+            InvestmentReconciliationItem.created_at.desc(),
+            InvestmentReconciliationItem.id,
+        ).limit(200).all()
+    ]
+
+
+@router.post("/reconciliation-items/{item_id:uuid}/resolve")
+def resolve_investment_reconciliation(
+    item_id: UUID,
+    payload: InvestmentReconciliationResolve,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        item = resolve_reconciliation_item(
+            db,
+            user_id=user_id,
+            item_id=item_id,
+            action=payload.action,
+            income_event_id=payload.income_event_id,
+            transaction_id=payload.transaction_id,
+        )
+        return reconciliation_item_view(item)
+    except ValueError as exc:
+        status_code = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.get("/cost-base-adjustments")
+def list_investment_cost_base_adjustments(
+    account_id: Optional[UUID] = None,
+    holding_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentCostBaseAdjustment).filter(
+        InvestmentCostBaseAdjustment.user_id == user_id
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentCostBaseAdjustment.account_id == account_id)
+    if holding_id is not None:
+        query = query.filter(InvestmentCostBaseAdjustment.holding_id == holding_id)
+    return [{
+        "id": str(item.id),
+        "account_id": str(item.account_id),
+        "holding_id": str(item.holding_id),
+        "income_event_id": str(item.income_event_id) if item.income_event_id else None,
+        "source_activity_id": str(item.source_activity_id),
+        "effective_date": item.effective_date.isoformat(),
+        "currency": item.currency,
+        "amount_native": str(item.amount_native),
+        "amount_aud": str(item.amount_aud) if item.amount_aud is not None else None,
+        "valuation_source": item.valuation_source,
+        "calculation_version": item.calculation_version,
+        "assumptions": item.assumptions or [],
+    } for item in query.order_by(
+        InvestmentCostBaseAdjustment.effective_date,
+        InvestmentCostBaseAdjustment.id,
+    ).all()]
 
 
 # ---------------------------------------------------------------------------
@@ -1108,6 +1236,7 @@ def holding_trades(
         .filter(
             BrokerTrade.account_id == holding.account_id,
             BrokerTrade.symbol == holding.symbol,
+            BrokerTrade.instrument_type == holding.instrument_type,
         )
         .order_by(BrokerTrade.trade_date.asc(), BrokerTrade.id.asc())
         .all()
@@ -1167,6 +1296,7 @@ def holding_lots(
         .filter(
             BrokerTrade.account_id == holding.account_id,
             BrokerTrade.symbol == holding.symbol,
+            BrokerTrade.instrument_type == holding.instrument_type,
         )
         .order_by(BrokerTrade.trade_date.asc(), BrokerTrade.id.asc())
         .all()
@@ -1186,7 +1316,20 @@ def holding_lots(
         )
         for t in trades
     ]
-    fifo = compute_fifo(fifo_trades)
+    adjustment_rows = db.query(InvestmentCostBaseAdjustment).filter(
+        InvestmentCostBaseAdjustment.holding_id == holding.id,
+    ).all()
+    fifo = compute_fifo(fifo_trades, [
+        _FifoAdjustment(
+            symbol=holding.symbol,
+            effective_date=item.effective_date,
+            amount=Decimal(item.amount_native),
+            currency=item.currency,
+            adjustment_id=str(item.id),
+            sort_key=str(item.id),
+        )
+        for item in adjustment_rows
+    ])
 
     user = db.query(User).filter(User.id == user_id).first()
     user_currency = (
@@ -1218,6 +1361,11 @@ def holding_lots(
                 open_date=lot.open_date,
                 quantity_remaining=lot.quantity_remaining,
                 cost_per_share_native=lot.cost_per_share_native,
+                original_cost_per_share_native=lot.original_cost_per_share_native,
+                cost_base_adjustment_per_share_native=lot.cost_base_adjustment_per_share_native,
+                adjustment_ids=[
+                    item.adjustment_id for item in lot.adjustments if item.adjustment_id
+                ],
                 cost_per_share_user=cost_per_share_user,
                 age_days=(today - lot.open_date).days,
                 currency=lot.currency,
@@ -1240,6 +1388,7 @@ def holding_cgt_allocations(
     return db.query(CgtAllocation).filter(
         CgtAllocation.account_id == holding.account_id,
         CgtAllocation.symbol == holding.symbol,
+        CgtAllocation.instrument_type == holding.instrument_type,
     ).order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc()).all()
 
 
@@ -1269,9 +1418,10 @@ def _cgt_allocations_query(
 def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
     """Serialize persisted allocations without deriving or hiding tax-relevant values."""
     fields = [
-        "allocation_id", "account_id", "acquisition_trade_id", "disposal_trade_id", "symbol",
+        "allocation_id", "account_id", "acquisition_trade_id", "disposal_trade_id", "symbol", "instrument_type",
         "acquisition_date", "disposal_date", "quantity", "currency", "cost_base_native",
-        "proceeds_native", "gain_native", "cost_base_aud", "proceeds_aud", "gain_aud",
+        "proceeds_native", "gain_native", "cost_base_adjustment_native", "cost_base_aud", "proceeds_aud", "gain_aud",
+        "cost_base_adjustment_aud", "adjustment_ids",
         "fx_missing", "discount_eligible", "calculation_version", "assumptions",
     ]
     output = StringIO(newline="")
@@ -1284,6 +1434,7 @@ def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
             "acquisition_trade_id": row.acquisition_trade_id,
             "disposal_trade_id": row.disposal_trade_id,
             "symbol": row.symbol,
+            "instrument_type": row.instrument_type,
             "acquisition_date": row.acquisition_date.isoformat(),
             "disposal_date": row.disposal_date.isoformat(),
             "quantity": row.quantity,
@@ -1291,9 +1442,12 @@ def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
             "cost_base_native": row.cost_base_native,
             "proceeds_native": row.proceeds_native,
             "gain_native": row.gain_native,
+            "cost_base_adjustment_native": row.cost_base_adjustment_native,
             "cost_base_aud": row.cost_base_aud if row.cost_base_aud is not None else "",
             "proceeds_aud": row.proceeds_aud if row.proceeds_aud is not None else "",
             "gain_aud": row.gain_aud if row.gain_aud is not None else "",
+            "cost_base_adjustment_aud": row.cost_base_adjustment_aud if row.cost_base_adjustment_aud is not None else "",
+            "adjustment_ids": " | ".join(row.adjustment_ids or []),
             "fx_missing": str(bool(row.fx_missing)).lower(),
             "discount_eligible": str(bool(row.discount_eligible)).lower(),
             "calculation_version": row.calculation_version,
@@ -1356,7 +1510,8 @@ def cgt_financial_year_summary(
     ), Decimal("0"))
     assumptions = [
         "FIFO matching is calculated from recorded broker trades and their recorded fees.",
-        "Corporate actions, managed-fund cost-base adjustments, and other tax elections are not calculated.",
+        "Statement-supplied AMIT/AMMA net amounts are included on their recorded effective dates.",
+        "Corporate actions and tax elections other than recorded AMIT/AMMA adjustments are not calculated.",
     ]
     missing = len(rows) - len(known)
     if missing:
