@@ -25,10 +25,15 @@ import {
   type InvestmentReconciliationItem,
   type InvestmentSourceRecord,
 } from "@/lib/api/investments";
-import { detectCsvDelimiter, parseDelimitedText } from "@/lib/import/parsing";
+import {
+  detectCsvDelimiter,
+  parseDelimitedText,
+  parseDelimitedTextFromMatchingHeader,
+} from "@/lib/import/parsing";
 import {
   EMPTY_INVESTMENT_IMPORT_MAPPING,
   INVESTMENT_IMPORT_FIELDS,
+  isLikelySuperheroReportHeader,
   reconcileSavedInvestmentMapping,
   suggestInvestmentImportMapping,
 } from "@/lib/investment-import/mapping";
@@ -147,7 +152,14 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   }, [account?.base_currency, accountId, headers, incomeDataKind, provider]);
 
   const onFileSelect = useCallback((file: File, content: string) => {
-    const parsed = parseDelimitedText(content, detectCsvDelimiter(content));
+    const delimiter = detectCsvDelimiter(content);
+    const parsed = isSuperhero
+      ? parseDelimitedTextFromMatchingHeader(
+          content,
+          delimiter,
+          isLikelySuperheroReportHeader,
+        )
+      : parseDelimitedText(content, delimiter);
     setFileName(file.name);
     setFileContent(content);
     setHeaders(parsed.headers);
@@ -156,11 +168,16 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
       setAssetType("crypto");
       setIncomeDataKind("cash_activity");
       setAmountFormat("DOT_DECIMAL");
+    } else if (isSuperhero) {
+      setDateFormat("DD-MM-YYYY");
+      setAmountFormat("DOT_DECIMAL");
+      if (/(?:Transaction Statement|Income Report) \((?:US|USA)\)/i.test(content)) setDefaultCurrency("USD");
+      if (/(?:Transaction Statement|Income Report) \(AUS\)/i.test(content)) setDefaultCurrency("AUD");
     }
     setPreview(null);
     setCompletedMessage(null);
     setError(parsed.headers.length ? null : "The file has no header row.");
-  }, [isCryptoComApp, provider]);
+  }, [isCryptoComApp, isSuperhero, provider]);
 
   const missingRequired = useMemo(
     () => INVESTMENT_IMPORT_FIELDS.filter((field) => field.required && !mapping[field.key]),
@@ -346,7 +363,8 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                 Superhero does not offer DRP, so its income rows should not be mapped as dividend reinvestments.
               </p>
               <p>
-                Current CSV column schemas are not published by Superhero, so review the suggested mapping before preview.
+                Report table headers are detected below their preamble; the known AUS/US Transaction Statement layout maps automatically and combines Brokerage with GST.
+                Income and AMIT/AMMA schemas are not published by Superhero, so review their suggested mapping before preview.
                 See <a className="underline underline-offset-2" href="https://www.superhero.com.au/support/articles/13648478865167-tax-reporting/" target="_blank" rel="noreferrer">Tax Reporting</a>
                 {" and "}<a className="underline underline-offset-2" href="https://support.superhero.com.au/hc/en-au/articles/14787654257807-Dividends" target="_blank" rel="noreferrer">Dividends</a>.
               </p>

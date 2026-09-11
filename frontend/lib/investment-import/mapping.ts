@@ -105,8 +105,8 @@ export const INVESTMENT_IMPORT_FIELDS: Array<{
 const HEADER_ALIASES: Record<keyof InvestmentImportMapping, string[]> = {
   occurred_at: ["date", "trade date", "transaction date", "timestamp", "timestamp (utc)", "time", "occurred at"],
   activity_type: ["type", "activity", "activity type", "transaction type", "transaction kind", "side", "action"],
-  asset_symbol: ["symbol", "ticker", "asset", "coin", "instrument", "code"],
-  asset_name: ["asset name", "security name", "instrument name", "name"],
+  asset_symbol: ["symbol", "ticker", "asset", "coin", "instrument", "code", "security code"],
+  asset_name: ["asset name", "security name", "instrument name", "name", "security"],
   asset_type: ["asset type", "instrument type", "security type"],
   quantity: ["quantity", "qty", "units", "shares", "amount"],
   price: ["price", "unit price", "trade price", "average price", "avg price"],
@@ -153,6 +153,30 @@ const HEADER_ALIASES: Record<keyof InvestmentImportMapping, string[]> = {
 
 function normalized(value: string): string {
   return value.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+}
+
+const SUPERHERO_TRANSACTION_HEADERS = [
+  "transaction date",
+  "settlement date",
+  "security",
+  "security code",
+  "transaction type",
+  "quantity",
+  "average price",
+  "net amount",
+  "brokerage",
+  "gst",
+  "tax",
+];
+
+export function isSuperheroTransactionHeader(cells: string[]): boolean {
+  const available = new Set(cells.map(normalized));
+  return SUPERHERO_TRANSACTION_HEADERS.every((header) => available.has(header));
+}
+
+export function isLikelySuperheroReportHeader(cells: string[]): boolean {
+  return isSuperheroTransactionHeader(cells)
+    || cells.filter((cell) => cell.trim().length > 0).length >= 3;
 }
 
 export function suggestInvestmentImportMapping(headers: string[], provider = "generic"): InvestmentImportMapping {

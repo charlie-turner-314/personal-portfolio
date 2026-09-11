@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_INVESTMENT_IMPORT_MAPPING,
+  isLikelySuperheroReportHeader,
+  isSuperheroTransactionHeader,
   reconcileSavedInvestmentMapping,
   suggestInvestmentImportMapping,
 } from "./mapping";
@@ -19,6 +21,34 @@ describe("investment import mapping", () => {
       fee_amount: "Brokerage",
       source_reference: "Trade ID",
     });
+  });
+
+  it("recognises and maps the documented Superhero Transaction Statement layout", () => {
+    const headers = [
+      "Transaction Date", "Settlement Date", "Security", "Security Code",
+      "Transaction Type", "Quantity", "Average Price", "Net Amount",
+      "Brokerage", "GST", "Tax",
+    ];
+    expect(isSuperheroTransactionHeader(headers)).toBe(true);
+    expect(isLikelySuperheroReportHeader(headers)).toBe(true);
+    expect(suggestInvestmentImportMapping(headers, "Superhero")).toMatchObject({
+      occurred_at: "Transaction Date",
+      activity_type: "Transaction Type",
+      asset_symbol: "Security Code",
+      asset_name: "Security",
+      quantity: "Quantity",
+      price: "Average Price",
+      net_amount: "Net Amount",
+      fee_amount: "Brokerage",
+      tax_amount: "Tax",
+    });
+  });
+
+  it("treats the first wider Superhero report row as a mappable header", () => {
+    expect(isLikelySuperheroReportHeader(["Entity Name", "Example"])).toBe(false);
+    expect(isLikelySuperheroReportHeader([
+      "Payment Date", "Security Code", "Gross Amount", "Franking Credit",
+    ])).toBe(true);
   });
 
   it("drops stale saved columns and restores case-insensitive matches", () => {

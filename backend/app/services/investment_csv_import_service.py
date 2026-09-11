@@ -23,6 +23,7 @@ from app.models import Account, Holding, InvestmentIngestionRun, InvestmentSourc
 from app.services.investment_activity_service import (
     ACTIVITY_TYPES,
     ASSET_TYPES,
+    NORMALIZATION_VERSION,
     ActivityValidationError,
     CanonicalActivityInput,
     InvestmentActivityBatch,
@@ -174,6 +175,32 @@ _MONTH_FORMATS = (
     "%B %d, %Y",
 )
 
+_SUPERHERO_TRANSACTION_HEADERS = frozenset({
+    "transaction date",
+    "settlement date",
+    "security",
+    "security code",
+    "transaction type",
+    "quantity",
+    "average price",
+    "net amount",
+    "brokerage",
+    "gst",
+    "tax",
+})
+_SUPERHERO_TRANSACTION_MAPPING = {
+    "occurred_at": "Transaction Date",
+    "activity_type": "Transaction Type",
+    "asset_symbol": "Security Code",
+    "asset_name": "Security",
+    "quantity": "Quantity",
+    "price": "Average Price",
+    "net_amount": "Net Amount",
+    "fee_amount": "Brokerage",
+    "tax_amount": "Tax",
+}
+_SUPERHERO_NORMALIZATION_VERSION = "superhero-transaction-v1"
+
 
 class InvestmentCsvImportError(ValueError):
     """A file-level error that prevents a meaningful preview."""
@@ -199,7 +226,21 @@ def normalize_provider(value: str) -> str:
     return provider[:64]
 
 
-def _read_csv(file_content: str) -> tuple[list[str], list[list[str]]]:
+def _is_superhero_provider(provider: str) -> bool:
+    return re.sub(r"[^a-z0-9]+", "", provider.casefold()) == "superhero"
+
+
+def _is_superhero_transaction_header(row: Sequence[str]) -> bool:
+    return _SUPERHERO_TRANSACTION_HEADERS.issubset(
+        {cell.lstrip("\ufeff").strip().casefold() for cell in row}
+    )
+
+
+def _read_csv(
+    file_content: str,
+    *,
+    provider: str,
+) -> tuple[list[str], list[list[str]], list[int], list[list[str]]]:
     if not isinstance(file_content, str) or not file_content.strip():
         raise InvestmentCsvImportError("The file is empty.")
     if len(file_content.encode("utf-8")) > MAX_IMPORT_BYTES:
@@ -212,24 +253,89 @@ def _read_csv(file_content: str) -> tuple[list[str], list[list[str]]]:
         delimiter = "\t" if "\t" in sample else ";" if sample.count(";") > sample.count(",") else ","
     try:
         reader = csv.reader(io.StringIO(file_content), delimiter=delimiter)
-        raw_rows = [[cell.strip() for cell in row] for row in reader if any(cell.strip() for cell in row)]
+        numbered_rows = [
+            (reader.line_num, [cell.strip() for cell in row])
+            for row in reader
+            if any(cell.strip() for cell in row)
+        ]
     except csv.Error as exc:
         raise InvestmentCsvImportError(f"The delimited file could not be read: {exc}.") from exc
-    if not raw_rows:
+    if not numbered_rows:
         raise InvestmentCsvImportError("The file contains no rows.")
-    headers = [cell.lstrip("\ufeff").strip() for cell in raw_rows[0]]
+    header_index = 0
+    if _is_superhero_provider(provider):
+        matched_index = next(
+            (
+                index
+                for index, (_line_number, row) in enumerate(numbered_rows[:25])
+                if _is_superhero_transaction_header(row)
+            ),
+            None,
+        )
+        if matched_index is None:
+            # Superhero report metadata rows have one or two populated cells;
+            # the first wider row is the tabular header for reports whose exact
+            # schema is not yet known. This keeps manual mapping available
+            # without requiring users to edit the original export.
+            matched_index = next(
+                (
+                    index
+                    for index, (_line_number, row) in enumerate(numbered_rows[:25])
+                    if sum(bool(cell.strip()) for cell in row) >= 3
+                ),
+                None,
+            )
+        if matched_index is not None:
+            header_index = matched_index
+    headers = [
+        cell.lstrip("\ufeff").strip()
+        for cell in numbered_rows[header_index][1]
+    ]
     if not headers or any(not header for header in headers):
         raise InvestmentCsvImportError("Every column must have a non-empty header.")
     normalized_headers = [header.casefold() for header in headers]
     duplicates = sorted({header for header in normalized_headers if normalized_headers.count(header) > 1})
     if duplicates:
         raise InvestmentCsvImportError(f"Duplicate column headers are not supported: {', '.join(duplicates)}.")
-    rows = raw_rows[1:]
+    preamble = [row for _line_number, row in numbered_rows[:header_index]]
+    data = numbered_rows[header_index + 1:]
+    rows = [row for _line_number, row in data]
+    row_numbers = [line_number for line_number, _row in data]
     if not rows:
         raise InvestmentCsvImportError("The file contains headers but no data rows.")
     if len(rows) > MAX_IMPORT_ROWS:
         raise InvestmentCsvImportError(f"The file exceeds the {MAX_IMPORT_ROWS:,} row import limit.")
-    return headers, rows
+    return headers, rows, row_numbers, preamble
+
+
+def _superhero_report_metadata(
+    file_content: str,
+    preamble: Sequence[Sequence[str]],
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"report_type": "transaction_statement"}
+    for row in preamble:
+        if not row:
+            continue
+        key = _normal_token(row[0])
+        value = next((cell.strip() for cell in row[1:] if cell.strip()), "")
+        if key in {
+            "entity name",
+            "account name",
+            "account number",
+            "hin",
+            "report start date",
+            "report end date",
+            "report creation",
+        } and value:
+            metadata[key.replace(" ", "_")] = value
+    folded = file_content.casefold()
+    if "transaction statement (aus)" in folded:
+        metadata["market"] = "AUS"
+        metadata["currency"] = "AUD"
+    elif "transaction statement (us)" in folded or "transaction statement (usa)" in folded:
+        metadata["market"] = "US"
+        metadata["currency"] = "USD"
+    return metadata
 
 
 def _mapping_indices(headers: Sequence[str], mapping: Mapping[str, Any], defaults: Mapping[str, Any]) -> dict[str, int]:
@@ -454,7 +560,10 @@ def parse_investment_csv(
         raise InvestmentCsvImportError(f"Unsupported amount format {amount_format!r}.")
     if income_data_kind not in {"cash_activity", "annual_statement"}:
         raise InvestmentCsvImportError(f"Unsupported income data kind {income_data_kind!r}.")
-    headers, source_rows = _read_csv(file_content)
+    headers, source_rows, source_row_numbers, preamble = _read_csv(
+        file_content,
+        provider=provider,
+    )
     if is_crypto_com_app_provider(provider):
         if income_data_kind != "cash_activity":
             raise InvestmentCsvImportError("Crypto.com App exports are activity files, not annual tax statements.")
@@ -481,6 +590,27 @@ def parse_investment_csv(
             headers=tuple(headers),
             amount_format="DOT_DECIMAL",
         )
+    superhero_transaction = (
+        _is_superhero_provider(provider)
+        and _is_superhero_transaction_header(headers)
+    )
+    superhero_metadata = (
+        _superhero_report_metadata(file_content, preamble)
+        if superhero_transaction else {}
+    )
+    if superhero_transaction:
+        if income_data_kind != "cash_activity":
+            raise InvestmentCsvImportError(
+                "Superhero Transaction Statements are trade activity files, not annual tax statements."
+            )
+        mapping = _SUPERHERO_TRANSACTION_MAPPING
+        date_format = "DD-MM-YYYY"
+        amount_format = "DOT_DECIMAL"
+        default_currency = str(superhero_metadata.get("currency") or default_currency or "AUD")
+        default_asset_type = "equity"
+    superhero_header_indices = {
+        header.casefold(): index for index, header in enumerate(headers)
+    } if superhero_transaction else {}
     defaults = {"activity_type": default_activity_type}
     indices = _mapping_indices(headers, mapping, defaults)
     inferred = _infer_amount_format(source_rows, indices)
@@ -491,8 +621,7 @@ def parse_investment_csv(
     records: list[SourceRecordEnvelope] = []
     preview_rows: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for source_index, row in enumerate(source_rows):
-        row_number = source_index + 2
+    for row_number, row in zip(source_row_numbers, source_rows, strict=True):
         raw_payload = {
             header: (row[index] if index < len(row) else "")
             for index, header in enumerate(headers)
@@ -521,6 +650,18 @@ def parse_investment_csv(
                 if value is not None and value < 0:
                     decimals[field] = abs(value)
                     warnings.append(f"{field} was negative and was normalized to its absolute value")
+            if superhero_transaction:
+                gst = _parse_decimal(
+                    _value(row, superhero_header_indices["gst"]),
+                    field="GST",
+                    configured="DOT_DECIMAL",
+                    inferred="DOT_DECIMAL",
+                )
+                if gst is not None:
+                    decimals["fee_amount"] = abs(decimals["fee_amount"] or Decimal("0")) + abs(gst)
+                    warnings.append(
+                        "Superhero Brokerage and GST were combined into the canonical fee amount"
+                    )
             currency = _currency(
                 _value(row, indices.get("currency", -1)), default_currency, "currency"
             )
@@ -614,6 +755,19 @@ def parse_investment_csv(
                 "annual_statement_reference": _value(row, indices.get("annual_statement_reference", -1)),
                 "transaction_hash": _value(row, indices.get("transaction_hash", -1)),
             }
+            if superhero_transaction:
+                settlement_raw = _value(
+                    row,
+                    superhero_header_indices["settlement date"],
+                )
+                metadata.update({
+                    "superhero_report": superhero_metadata,
+                    "settlement_date": (
+                        _parse_datetime(settlement_raw, "DD-MM-YYYY").date().isoformat()
+                        if settlement_raw else None
+                    ),
+                    "gst": gst,
+                })
             metadata = {key: value for key, value in metadata.items() if value is not None}
             activity = CanonicalActivityInput(
                 activity_type=activity_type,
@@ -651,7 +805,11 @@ def parse_investment_csv(
                 provider_record_id=_value(row, indices.get("source_reference", -1)),
                 raw_payload=raw_payload,
                 activities=(activity,),
-                metadata={"source_row_number": row_number, "file_name": file_name},
+                metadata={
+                    "source_row_number": row_number,
+                    "file_name": file_name,
+                    **({"superhero_report": superhero_metadata} if superhero_transaction else {}),
+                },
             )
             # Validate each row independently so one malformed row cannot hide
             # valid rows from the dry-run preview.
@@ -681,6 +839,16 @@ def parse_investment_csv(
         source_name=file_name[:255],
         source_hash=source_hash,
         records=tuple(records),
+        normalization_version=(
+            _SUPERHERO_NORMALIZATION_VERSION
+            if superhero_transaction else NORMALIZATION_VERSION
+        ),
+        warnings=(
+            (
+                "Superhero Transaction Statement preset applied; leading report rows were "
+                "detected and Brokerage plus GST were combined."
+            ),
+        ) if superhero_transaction else (),
     )
     return ParsedInvestmentImport(
         batch=batch,
@@ -840,7 +1008,7 @@ def apply_investment_csv(
             normalization_version=parsed.batch.normalization_version,
             source_name=parsed.batch.source_name,
             source_hash=parsed.batch.source_hash,
-            warnings=tuple(run_warnings),
+            warnings=tuple((*parsed.batch.warnings, *run_warnings)),
         ),
     )
     if parsed.rejected_rows or excluded_conflicts:

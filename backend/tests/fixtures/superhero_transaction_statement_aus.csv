@@ -1,0 +1,13 @@
+Entity Name,Synthetic Investor
+Account Name,Synthetic Superhero Account
+Account Number,REDACTED
+Report Start Date,01/07/2024
+Report End Date,30/06/2025
+Report Creation,01/07/2025 09:00
+
+
+Transaction Statement (AUS)
+Transaction Date,Settlement Date,Security,Security Code,Transaction Type,Quantity,Average Price,Net Amount,Brokerage,GST,Tax
+14/09/2024,16/09/2024,Example Holdings,EXM,Buy,50,$6.47,-$323.50,$5.00,$0.45,$0.00
+20/06/2025,24/06/2025,Example Holdings,EXM,Sell,10,$7.00,$70.00,$2.00,$0.20,$0.00
+TOTAL,,,,,,,$-253.50,$7.00,$0.65,$0.00

@@ -17,6 +17,7 @@ from app.models import (
 from app.services import investment_activity_service
 from app.services.investment_activity_service import ActivityApplicationError, revert_run
 from app.services.investment_csv_import_service import (
+    InvestmentCsvImportError,
     apply_investment_csv,
     parse_investment_csv,
     preview_investment_csv,
@@ -115,6 +116,121 @@ f1;02/02/2025;Commission;USD;cash;;;;;USD;2,25;USD;;
         "distribution", "USD", Decimal("5.75")
     )
     assert fee.activity_type == "fee" and fee.fee_amount == Decimal("2.25")
+
+
+def test_superhero_transaction_preset_skips_preamble_and_combines_gst():
+    content = (
+        Path(__file__).parent / "fixtures" / "superhero_transaction_statement_aus.csv"
+    ).read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "Transaction Statement (AUS).csv",
+        "provider": "Superhero",
+        "mapping": {},
+        "date_format": "AUTO",
+        "amount_format": "AUTO",
+    })
+
+    assert parsed.batch.provider == "superhero"
+    assert parsed.batch.normalization_version == "superhero-transaction-v1"
+    assert parsed.batch.warnings == (
+        "Superhero Transaction Statement preset applied; leading report rows were "
+        "detected and Brokerage plus GST were combined.",
+    )
+    assert [row["row_number"] for row in parsed.rows] == [11, 12]
+    assert parsed.rejected_rows[0]["row_number"] == 13
+    buy, sell = [record.activities[0] for record in parsed.batch.records]
+    assert (buy.activity_type, buy.asset_symbol, buy.quantity, buy.price) == (
+        "buy", "EXM", Decimal("50"), Decimal("6.47")
+    )
+    assert buy.fee_amount == Decimal("5.45")
+    assert buy.currency == "AUD"
+    assert buy.metadata["settlement_date"] == "2024-09-16"
+    assert buy.metadata["superhero_report"]["market"] == "AUS"
+    assert sell.activity_type == "sell"
+    assert sell.fee_amount == Decimal("2.20")
+
+    with pytest.raises(InvestmentCsvImportError, match="trade activity files"):
+        parse_investment_csv(**{
+            **_options(content),
+            "provider": "Superhero",
+            "mapping": {},
+            "income_data_kind": "annual_statement",
+        })
+
+
+def test_superhero_transaction_preset_infers_us_currency_from_report_title():
+    content = (
+        Path(__file__).parent / "fixtures" / "superhero_transaction_statement_aus.csv"
+    ).read_text().replace("Transaction Statement (AUS)", "Transaction Statement (US)")
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "provider": "Superhero",
+        "mapping": {},
+    })
+
+    assert parsed.batch.records[0].activities[0].currency == "USD"
+    assert parsed.batch.records[0].activities[0].metadata["superhero_report"]["market"] == "US"
+
+
+def test_superhero_unknown_report_keeps_manual_mapping_after_preamble():
+    content = """Entity Name,Synthetic Investor
+Account Name,Synthetic Superhero Account
+Income Report (AUS)
+Payment Date,Security,Security Code,Transaction Type,Gross Amount,Franking Credit,Tax
+14/09/2024,Example Holdings,EXM,Dividend,$10.00,$4.29,$0.00
+"""
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "provider": "Superhero",
+        "mapping": {
+            "occurred_at": "Payment Date",
+            "asset_name": "Security",
+            "asset_symbol": "Security Code",
+            "activity_type": "Transaction Type",
+            "gross_amount": "Gross Amount",
+            "franking_credit": "Franking Credit",
+            "tax_amount": "Tax",
+        },
+        "date_format": "DD-MM-YYYY",
+    })
+
+    assert parsed.headers[0] == "Payment Date"
+    assert parsed.rows[0]["row_number"] == 5
+    assert parsed.batch.records[0].activities[0].activity_type == "dividend"
+
+
+def test_superhero_overlapping_transaction_reports_are_idempotent(
+    db_session, investment_account
+):
+    user, account = investment_account
+    content = (
+        Path(__file__).parent / "fixtures" / "superhero_transaction_statement_aus.csv"
+    ).read_text()
+    options = {
+        **_options(content),
+        "provider": "Superhero",
+        "mapping": {},
+    }
+
+    first = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=options,
+    )
+    second = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=options,
+    )
+
+    assert first["inserted_activities"] == 2
+    assert second["inserted_activities"] == 0
+    assert second["skipped_duplicate_records"] == 2
+    run = db_session.query(InvestmentIngestionRun).filter_by(id=first["run_id"]).one()
+    assert any("Superhero Transaction Statement preset applied" in item for item in run.warnings)
 
 
 def test_parser_preserves_crypto_market_value_and_fee_provenance():

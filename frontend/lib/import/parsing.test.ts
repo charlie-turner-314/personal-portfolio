@@ -3,6 +3,7 @@ import {
   detectCsvDelimiter,
   inferAmountFormat,
   parseDelimitedText,
+  parseDelimitedTextFromMatchingHeader,
   parseLocalizedNumber,
 } from "@/lib/import/parsing";
 
@@ -21,6 +22,18 @@ describe("import parsing helpers", () => {
         ["2026-03-01", "1.234,56", "Groceries"],
         ["2026-03-02", "-12,34", "Coffee"],
       ],
+    });
+  });
+
+  it("finds a matching header after provider report preamble rows", () => {
+    const content = "Report,Transaction Statement (AUS)\nAccount Name,Example\n\nTransaction Date,Security Code,Transaction Type\n14/09/2021,ABC,Buy\n";
+    expect(parseDelimitedTextFromMatchingHeader(
+      content,
+      ",",
+      (cells) => cells.includes("Transaction Date") && cells.includes("Security Code"),
+    )).toEqual({
+      headers: ["Transaction Date", "Security Code", "Transaction Type"],
+      rows: [["14/09/2021", "ABC", "Buy"]],
     });
   });
 

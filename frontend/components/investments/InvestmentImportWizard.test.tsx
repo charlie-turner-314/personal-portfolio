@@ -19,10 +19,22 @@ vi.mock("@/lib/api/investments", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/transactions/csv-upload-dropzone", () => ({
   CsvUploadDropzone: ({ onFileSelect }: { onFileSelect: (file: File, content: string) => void }) => (
-    <button type="button" onClick={() => onFileSelect(
-      new File(["Reference,Date,Type,Symbol,Quantity,Price,Currency\nT1,2025-01-01,Buy,VAS,2,100,AUD\n"], "statement.csv"),
-      "Reference,Date,Type,Symbol,Quantity,Price,Currency\nT1,2025-01-01,Buy,VAS,2,100,AUD\n",
-    )}>Choose investment CSV</button>
+    <>
+      <button type="button" onClick={() => onFileSelect(
+        new File(["Reference,Date,Type,Symbol,Quantity,Price,Currency\nT1,2025-01-01,Buy,VAS,2,100,AUD\n"], "statement.csv"),
+        "Reference,Date,Type,Symbol,Quantity,Price,Currency\nT1,2025-01-01,Buy,VAS,2,100,AUD\n",
+      )}>Choose investment CSV</button>
+      <button type="button" onClick={() => {
+        const content = [
+          "Entity Name,Synthetic Investor",
+          "Account Name,Synthetic Superhero Account",
+          "Transaction Statement (AUS)",
+          "Transaction Date,Settlement Date,Security,Security Code,Transaction Type,Quantity,Average Price,Net Amount,Brokerage,GST,Tax",
+          "14/09/2024,16/09/2024,Example Holdings,EXM,Buy,50,$6.47,-$323.50,$5.00,$0.45,$0.00",
+        ].join("\n");
+        onFileSelect(new File([content], "superhero.csv"), content);
+      }}>Choose Superhero CSV</button>
+    </>
   ),
 }));
 
@@ -107,7 +119,7 @@ describe("InvestmentImportWizard", () => {
     await waitFor(() => expect(mocks.revertInvestmentImport).toHaveBeenCalledWith("run-1"));
   });
 
-  it("shows only documented Superhero export guidance", async () => {
+  it("shows documented Superhero export guidance and preset scope", async () => {
     render(<InvestmentImportWizard accounts={accounts} />);
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "Superhero" } });
 
@@ -115,6 +127,31 @@ describe("InvestmentImportWizard", () => {
     expect(screen.getByText(/Transaction Statement for buys and sells/)).toBeTruthy();
     expect(screen.getByText(/Full Portfolio Report does not include AMIT\/AMMA/)).toBeTruthy();
     expect(screen.getByText(/does not offer DRP/)).toBeTruthy();
+    expect(screen.getByText(/combines Brokerage with GST/)).toBeTruthy();
+  });
+
+  it("finds and maps a Superhero transaction header below its report preamble", async () => {
+    render(<InvestmentImportWizard accounts={accounts} />);
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "Superhero" } });
+    fireEvent.click(screen.getByRole("button", { name: "Choose Superhero CSV" }));
+
+    const previewButton = screen.getByRole("button", { name: /preview import/i });
+    await waitFor(() => expect(previewButton).toHaveProperty("disabled", false));
+    fireEvent.click(previewButton);
+
+    await waitFor(() => expect(mocks.previewInvestmentImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "Superhero",
+        date_format: "DD-MM-YYYY",
+        amount_format: "DOT_DECIMAL",
+        mapping: expect.objectContaining({
+          occurred_at: "Transaction Date",
+          activity_type: "Transaction Type",
+          asset_symbol: "Security Code",
+          fee_amount: "Brokerage",
+        }),
+      }),
+    ));
   });
 
   it("shows the Crypto.com App preset scope and configures crypto import defaults", async () => {

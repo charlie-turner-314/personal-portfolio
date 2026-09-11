@@ -61,6 +61,27 @@ export function parseDelimitedText(fileContent: string, delimiter: CsvDelimiter)
   return { headers, rows };
 }
 
+export function parseDelimitedTextFromMatchingHeader(
+  fileContent: string,
+  delimiter: CsvDelimiter,
+  isHeader: (cells: string[]) => boolean,
+  maxHeaderRows = 25,
+): ParsedDelimitedText {
+  const normalized = normalizeLineEndings(fileContent);
+  const lines = normalized
+    .split("\n")
+    .filter((line) => line.trim().length > 0);
+  const parsedRows = lines.map((line) => parseDelimitedLine(line, delimiter));
+  const headerIndex = parsedRows
+    .slice(0, maxHeaderRows)
+    .findIndex((row) => isHeader(row));
+  if (headerIndex < 0) return parseDelimitedText(fileContent, delimiter);
+  return {
+    headers: parsedRows[headerIndex],
+    rows: parsedRows.slice(headerIndex + 1),
+  };
+}
+
 export function inferAmountFormat(samples: Array<string | null | undefined>): InferredAmountFormat {
   let dotEvidence = 0;
   let commaEvidence = 0;
