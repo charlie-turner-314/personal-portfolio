@@ -595,6 +595,112 @@ def test_exact_hash_wins_over_fallback_and_revert_restores_pending_state(
     assert _holding(db_session, source, "ETH").quantity == Decimal("3.00000000")
 
 
+def test_exact_hash_pair_does_not_make_a_later_unique_fallback_pair_ambiguous(
+    db_session, crypto_accounts
+):
+    user, first_source, first_destination = crypto_accounts
+    second_source = Account(
+        user_id=user.id,
+        name="Second Source Wallet",
+        account_type="investment_brokerage",
+        currency="AUD",
+        is_active=True,
+    )
+    second_destination = Account(
+        user_id=user.id,
+        name="Second Destination Wallet",
+        account_type="investment_brokerage",
+        currency="AUD",
+        is_active=True,
+    )
+    db_session.add_all([second_source, second_destination])
+    db_session.flush()
+    bought_at = datetime(2025, 5, 1, 9)
+    moved_at = datetime(2025, 5, 2, 9)
+    _apply(
+        db_session,
+        user=user,
+        account=first_source,
+        reference="exact-first-buy",
+        activity=_activity("buy", bought_at, "ETH", quantity="1", price="2000"),
+    )
+    _apply(
+        db_session,
+        user=user,
+        account=second_source,
+        reference="fallback-second-buy",
+        activity=_activity("buy", bought_at, "ETH", quantity="1", price="2000"),
+    )
+    _apply(
+        db_session,
+        user=user,
+        account=first_source,
+        reference="exact-first-out",
+        activity=_activity(
+            "withdrawal",
+            moved_at,
+            "ETH",
+            quantity="1",
+            price=None,
+            currency=None,
+            external_group_id="first-chain-hash",
+        ),
+    )
+    _apply(
+        db_session,
+        user=user,
+        account=first_destination,
+        reference="exact-first-in",
+        activity=_activity(
+            "deposit",
+            moved_at + timedelta(minutes=5),
+            "ETH",
+            quantity="1",
+            price=None,
+            currency=None,
+            external_group_id="first-chain-hash",
+        ),
+    )
+    _apply(
+        db_session,
+        user=user,
+        account=second_source,
+        reference="fallback-second-out",
+        activity=_activity(
+            "withdrawal",
+            moved_at + timedelta(minutes=10),
+            "ETH",
+            quantity="1",
+            price=None,
+            currency=None,
+        ),
+    )
+    _apply(
+        db_session,
+        user=user,
+        account=second_destination,
+        reference="fallback-second-in",
+        activity=_activity(
+            "deposit",
+            moved_at + timedelta(minutes=15),
+            "ETH",
+            quantity="1",
+            price=None,
+            currency=None,
+        ),
+    )
+
+    transfers = db_session.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.user_id == user.id,
+    ).all()
+    assert len(transfers) == 4
+    assert {item.status for item in transfers} == {"matched"}
+    assert {item.match_method for item in transfers} == {
+        "transaction_hash",
+        "quantity_time_window",
+    }
+
+
 def test_reverting_source_history_removes_dependent_transfer_projection(
     db_session, crypto_accounts
 ):

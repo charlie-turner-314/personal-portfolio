@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
@@ -35,6 +36,8 @@ from app.services.investment_activity_service import (
     CanonicalActivityInput,
     InvestmentActivityBatch,
     SourceRecordEnvelope,
+    apply_batch,
+    revert_run,
 )
 from app.services.investment_sync_service import InvestmentSyncService
 
@@ -186,6 +189,62 @@ def test_initial_and_incremental_coinspot_sync_are_idempotent(db_session):
         assert Decimal(valuation.value_user_currency) == Decimal("100")
         balance = db_session.query(AccountBalance).filter_by(account_id=account.id).one()
         assert Decimal(balance.balance_in_account_currency) == Decimal("100")
+    finally:
+        _cleanup(db_session, user_id=user_id, symbol=symbol)
+
+
+def test_sync_ignores_reverted_csv_activity_for_dedupe_and_balance_reconciliation(
+    db_session,
+):
+    suffix = uuid4().hex[:8].upper()
+    user_id = f"coinspot-reverted-{suffix.lower()}"
+    symbol = f"CR{suffix}"
+    account, connection = _seed_connection(db_session, user_id=user_id, symbol=symbol)
+    adapter = _CoinSpotFixtureAdapter(symbol)
+    service = InvestmentSyncService(
+        db=db_session,
+        fx=_AudFx(),
+        coinspot_adapter_factory=lambda _creds: adapter,
+    )
+    try:
+        source = _history(symbol, date(2026, 1, 1), date(2026, 1, 10)).batch
+        csv_run = apply_batch(
+            db_session,
+            user_id=user_id,
+            account_id=account.id,
+            batch=InvestmentActivityBatch(
+                provider=source.provider,
+                ingestion_type="csv_import",
+                normalization_version=source.normalization_version,
+                records=tuple(
+                    replace(
+                        record,
+                        provider_record_id=f"csv-{record.provider_record_id}",
+                        raw_payload={"csv_reference": record.provider_record_id},
+                    )
+                    for record in source.records
+                ),
+                source_name="CoinSpot historical export.csv",
+            ),
+        )
+        revert_run(
+            db_session,
+            user_id=user_id,
+            run_id=csv_run["run_id"],
+        )
+
+        service.sync_account(account.id, on=date(2026, 1, 10))
+
+        db_session.refresh(connection)
+        assert connection.last_sync_status == "ok"
+        assert connection.health_details["balances_reconciled"] is True
+        assert connection.health_details["inserted_records"] == 2
+        assert connection.health_details["skipped_cross_source_records"] == 0
+        active = db_session.query(InvestmentActivity).filter(
+            InvestmentActivity.account_id == account.id,
+            InvestmentActivity.applied_at.is_not(None),
+        ).all()
+        assert len(active) == 2
     finally:
         _cleanup(db_session, user_id=user_id, symbol=symbol)
 

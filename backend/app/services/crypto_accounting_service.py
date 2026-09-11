@@ -25,6 +25,7 @@ from app.models import (
     InvestmentIncomeEvent,
 )
 from app.services.broker_trade_service import _recompute_holding
+from app.services.investment_lock_service import acquire_user_ingestion_lock
 from app.services.pnl_service import Trade, compute_fifo
 
 
@@ -862,6 +863,7 @@ def rebuild_owned_crypto_transfers(db: Session, *, user_id: str) -> dict[str, in
         outbound.status = inbound.status = "matched"
         outbound.match_method = inbound.match_method = method
         outbound.reason = inbound.reason = "Matched between owned accounts; original lot basis is preserved."
+        used_outgoing.add(outbound.id)
         used_incoming.add(inbound.id)
         affected.update(pair_affected)
         matched += 1
@@ -926,6 +928,7 @@ def confirm_owned_crypto_transfer(
     candidate_transfer_id: str | UUID,
     commit: bool = True,
 ) -> InvestmentCryptoTransfer:
+    acquire_user_ingestion_lock(db, user_id=user_id)
     first = db.query(InvestmentCryptoTransfer).filter(
         InvestmentCryptoTransfer.id == transfer_id,
         InvestmentCryptoTransfer.user_id == user_id,

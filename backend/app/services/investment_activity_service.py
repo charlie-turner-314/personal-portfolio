@@ -35,6 +35,7 @@ from app.models import (
     Transaction,
 )
 from app.services.broker_trade_service import _recompute_holding
+from app.services.investment_lock_service import acquire_user_ingestion_lock
 
 
 NORMALIZATION_VERSION = "investment-activity-v1"
@@ -643,6 +644,7 @@ def _cross_source_duplicate_source_id(
         )
         .filter(
             InvestmentActivity.account_id == account_id,
+            InvestmentActivity.applied_at.is_not(None),
             InvestmentActivity.occurred_at >= window_start,
             InvestmentActivity.occurred_at <= window_end,
         )
@@ -821,6 +823,7 @@ def _reconcile_cash_transfer(
         InvestmentActivity.asset_type == "cash",
         InvestmentActivity.asset_symbol == activity.asset_symbol,
         InvestmentActivity.quantity == amount,
+        InvestmentActivity.applied_at.is_not(None),
         InvestmentActivity.occurred_at >= start,
         InvestmentActivity.occurred_at <= end,
     ).order_by(InvestmentActivity.occurred_at, InvestmentActivity.id).all()
@@ -910,6 +913,44 @@ def _reconcile_cash_transfer(
     db.flush()
 
 
+def _reopen_cash_matches_for_reverted_activities(
+    db: Session,
+    *,
+    user_id: str,
+    activity_ids: set[UUID],
+) -> None:
+    """Remove stale links to audit-only activities retained by a reversal."""
+    if not activity_ids:
+        return
+    reverted_ids = {str(item) for item in activity_ids}
+    items = db.query(InvestmentReconciliationItem).filter(
+        InvestmentReconciliationItem.user_id == user_id,
+        InvestmentReconciliationItem.kind == "cash_match",
+        InvestmentReconciliationItem.source_activity_id.notin_(activity_ids),
+    ).all()
+    for item in items:
+        details = dict(item.details or {})
+        candidates = [
+            str(candidate)
+            for candidate in details.get("candidate_activity_ids", [])
+            if str(candidate) not in reverted_ids
+        ]
+        if candidates != details.get("candidate_activity_ids", []):
+            details["candidate_activity_ids"] = candidates
+            item.details = details
+
+        resolution = item.resolution or {}
+        if str(resolution.get("activity_id") or "") not in reverted_ids:
+            continue
+        item.status = "pending"
+        item.reason = (
+            "A previously matched investment-account cash movement was reverted; "
+            "review the remaining candidates."
+        )
+        item.resolution = None
+        item.resolved_at = None
+
+
 def apply_batch(
     db: Session,
     *,
@@ -935,6 +976,10 @@ def apply_batch(
         raise ActivityApplicationError(f"account is not an investment account: {account.account_type}")
 
     validated = validate_batch(batch, account_id=account.id)
+    # Transfer pairing and reconciliation can touch more than the target
+    # account, so account-local locks are insufficient. The transaction lock
+    # is acquired after provider I/O/validation and released on commit/rollback.
+    acquire_user_ingestion_lock(db, user_id=user_id)
     run = InvestmentIngestionRun(
         user_id=user_id,
         account_id=account.id,
@@ -954,6 +999,7 @@ def apply_batch(
     inserted_records = 0
     skipped_records = 0
     cross_source_duplicates = 0
+    claimed_cross_source_duplicate_ids: set[UUID] = set()
     inserted_activities = 0
     trade_activities: list[tuple[InvestmentActivity, str]] = []
     income_activities: list[tuple[InvestmentActivity, str]] = []
@@ -982,6 +1028,11 @@ def apply_batch(
                     ingestion_type=validated.ingestion_type,
                     record=record,
                 )
+                # One existing economic row can explain at most one row in a
+                # new batch. Preserve repeated fills rather than allowing the
+                # same CSV row to suppress every equivalent API observation.
+                if duplicate_source_id in claimed_cross_source_duplicate_ids:
+                    duplicate_source_id = None
                 source_metadata = sanitize_source_payload(record.metadata)
                 if duplicate_source_id is not None:
                     source_metadata = {
@@ -1018,6 +1069,7 @@ def apply_batch(
                     skipped_records += 1
                     continue
                 if duplicate_source_id is not None:
+                    claimed_cross_source_duplicate_ids.add(duplicate_source_id)
                     skipped_records += 1
                     cross_source_duplicates += 1
                     continue
@@ -1220,6 +1272,7 @@ def revert_run(
     if run.status not in {"completed", "partial"}:
         raise ActivityApplicationError(f"run cannot be reverted while its status is {run.status!r}")
 
+    acquire_user_ingestion_lock(db, user_id=user_id)
     activities = (
         db.query(InvestmentActivity)
         .filter(InvestmentActivity.run_id == run.id, InvestmentActivity.user_id == user_id)
@@ -1309,6 +1362,11 @@ def revert_run(
                 activity.income_event_id = None
                 activity.broker_trade_id = None
                 activity.applied_at = None
+            _reopen_cash_matches_for_reverted_activities(
+                db,
+                user_id=user_id,
+                activity_ids=activity_ids,
+            )
             for item in reconciliation_items:
                 db.delete(item)
             for item in crypto_transfers:

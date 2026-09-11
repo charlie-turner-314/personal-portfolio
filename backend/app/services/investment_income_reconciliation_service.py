@@ -25,6 +25,7 @@ from app.models import (
     Transaction,
 )
 from app.services.broker_trade_service import _recompute_holding
+from app.services.investment_lock_service import acquire_user_ingestion_lock
 from app.services.pnl_service import (
     CostBaseAdjustment,
     CostBaseAdjustmentError,
@@ -611,6 +612,7 @@ def resolve_reconciliation_item(
     transaction_id: str | UUID | None = None,
     activity_id: str | UUID | None = None,
 ) -> InvestmentReconciliationItem:
+    acquire_user_ingestion_lock(db, user_id=user_id)
     item = db.query(InvestmentReconciliationItem).filter(
         InvestmentReconciliationItem.id == item_id,
         InvestmentReconciliationItem.user_id == user_id,
@@ -644,6 +646,7 @@ def resolve_reconciliation_item(
             counterpart_activity = db.query(InvestmentActivity).filter(
                 InvestmentActivity.id == activity_id,
                 InvestmentActivity.user_id == user_id,
+                InvestmentActivity.applied_at.is_not(None),
             ).one_or_none()
             if counterpart_activity is None:
                 raise ValueError("owned investment activity is required")

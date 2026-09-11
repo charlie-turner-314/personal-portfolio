@@ -26,6 +26,7 @@ from app.services.investment_activity_service import (
     InvestmentActivityBatch,
     SourceRecordEnvelope,
     apply_batch,
+    revert_run,
     source_record_view,
 )
 
@@ -223,6 +224,54 @@ def test_later_api_source_does_not_duplicate_equivalent_csv_activity(
     )
 
 
+def test_cross_source_dedupe_claims_an_existing_record_only_once_per_batch(
+    db_session, investment_account
+):
+    user, account = investment_account
+    csv_record = _batch(provider="statement_csv").records[0]
+    csv = InvestmentActivityBatch(
+        provider="statement_csv",
+        ingestion_type="csv_import",
+        source_name="statement.csv",
+        records=(csv_record,),
+    )
+    api_records = tuple(
+        SourceRecordEnvelope(
+            occurred_at=csv_record.occurred_at + timedelta(seconds=30),
+            provider_record_id=f"api-fill-{index}",
+            raw_payload={"api_id": f"api-fill-{index}"},
+            activities=tuple(
+                service.replace(
+                    activity,
+                    occurred_at=activity.occurred_at + timedelta(seconds=30),
+                )
+                for activity in csv_record.activities
+            ),
+        )
+        for index in range(2)
+    )
+    api = InvestmentActivityBatch(
+        provider="statement_csv",
+        ingestion_type="api_sync",
+        source_name="automatic sync",
+        records=api_records,
+    )
+
+    apply_batch(db_session, user_id=user.id, account_id=account.id, batch=csv)
+    result = apply_batch(db_session, user_id=user.id, account_id=account.id, batch=api)
+
+    assert result["inserted_records"] == 1
+    assert result["inserted_activities"] == 1
+    assert result["skipped_duplicate_records"] == 1
+    assert result["skipped_cross_source_records"] == 1
+    assert db_session.query(BrokerTrade).filter_by(account_id=account.id).count() == 2
+    holding = db_session.query(Holding).filter_by(
+        account_id=account.id,
+        symbol="VAS",
+    ).one()
+    assert holding.quantity == Decimal("20.00000000")
+
+
 def test_brokerage_cash_deposit_reconciles_to_owned_bank_debit(
     db_session, investment_account
 ):
@@ -274,6 +323,77 @@ def test_brokerage_cash_deposit_reconciles_to_owned_bank_debit(
     assert item.details["workflow"] == "investment_cash_transfer"
     assert item.details["confidence"] == "high"
     assert item.resolution["transaction_id"] == str(debit.id)
+
+
+def test_reverting_one_cash_transfer_side_reopens_the_surviving_match(
+    db_session, investment_account
+):
+    user, source = investment_account
+    destination = Account(
+        user_id=user.id,
+        name="Second Investment Account",
+        account_type="investment_manual",
+        currency="AUD",
+        is_active=True,
+    )
+    db_session.add(destination)
+    db_session.flush()
+    moved_at = datetime(2025, 8, 4, 10)
+
+    def cash_batch(reference: str, activity_type: str, direction: str):
+        return InvestmentActivityBatch(
+            provider="cash_transfer_csv",
+            ingestion_type="csv_import",
+            records=(SourceRecordEnvelope(
+                occurred_at=moved_at,
+                provider_record_id=reference,
+                raw_payload={"reference": reference},
+                activities=(CanonicalActivityInput(
+                    activity_type=activity_type,
+                    occurred_at=moved_at,
+                    asset_symbol="AUD",
+                    asset_type="cash",
+                    quantity="1000",
+                    currency="AUD",
+                    direction=direction,
+                ),),
+            ),),
+        )
+
+    apply_batch(
+        db_session,
+        user_id=user.id,
+        account_id=source.id,
+        batch=cash_batch("cash-out", "withdrawal", "out"),
+    )
+    inbound_run = apply_batch(
+        db_session,
+        user_id=user.id,
+        account_id=destination.id,
+        batch=cash_batch("cash-in", "deposit", "in"),
+    )
+    surviving_activity = db_session.query(InvestmentActivity).filter_by(
+        account_id=source.id,
+        activity_type="withdrawal",
+    ).one()
+    surviving_item = db_session.query(InvestmentReconciliationItem).filter_by(
+        source_activity_id=surviving_activity.id,
+        kind="cash_match",
+    ).one()
+    assert surviving_item.status == "resolved"
+
+    revert_run(
+        db_session,
+        user_id=user.id,
+        run_id=inbound_run["run_id"],
+    )
+
+    db_session.refresh(surviving_item)
+    assert surviving_item.status == "pending"
+    assert surviving_item.resolution is None
+    assert surviving_item.resolved_at is None
+    assert surviving_item.details["candidate_activity_ids"] == []
+    assert "reverted" in surviving_item.reason.lower()
 
 
 def test_downstream_failure_rolls_back_all_economic_and_source_records(

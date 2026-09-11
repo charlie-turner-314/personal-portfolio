@@ -679,6 +679,7 @@ class InvestmentSyncService:
 
         activities = self.db.query(InvestmentActivity).filter(
             InvestmentActivity.account_id == account_id,
+            InvestmentActivity.applied_at.is_not(None),
         ).order_by(InvestmentActivity.occurred_at, InvestmentActivity.id).all()
         for activity in activities:
             quantity = Decimal(activity.quantity or 0)
