@@ -14,7 +14,9 @@ from app.models import (
     InvestmentActivity,
     InvestmentIncomeEvent,
     InvestmentIngestionRun,
+    InvestmentReconciliationItem,
     InvestmentSourceRecord,
+    Transaction,
     User,
 )
 from app.services import investment_activity_service as service
@@ -175,6 +177,103 @@ def test_reimport_is_deterministically_idempotent(db_session, investment_account
     assert db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).count() == 1
     assert db_session.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.account_id == account.id).count() == 1
     assert db_session.query(InvestmentIngestionRun).filter(InvestmentIngestionRun.account_id == account.id).count() == 2
+
+
+def test_later_api_source_does_not_duplicate_equivalent_csv_activity(
+    db_session, investment_account
+):
+    user, account = investment_account
+    csv = _batch(provider="statement_csv")
+    api = InvestmentActivityBatch(
+        provider="statement_csv",
+        ingestion_type="api_sync",
+        source_name="automatic sync",
+        records=tuple(
+            SourceRecordEnvelope(
+                occurred_at=record.occurred_at + timedelta(seconds=30),
+                provider_record_id=f"api-{record.provider_record_id}",
+                raw_payload={"api_id": f"api-{record.provider_record_id}"},
+                activities=tuple(
+                    service.replace(activity, occurred_at=activity.occurred_at + timedelta(seconds=30))
+                    for activity in record.activities
+                ),
+            )
+            for record in csv.records
+        ),
+    )
+
+    first = apply_batch(db_session, user_id=user.id, account_id=account.id, batch=csv)
+    second = apply_batch(db_session, user_id=user.id, account_id=account.id, batch=api)
+
+    assert first["inserted_activities"] == 2
+    assert second["inserted_activities"] == 0
+    assert second["skipped_duplicate_records"] == 2
+    assert second["skipped_cross_source_records"] == 2
+    assert db_session.query(InvestmentActivity).filter_by(account_id=account.id).count() == 2
+    observations = [
+        item for item in db_session.query(InvestmentSourceRecord).filter_by(
+            account_id=account.id, provider="statement_csv"
+        ).all()
+        if "cross_source_duplicate_of_source_record_id" in item.source_metadata
+    ]
+    assert len(observations) == 2
+    assert all(
+        item.source_metadata["cross_source_duplicate_of_source_record_id"]
+        for item in observations
+    )
+
+
+def test_brokerage_cash_deposit_reconciles_to_owned_bank_debit(
+    db_session, investment_account
+):
+    user, investment = investment_account
+    bank = Account(
+        user_id=user.id,
+        name="Owned Bank",
+        account_type="checking",
+        currency="AUD",
+        is_active=True,
+    )
+    debit = Transaction(
+        user_id=user.id,
+        account=bank,
+        external_id="broker-funding",
+        transaction_type="debit",
+        amount=Decimal("-1000"),
+        currency="AUD",
+        booked_at=datetime(2025, 8, 4, 9),
+        pending=False,
+    )
+    db_session.add_all([bank, debit])
+    db_session.flush()
+    batch = InvestmentActivityBatch(
+        provider="broker_cash_csv",
+        ingestion_type="csv_import",
+        records=(SourceRecordEnvelope(
+            occurred_at=datetime(2025, 8, 4, 10),
+            provider_record_id="deposit-1",
+            raw_payload={"reference": "deposit-1"},
+            activities=(CanonicalActivityInput(
+                activity_type="deposit",
+                occurred_at=datetime(2025, 8, 4, 10),
+                asset_symbol="AUD",
+                asset_type="cash",
+                quantity="1000",
+                currency="AUD",
+                direction="in",
+            ),),
+        ),),
+    )
+
+    apply_batch(db_session, user_id=user.id, account_id=investment.id, batch=batch)
+
+    item = db_session.query(InvestmentReconciliationItem).filter_by(
+        account_id=investment.id
+    ).one()
+    assert item.status == "resolved"
+    assert item.details["workflow"] == "investment_cash_transfer"
+    assert item.details["confidence"] == "high"
+    assert item.resolution["transaction_id"] == str(debit.id)
 
 
 def test_downstream_failure_rolls_back_all_economic_and_source_records(

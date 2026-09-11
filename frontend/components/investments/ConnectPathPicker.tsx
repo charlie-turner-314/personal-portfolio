@@ -119,7 +119,7 @@ export function ConnectPathPicker({
         {picked === "manual" && (
           <ManualForm accounts={accounts} onCancel={() => setPicked(null)} />
         )}
-        {picked === "broker" && <BrokerForm onCancel={() => setPicked(null)} />}
+        {picked === "broker" && <BrokerForm accounts={accounts} onCancel={() => setPicked(null)} />}
         {picked === "import" && <InvestmentImportWizard accounts={accounts} />}
       </div>
     </div>

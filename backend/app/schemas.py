@@ -286,6 +286,7 @@ from typing import Literal
 
 class BrokerConnectionCreate(BaseModel):
     provider: Literal["ibkr_flex", "coinspot", "binance", "crypto_com_exchange"]
+    account_id: Optional[UUID] = None
     flex_token: Optional[str] = None
     query_id_positions: Optional[str] = None
     query_id_trades: Optional[str] = None
@@ -641,6 +642,11 @@ class InvestmentReconciliationResolve(BaseModel):
     action: str
     income_event_id: Optional[UUID] = None
     transaction_id: Optional[UUID] = None
+    activity_id: Optional[UUID] = None
+
+
+class InvestmentCryptoTransferResolve(BaseModel):
+    candidate_transfer_id: UUID
 
 
 class SymbolSearchResult(BaseModel):

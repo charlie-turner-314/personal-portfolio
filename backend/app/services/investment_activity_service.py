@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import UUID
@@ -31,6 +32,7 @@ from app.models import (
     InvestmentIngestionRun,
     InvestmentReconciliationItem,
     InvestmentSourceRecord,
+    Transaction,
 )
 from app.services.broker_trade_service import _recompute_holding
 
@@ -578,6 +580,88 @@ def _canonical_activity_payload(activity: CanonicalActivityInput) -> dict[str, A
     }
 
 
+def _economic_activity_signature(activity: CanonicalActivityInput | InvestmentActivity) -> tuple:
+    """Provider-neutral fields used for conservative cross-source deduplication.
+
+    Provider metadata, audit warnings, and AUD enrichment are intentionally not
+    part of the signature: a later API sync often has different provenance or
+    valuation detail than an earlier CSV export. Monetary and fee terms remain
+    exact so two genuinely separate nearby executions are not merged.
+    """
+    return (
+        activity.activity_type,
+        activity.asset_symbol,
+        activity.asset_type,
+        _decimal_text(Decimal(activity.quantity)) if activity.quantity is not None else None,
+        _decimal_text(Decimal(activity.price)) if activity.price is not None else None,
+        _decimal_text(Decimal(activity.gross_amount)) if activity.gross_amount is not None else None,
+        _decimal_text(Decimal(activity.net_amount)) if activity.net_amount is not None else None,
+        activity.currency,
+        _decimal_text(Decimal(activity.fee_amount)) if activity.fee_amount is not None else None,
+        activity.fee_currency,
+        _decimal_text(Decimal(activity.tax_amount)) if activity.tax_amount is not None else None,
+        activity.tax_currency,
+        activity.counter_asset_symbol,
+        _decimal_text(Decimal(activity.counter_quantity))
+        if activity.counter_quantity is not None else None,
+        activity.direction,
+    )
+
+
+def _cross_source_duplicate_source_id(
+    db: Session,
+    *,
+    account_id: UUID,
+    provider: str,
+    ingestion_type: str,
+    record: SourceRecordEnvelope,
+) -> UUID | None:
+    """Return one unambiguous equivalent row from another source channel.
+
+    Five minutes accommodates timestamp rounding between statement exports and
+    APIs, including a CSV and API that use the same provider name. If more than
+    one source row is equivalent, nothing is auto-suppressed: retaining a
+    possible duplicate is safer than deleting a real repeated fill.
+    """
+    if any(
+        item.metadata.get("is_annual_statement")
+        or item.metadata.get("income_data_kind") == "annual_statement"
+        for item in record.activities
+    ):
+        return None
+    window_start = record.occurred_at - timedelta(minutes=5)
+    window_end = record.occurred_at + timedelta(minutes=5)
+    rows = (
+        db.query(InvestmentActivity, InvestmentSourceRecord, InvestmentIngestionRun)
+        .join(
+            InvestmentSourceRecord,
+            InvestmentSourceRecord.id == InvestmentActivity.source_record_id,
+        )
+        .join(
+            InvestmentIngestionRun,
+            InvestmentIngestionRun.id == InvestmentActivity.run_id,
+        )
+        .filter(
+            InvestmentActivity.account_id == account_id,
+            InvestmentActivity.occurred_at >= window_start,
+            InvestmentActivity.occurred_at <= window_end,
+        )
+        .all()
+    )
+    by_source: dict[UUID, list[InvestmentActivity]] = {}
+    for activity, source, run in rows:
+        if source.provider == provider and run.ingestion_type == ingestion_type:
+            continue
+        by_source.setdefault(source.id, []).append(activity)
+    incoming = Counter(_economic_activity_signature(item) for item in record.activities)
+    matches = [
+        source_id
+        for source_id, activities in by_source.items()
+        if Counter(_economic_activity_signature(item) for item in activities) == incoming
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _instrument_type(asset_type: str) -> str:
     if asset_type == "fund":
         return "etf"
@@ -696,9 +780,134 @@ def _apply_income_activity(
         )
 
 
-def _safe_error(exc: Exception) -> str:
+def safe_error_message(exc: Exception) -> str:
     rendered = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", str(exc))
     return rendered[:2000]
+
+
+def _cash_transfer_direction(activity: InvestmentActivity) -> str | None:
+    if activity.activity_type == "deposit":
+        return "in"
+    if activity.activity_type == "withdrawal":
+        return "out"
+    return activity.direction if activity.direction in {"in", "out"} else None
+
+
+def _reconcile_cash_transfer(
+    db: Session,
+    *,
+    account: Account,
+    activity: InvestmentActivity,
+) -> None:
+    """Match brokerage cash funding to owned accounts without moving money again."""
+    direction = _cash_transfer_direction(activity)
+    amount = Decimal(
+        activity.quantity
+        or activity.net_amount
+        or activity.gross_amount
+        or 0
+    )
+    if direction is None or amount <= 0:
+        return
+    currency = (activity.currency or activity.asset_symbol).upper()
+    start = activity.occurred_at - timedelta(days=7)
+    end = activity.occurred_at + timedelta(days=7)
+    opposite_type = "withdrawal" if direction == "in" else "deposit"
+    opposite_direction = "out" if direction == "in" else "in"
+    activity_candidates = db.query(InvestmentActivity).filter(
+        InvestmentActivity.user_id == account.user_id,
+        InvestmentActivity.id != activity.id,
+        InvestmentActivity.account_id != account.id,
+        InvestmentActivity.asset_type == "cash",
+        InvestmentActivity.asset_symbol == activity.asset_symbol,
+        InvestmentActivity.quantity == amount,
+        InvestmentActivity.occurred_at >= start,
+        InvestmentActivity.occurred_at <= end,
+    ).order_by(InvestmentActivity.occurred_at, InvestmentActivity.id).all()
+    activity_candidates = [
+        item for item in activity_candidates
+        if item.activity_type == opposite_type
+        or (item.activity_type == "transfer" and item.direction == opposite_direction)
+    ]
+    expected_transaction_type = "debit" if direction == "in" else "credit"
+    expected_amount = -amount if direction == "in" else amount
+    transaction_candidates = db.query(Transaction).filter(
+        Transaction.user_id == account.user_id,
+        Transaction.account_id != account.id,
+        Transaction.transaction_type == expected_transaction_type,
+        Transaction.currency == currency,
+        Transaction.amount == expected_amount,
+        Transaction.booked_at >= start,
+        Transaction.booked_at <= end,
+        Transaction.pending.is_(False),
+    ).order_by(Transaction.booked_at, Transaction.id).all()
+
+    candidate_count = len(activity_candidates) + len(transaction_candidates)
+    confidence = "high" if candidate_count == 1 and (
+        abs(
+            (
+                activity_candidates[0].occurred_at
+                if activity_candidates else transaction_candidates[0].booked_at
+            ) - activity.occurred_at
+        ) <= timedelta(days=1)
+    ) else "medium" if candidate_count else None
+    item = InvestmentReconciliationItem(
+        user_id=account.user_id,
+        account_id=account.id,
+        source_activity_id=activity.id,
+        kind="cash_match",
+        status="resolved" if candidate_count == 1 else "pending",
+        reason=(
+            "Matched one owned-account cash movement."
+            if candidate_count == 1
+            else "No owned cash movement matches this brokerage transfer."
+            if candidate_count == 0
+            else "Multiple owned cash movements could match this brokerage transfer."
+        ),
+        candidate_income_event_ids=[],
+        candidate_transaction_ids=[str(item.id) for item in transaction_candidates],
+        details={
+            "workflow": "investment_cash_transfer",
+            "direction": direction,
+            "amount": format(amount, "f"),
+            "currency": currency,
+            "confidence": confidence,
+            "candidate_activity_ids": [str(item.id) for item in activity_candidates],
+        },
+        resolution=(
+            {
+                "action": (
+                    "auto_link_activity" if activity_candidates else "auto_link_transaction"
+                ),
+                "activity_id": (
+                    str(activity_candidates[0].id) if activity_candidates else None
+                ),
+                "transaction_id": (
+                    str(transaction_candidates[0].id) if transaction_candidates else None
+                ),
+                "confidence": confidence,
+            }
+            if candidate_count == 1 else None
+        ),
+        resolved_at=datetime.utcnow() if candidate_count == 1 else None,
+    )
+    db.add(item)
+    if len(activity_candidates) == 1 and not transaction_candidates:
+        counterpart = db.query(InvestmentReconciliationItem).filter(
+            InvestmentReconciliationItem.source_activity_id == activity_candidates[0].id,
+            InvestmentReconciliationItem.kind == "cash_match",
+            InvestmentReconciliationItem.status == "pending",
+        ).one_or_none()
+        if counterpart is not None:
+            counterpart.status = "resolved"
+            counterpart.reason = "Matched one owned investment-account cash movement."
+            counterpart.resolution = {
+                "action": "auto_link_activity",
+                "activity_id": str(activity.id),
+                "confidence": confidence,
+            }
+            counterpart.resolved_at = datetime.utcnow()
+    db.flush()
 
 
 def apply_batch(
@@ -744,6 +953,7 @@ def apply_batch(
 
     inserted_records = 0
     skipped_records = 0
+    cross_source_duplicates = 0
     inserted_activities = 0
     trade_activities: list[tuple[InvestmentActivity, str]] = []
     income_activities: list[tuple[InvestmentActivity, str]] = []
@@ -765,6 +975,25 @@ def apply_batch(
                     record=record,
                 )
                 payload_hash = source_payload_hash(record.raw_payload)
+                duplicate_source_id = _cross_source_duplicate_source_id(
+                    db,
+                    account_id=account.id,
+                    provider=validated.provider,
+                    ingestion_type=validated.ingestion_type,
+                    record=record,
+                )
+                source_metadata = sanitize_source_payload(record.metadata)
+                if duplicate_source_id is not None:
+                    source_metadata = {
+                        **source_metadata,
+                        "cross_source_duplicate_of_source_record_id": str(
+                            duplicate_source_id
+                        ),
+                        "cross_source_duplicate_reason": (
+                            "Equivalent economic activity already exists for this account "
+                            "from another provider or ingestion channel."
+                        ),
+                    }
                 source_id = db.execute(
                     pg_insert(InvestmentSourceRecord.__table__)
                     .values(
@@ -777,7 +1006,7 @@ def apply_batch(
                         payload_hash=payload_hash,
                         occurred_at=record.occurred_at,
                         source_payload=sanitize_source_payload(record.raw_payload),
-                        source_metadata=sanitize_source_payload(record.metadata),
+                        source_metadata=source_metadata,
                         normalization_version=validated.normalization_version,
                     )
                     .on_conflict_do_nothing(
@@ -787,6 +1016,10 @@ def apply_batch(
                 ).scalar_one_or_none()
                 if source_id is None:
                     skipped_records += 1
+                    continue
+                if duplicate_source_id is not None:
+                    skipped_records += 1
+                    cross_source_duplicates += 1
                     continue
                 inserted_records += 1
 
@@ -848,6 +1081,10 @@ def apply_batch(
                         affected_trade_instruments.update(crypto_result.affected_instruments)
                         if canonical.activity_type in {"transfer", "deposit", "withdrawal"}:
                             affected_trade_instruments.add((canonical.asset_symbol, "crypto"))
+                    elif canonical.asset_type == "cash" and canonical.activity_type in {
+                        "deposit", "withdrawal", "transfer",
+                    }:
+                        _reconcile_cash_transfer(db, account=account, activity=activity)
                     elif canonical.activity_type in {"buy", "sell", "drp"}:
                         _apply_trade_activity(
                             db,
@@ -895,6 +1132,10 @@ def apply_batch(
             "source_records": len(validated.records),
             "inserted_records": inserted_records,
             "skipped_duplicate_records": skipped_records,
+            **(
+                {"skipped_cross_source_records": cross_source_duplicates}
+                if cross_source_duplicates else {}
+            ),
             "inserted_activities": inserted_activities,
             "affected_symbols": sorted({symbol for symbol, _ in affected_trade_instruments}),
             **(transfer_summary if transfer_summary["total_transfers"] else {}),
@@ -906,7 +1147,7 @@ def apply_batch(
     except Exception as exc:
         run.status = "failed"
         run.completed_at = datetime.utcnow()
-        run.error = _safe_error(exc)
+        run.error = safe_error_message(exc)
         run.summary = {
             "source_records": len(validated.records),
             "inserted_records": 0,
@@ -1112,7 +1353,7 @@ def revert_run(
         if commit:
             db.rollback()
         raise ActivityApplicationError(
-            f"investment import reversal failed atomically: {_safe_error(exc)}",
+            f"investment import reversal failed atomically: {safe_error_message(exc)}",
             run_id=run.id,
         ) from exc
 

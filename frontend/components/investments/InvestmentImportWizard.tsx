@@ -5,9 +5,11 @@ import { RiAlertLine, RiCheckLine, RiDeleteBinLine, RiLoader4Line } from "@remix
 import { toast } from "sonner";
 import {
   applyInvestmentImport,
+  confirmInvestmentCryptoTransfer,
   listAccountIncomeEvents,
   listInvestmentCryptoTransfers,
   listInvestmentImportProfiles,
+  listInvestmentIngestionSourceRecords,
   listInvestmentImports,
   listInvestmentReconciliationItems,
   previewInvestmentImport,
@@ -21,6 +23,7 @@ import {
   type InvestmentCryptoTransfer,
   type InvestmentIncomeEvent,
   type InvestmentReconciliationItem,
+  type InvestmentSourceRecord,
 } from "@/lib/api/investments";
 import { detectCsvDelimiter, parseDelimitedText } from "@/lib/import/parsing";
 import {
@@ -38,7 +41,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-type BusyState = "profiles" | "preview" | "import" | "history" | "revert" | "reconcile" | null;
+type BusyState = "profiles" | "preview" | "import" | "history" | "revert" | "reconcile" | "provenance" | null;
 
 function formattedDate(value: string): string {
   return new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
@@ -64,6 +67,8 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   const [reconciliationItems, setReconciliationItems] = useState<InvestmentReconciliationItem[]>([]);
   const [incomeEvents, setIncomeEvents] = useState<InvestmentIncomeEvent[]>([]);
   const [selectedIncomeEvents, setSelectedIncomeEvents] = useState<Record<string, string>>({});
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const [sourceRecordsByRun, setSourceRecordsByRun] = useState<Record<string, InvestmentSourceRecord[]>>({});
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [completedMessage, setCompletedMessage] = useState<string | null>(null);
@@ -221,6 +226,24 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     }
   };
 
+  const toggleProvenance = async (run: InvestmentImportRun) => {
+    if (expandedRunId === run.id) {
+      setExpandedRunId(null);
+      return;
+    }
+    setExpandedRunId(run.id);
+    if (sourceRecordsByRun[run.id]) return;
+    setBusy("provenance");
+    try {
+      const records = await listInvestmentIngestionSourceRecords(run.id);
+      setSourceRecordsByRun((current) => ({ ...current, [run.id]: records }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load provenance.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const resolveItem = async (
     item: InvestmentReconciliationItem,
     payload: Parameters<typeof resolveInvestmentReconciliationItem>[1],
@@ -233,6 +256,20 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
       await loadHistory();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not update reconciliation.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const confirmTransfer = async (transferId: string, candidateId: string) => {
+    setBusy("reconcile");
+    setError(null);
+    try {
+      await confirmInvestmentCryptoTransfer(transferId, candidateId);
+      toast.success("Transfer pair confirmed; original lot basis was preserved.");
+      await loadHistory();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not confirm transfer.");
     } finally {
       setBusy(null);
     }
@@ -520,7 +557,32 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                     {transfer.transaction_hash && <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={transfer.transaction_hash}>Transaction {transfer.transaction_hash}</p>}
                   </div>
                   <div className="text-muted-foreground md:text-right">
-                    {transfer.match_method === "transaction_hash" ? "Matched by transaction hash" : transfer.match_method === "quantity_time_window" ? "Matched by quantity and time" : "Review required"}
+                    <div>
+                      {transfer.match_method === "user_confirmed"
+                        ? "User-confirmed match"
+                        : transfer.match_method === "transaction_hash"
+                          ? "Matched by transaction hash"
+                          : transfer.match_method === "quantity_time_window"
+                            ? "Matched by quantity and time"
+                            : transfer.confidence
+                              ? `${transfer.confidence} confidence suggestion`
+                              : "Review required"}
+                    </div>
+                    {transfer.status === "ambiguous" && transfer.candidate_transfers.length > 0 && (
+                      <div className="mt-2 flex flex-col gap-1.5 md:items-end">
+                        {transfer.candidate_transfers.map((candidate) => (
+                          <Button
+                            key={candidate.id}
+                            variant="outline"
+                            size="sm"
+                            disabled={busy !== null}
+                            onClick={() => void confirmTransfer(transfer.id, candidate.id)}
+                          >
+                            Confirm {candidate.account_name} · {candidate.confidence}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -533,7 +595,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
         <CardHeader><CardTitle className="text-base">Reconciliation review</CardTitle></CardHeader>
         <CardContent>
           {reconciliationItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No unmatched or conflicting income records need review.</p>
+            <p className="text-sm text-muted-foreground">No unmatched or conflicting investment records need review.</p>
           ) : (
             <div className="divide-y divide-border border border-border">
               {reconciliationItems.map((item) => {
@@ -545,6 +607,10 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                   ? item.details.conflicts as Record<string, unknown>
                   : {};
                 const hasUnsafeCostBaseConflict = "cost_base_adjustment" in conflicts;
+                const isCashTransfer = item.details.workflow === "investment_cash_transfer";
+                const candidateActivityIds = Array.isArray(item.details.candidate_activity_ids)
+                  ? item.details.candidate_activity_ids.filter((value): value is string => typeof value === "string")
+                  : [];
                 return (
                   <div key={item.id} className="space-y-3 p-3 text-xs">
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -555,7 +621,16 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                       <div className="flex flex-wrap gap-2">
                         {item.candidate_transaction_ids.map((transactionId) => (
                           <Button key={transactionId} variant="outline" size="sm" disabled={busy !== null} onClick={() => void resolveItem(item, { action: "link_transaction", transaction_id: transactionId })}>
-                            Link cash credit {transactionId.slice(0, 8)}
+                            {isCashTransfer ? "Confirm bank movement" : "Link cash credit"} {transactionId.slice(0, 8)}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    {isCashTransfer && candidateActivityIds.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {candidateActivityIds.map((activityId) => (
+                          <Button key={activityId} variant="outline" size="sm" disabled={busy !== null} onClick={() => void resolveItem(item, { action: "link_activity", activity_id: activityId })}>
+                            Confirm brokerage movement {activityId.slice(0, 8)}
                           </Button>
                         ))}
                       </div>
@@ -600,16 +675,38 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
           ) : (
             <div className="divide-y divide-border border border-border">
               {runs.map((run) => (
-                <div key={run.id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-xs">
-                  <div>
-                    <div className="flex items-center gap-2 font-medium"><span>{run.source_name ?? "Investment import"}</span><Badge variant="outline">{run.status}</Badge></div>
-                    <div className="mt-1 text-muted-foreground">{run.provider} · {formattedDate(run.started_at)} · {String(run.summary.inserted_activities ?? 0)} activities</div>
-                    {run.error && <div className="mt-1 text-destructive">{run.error}</div>}
+                <div key={run.id} className="space-y-2 p-3 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 font-medium"><span>{run.source_name ?? "Investment import"}</span><Badge variant="outline">{run.status}</Badge></div>
+                      <div className="mt-1 text-muted-foreground">{run.provider} · {formattedDate(run.started_at)} · {String(run.summary.inserted_activities ?? 0)} activities</div>
+                      {run.error && <div className="mt-1 text-destructive">{run.error}</div>}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => void toggleProvenance(run)} disabled={busy !== null}>
+                        {expandedRunId === run.id ? "Hide provenance" : "View provenance"}
+                      </Button>
+                      {(run.status === "completed" || run.status === "partial") && (
+                        <Button variant="outline" size="sm" onClick={() => void undoRun(run)} disabled={busy !== null}>
+                          <RiDeleteBinLine className="size-4" /> Undo batch
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  {(run.status === "completed" || run.status === "partial") && (
-                    <Button variant="outline" size="sm" onClick={() => void undoRun(run)} disabled={busy !== null}>
-                      <RiDeleteBinLine className="size-4" /> Undo batch
-                    </Button>
+                  {expandedRunId === run.id && (
+                    <div className="max-h-64 space-y-2 overflow-auto border border-border bg-muted/20 p-2">
+                      {(sourceRecordsByRun[run.id] || []).map((record) => (
+                        <details key={record.id}>
+                          <summary className="cursor-pointer font-mono text-[11px]">
+                            {record.occurred_at} · {record.provider_record_id ?? record.id.slice(0, 8)}
+                          </summary>
+                          <pre className="mt-1 overflow-auto whitespace-pre-wrap text-[10px] text-muted-foreground">
+                            {JSON.stringify({ payload: record.source_payload, metadata: record.source_metadata }, null, 2)}
+                          </pre>
+                        </details>
+                      ))}
+                      {busy === "provenance" && <div className="text-muted-foreground">Loading provenance…</div>}
+                    </div>
                   )}
                 </div>
               ))}

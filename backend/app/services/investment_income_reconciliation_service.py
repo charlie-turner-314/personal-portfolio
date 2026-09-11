@@ -609,6 +609,7 @@ def resolve_reconciliation_item(
     action: str,
     income_event_id: str | UUID | None = None,
     transaction_id: str | UUID | None = None,
+    activity_id: str | UUID | None = None,
 ) -> InvestmentReconciliationItem:
     item = db.query(InvestmentReconciliationItem).filter(
         InvestmentReconciliationItem.id == item_id,
@@ -620,6 +621,46 @@ def resolve_reconciliation_item(
         return item
     if action == "ignore":
         item.status = "ignored"
+    elif (
+        item.kind == "cash_match"
+        and (item.details or {}).get("workflow") == "investment_cash_transfer"
+        and action in {"link_transaction", "link_activity"}
+    ):
+        if action == "link_transaction":
+            if not transaction_id or str(transaction_id) not in (
+                item.candidate_transaction_ids or []
+            ):
+                raise ValueError("a suggested transaction_id is required")
+            transaction = db.query(Transaction).filter(
+                Transaction.id == transaction_id,
+                Transaction.user_id == user_id,
+            ).one_or_none()
+            if transaction is None:
+                raise ValueError("owned transaction is required")
+        else:
+            candidates = (item.details or {}).get("candidate_activity_ids") or []
+            if not activity_id or str(activity_id) not in candidates:
+                raise ValueError("a suggested activity_id is required")
+            counterpart_activity = db.query(InvestmentActivity).filter(
+                InvestmentActivity.id == activity_id,
+                InvestmentActivity.user_id == user_id,
+            ).one_or_none()
+            if counterpart_activity is None:
+                raise ValueError("owned investment activity is required")
+            counterpart = db.query(InvestmentReconciliationItem).filter(
+                InvestmentReconciliationItem.source_activity_id == counterpart_activity.id,
+                InvestmentReconciliationItem.kind == "cash_match",
+            ).one_or_none()
+            if counterpart is not None and counterpart.status == "pending":
+                counterpart.status = "resolved"
+                counterpart.reason = "Matched after explicit user confirmation."
+                counterpart.resolution = {
+                    "action": "link_activity",
+                    "activity_id": str(item.source_activity_id),
+                    "confidence": "confirmed",
+                }
+                counterpart.resolved_at = datetime.utcnow()
+        item.status = "resolved"
     elif item.kind == "cash_match" and action == "link_transaction":
         if not transaction_id or not item.income_event_id:
             raise ValueError("transaction_id is required")
@@ -710,6 +751,8 @@ def resolve_reconciliation_item(
         "action": action,
         "income_event_id": str(income_event_id) if income_event_id else None,
         "transaction_id": str(transaction_id) if transaction_id else None,
+        "activity_id": str(activity_id) if activity_id else None,
+        "confidence": "confirmed" if action in {"link_transaction", "link_activity"} else None,
     }
     item.resolved_at = datetime.utcnow()
     db.commit()

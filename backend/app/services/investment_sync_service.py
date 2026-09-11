@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Account, BrokerConnection, Holding, BrokerTrade, PriceSnapshot, InvestmentActivity,
+    InvestmentIngestionRun,
 )
 from app.services.credentials_crypto import decrypt
 from app.services.holding_valuation_service import HoldingValuationService, FxConverter
@@ -46,7 +47,11 @@ from app.integrations.crypto_com_exchange_adapter import (
     CryptoComExchangeReadOnlyClient,
     CryptoComExchangeTransientError,
 )
-from app.services.investment_activity_service import apply_batch
+from app.services.investment_activity_service import (
+    ActivityApplicationError,
+    apply_batch,
+    safe_error_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +153,7 @@ class InvestmentSyncService:
             positions_xml = adapter.fetch_statement(ref_positions)
         except FlexAuthError as e:
             conn.last_sync_status = "needs_reauth"
-            conn.last_sync_error = str(e)
+            conn.last_sync_error = safe_error_message(e)
             self.db.commit()
             raise
         except FlexStatementNotReady:
@@ -157,12 +162,12 @@ class InvestmentSyncService:
             raise
         except FlexTransientError as e:
             conn.last_sync_status = "pending"
-            conn.last_sync_error = str(e)
+            conn.last_sync_error = safe_error_message(e)
             self.db.commit()
             raise
         except FlexError as e:
             conn.last_sync_status = "error"
-            conn.last_sync_error = str(e)
+            conn.last_sync_error = safe_error_message(e)
             self.db.commit()
             raise
 
@@ -219,6 +224,12 @@ class InvestmentSyncService:
             conn.last_sync_status = "ok"
             conn.last_sync_error = None
         conn.last_sync_at = datetime.utcnow()
+        conn.health_details = {
+            **(conn.health_details or {}),
+            "last_attempt_at": conn.last_sync_at.isoformat(),
+            "positions_synced": True,
+            "trades_synced": trades_error is None,
+        }
         self.db.commit()
 
     def _sync_coinspot(
@@ -268,6 +279,9 @@ class InvestmentSyncService:
         except (CoinSpotHistoryLimitError, CoinSpotError) as exc:
             self._record_coinspot_failure(conn, exc, status="error", retry=False)
             raise
+        except ActivityApplicationError as exc:
+            self._record_coinspot_failure(conn, exc, status="error", retry=False)
+            raise
         finally:
             close = getattr(adapter, "close", None)
             if close is not None:
@@ -280,7 +294,9 @@ class InvestmentSyncService:
             if reconciliation["differences"] else None
         )
         conn.health_details = {
+            **(conn.health_details or {}),
             "read_only_namespace": "https://www.coinspot.com.au/api/v2/ro",
+            "last_attempt_at": datetime.utcnow().isoformat(),
             "history_from": start.isoformat(),
             "history_through": on.isoformat(),
             "windows_requested": history.windows_requested,
@@ -288,6 +304,9 @@ class InvestmentSyncService:
             "ingestion_run_id": application["run_id"],
             "inserted_records": application["inserted_records"],
             "skipped_duplicate_records": application["skipped_duplicate_records"],
+            "skipped_cross_source_records": application.get(
+                "skipped_cross_source_records", 0
+            ),
             **reconciliation,
         }
         conn.last_sync_at = datetime.utcnow()
@@ -352,6 +371,9 @@ class InvestmentSyncService:
         except (BinanceHistoryLimitError, BinanceError) as exc:
             self._record_binance_failure(conn, exc, status="error", retry=False)
             raise
+        except ActivityApplicationError as exc:
+            self._record_binance_failure(conn, exc, status="error", retry=False)
+            raise
         finally:
             close = getattr(adapter, "close", None)
             if close is not None:
@@ -364,7 +386,9 @@ class InvestmentSyncService:
             if reconciliation["differences"] else None
         )
         conn.health_details = {
+            **(conn.health_details or {}),
             "read_only_namespace": "Binance signed USER_DATA GET allowlist",
+            "last_attempt_at": datetime.utcnow().isoformat(),
             "history_from": start.isoformat(),
             "history_through": on.isoformat(),
             "windows_requested": history.windows_requested,
@@ -375,6 +399,9 @@ class InvestmentSyncService:
             "ingestion_run_id": application["run_id"],
             "inserted_records": application["inserted_records"],
             "skipped_duplicate_records": application["skipped_duplicate_records"],
+            "skipped_cross_source_records": application.get(
+                "skipped_cross_source_records", 0
+            ),
             **reconciliation,
         }
         conn.last_sync_at = datetime.utcnow()
@@ -395,7 +422,7 @@ class InvestmentSyncService:
         failures = int(conn.consecutive_failures or 0) + 1
         now = datetime.utcnow()
         conn.last_sync_status = status
-        conn.last_sync_error = str(exc)[:1000]
+        conn.last_sync_error = safe_error_message(exc)[:1000]
         conn.consecutive_failures = failures
         if isinstance(exc, BinanceAuthError):
             conn.read_only_verified_at = None
@@ -414,6 +441,12 @@ class InvestmentSyncService:
                 else "provider"
             ),
         }
+        self._record_failed_ingestion_run(
+            conn,
+            occurred_at=now,
+            normalization_version="binance-spot-v1",
+            error=exc,
+        )
         self.db.commit()
 
     def _sync_crypto_com_exchange(
@@ -470,6 +503,11 @@ class InvestmentSyncService:
         except (CryptoComExchangeHistoryLimitError, CryptoComExchangeError) as exc:
             self._record_crypto_com_exchange_failure(conn, exc, status="error", retry=False)
             raise
+        except ActivityApplicationError as exc:
+            self._record_crypto_com_exchange_failure(
+                conn, exc, status="error", retry=False
+            )
+            raise
         finally:
             close = getattr(adapter, "close", None)
             if close is not None:
@@ -490,8 +528,10 @@ class InvestmentSyncService:
         else:
             conn.last_sync_error = None
         conn.health_details = {
+            **(conn.health_details or {}),
             "read_only_namespace": "Crypto.com Exchange signed read-method allowlist",
             "read_only_verification": "user_confirmed_and_read_access_verified",
+            "last_attempt_at": datetime.utcnow().isoformat(),
             "history_from": start.isoformat(),
             "history_through": on.isoformat(),
             "windows_requested": history.requests_made,
@@ -502,6 +542,9 @@ class InvestmentSyncService:
             "ingestion_run_id": application["run_id"],
             "inserted_records": application["inserted_records"],
             "skipped_duplicate_records": application["skipped_duplicate_records"],
+            "skipped_cross_source_records": application.get(
+                "skipped_cross_source_records", 0
+            ),
             **reconciliation,
         }
         conn.last_sync_at = datetime.utcnow()
@@ -522,7 +565,7 @@ class InvestmentSyncService:
         failures = int(conn.consecutive_failures or 0) + 1
         now = datetime.utcnow()
         conn.last_sync_status = status
-        conn.last_sync_error = str(exc)[:1000]
+        conn.last_sync_error = safe_error_message(exc)[:1000]
         conn.consecutive_failures = failures
         if isinstance(exc, CryptoComExchangeAuthError):
             conn.read_only_verified_at = None
@@ -544,6 +587,12 @@ class InvestmentSyncService:
                 else "provider"
             ),
         }
+        self._record_failed_ingestion_run(
+            conn,
+            occurred_at=now,
+            normalization_version="crypto-com-exchange-v1",
+            error=exc,
+        )
         self.db.commit()
 
     def _try_provider_sync_lock(self, account_id: UUID) -> bool:
@@ -556,6 +605,29 @@ class InvestmentSyncService:
             sql_text("SELECT pg_try_advisory_xact_lock(:lock_key)"),
             {"lock_key": lock_key},
         ).scalar_one())
+
+    def _record_failed_ingestion_run(
+        self,
+        conn: BrokerConnection,
+        *,
+        occurred_at: datetime,
+        normalization_version: str,
+        error: Exception,
+    ) -> None:
+        self.db.add(InvestmentIngestionRun(
+            user_id=conn.user_id,
+            account_id=conn.account_id,
+            provider=conn.provider,
+            ingestion_type="api_sync",
+            status="failed",
+            source_name=f"{conn.provider} sync attempt",
+            normalization_version=normalization_version,
+            summary={"inserted_records": 0, "inserted_activities": 0},
+            warnings=[],
+            error=safe_error_message(error),
+            started_at=occurred_at,
+            completed_at=occurred_at,
+        ))
 
     def _record_coinspot_failure(
         self,
@@ -571,7 +643,7 @@ class InvestmentSyncService:
         failures = int(conn.consecutive_failures or 0) + 1
         now = datetime.utcnow()
         conn.last_sync_status = status
-        conn.last_sync_error = str(exc)[:1000]
+        conn.last_sync_error = safe_error_message(exc)[:1000]
         conn.consecutive_failures = failures
         if isinstance(exc, CoinSpotAuthError):
             conn.read_only_verified_at = None
@@ -589,6 +661,12 @@ class InvestmentSyncService:
                 else "provider"
             ),
         }
+        self._record_failed_ingestion_run(
+            conn,
+            occurred_at=now,
+            normalization_version="coinspot-v2",
+            error=exc,
+        )
         self.db.commit()
 
     def _canonical_provider_balances(self, account_id: UUID) -> dict[str, Decimal]:

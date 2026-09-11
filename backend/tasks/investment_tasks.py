@@ -81,7 +81,7 @@ def daily_investment_sync_all() -> dict:
 
         now = datetime.utcnow()
         broker_q = (
-            db.query(Account)
+            db.query(Account, BrokerConnection)
             .join(BrokerConnection, BrokerConnection.account_id == Account.id)
             .filter(
                 Account.is_active == True,
@@ -100,8 +100,18 @@ def daily_investment_sync_all() -> dict:
             broker_q = broker_q.filter(Account.user_id != demo_user_id)
             manual_q = manual_q.filter(Account.user_id != demo_user_id)
 
-        broker_account_ids = [a.id for a in broker_q.all()]
+        broker_rows = broker_q.all()
+        broker_account_ids = [account.id for account, _connection in broker_rows]
         manual_account_ids = [a.id for a in manual_q.all()]
+        queued_at = now.isoformat()
+        for _account, connection in broker_rows:
+            connection.health_details = {
+                **(connection.health_details or {}),
+                "scheduled_sync": "daily",
+                "scheduled_sync_queued_at": queued_at,
+            }
+        if broker_rows:
+            db.commit()
         all_ids = list(broker_account_ids) + list(manual_account_ids)
         for aid in all_ids:
             sync_investment_account.delay(str(aid))

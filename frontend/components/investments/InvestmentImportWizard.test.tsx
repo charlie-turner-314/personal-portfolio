@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   listInvestmentImports: vi.fn(),
   listInvestmentCryptoTransfers: vi.fn(),
   listInvestmentReconciliationItems: vi.fn(),
+  listInvestmentIngestionSourceRecords: vi.fn(),
+  confirmInvestmentCryptoTransfer: vi.fn(),
   listAccountIncomeEvents: vi.fn(),
   resolveInvestmentReconciliationItem: vi.fn(),
   revertInvestmentImport: vi.fn(),
@@ -55,6 +57,8 @@ describe("InvestmentImportWizard", () => {
     mocks.listInvestmentReconciliationItems.mockResolvedValue([]);
     mocks.listAccountIncomeEvents.mockResolvedValue([]);
     mocks.resolveInvestmentReconciliationItem.mockResolvedValue({});
+    mocks.listInvestmentIngestionSourceRecords.mockResolvedValue([]);
+    mocks.confirmInvestmentCryptoTransfer.mockResolvedValue({});
     mocks.previewInvestmentImport.mockResolvedValue(preview);
     mocks.applyInvestmentImport.mockResolvedValue({ run_id: "run-1", inserted_records: 1, skipped_duplicate_records: 0, inserted_activities: 1 });
     mocks.revertInvestmentImport.mockResolvedValue({ run_id: "run-1", status: "reverted", removed_trades: 1, removed_income_events: 0 });
@@ -196,5 +200,43 @@ describe("InvestmentImportWizard", () => {
     expect(screen.getByText("pending")).toBeTruthy();
     expect(screen.getByText(/excluded from CGT only after a unique matching movement/i)).toBeTruthy();
     expect(screen.getByText("Review required")).toBeTruthy();
+  });
+
+  it("lets the user confirm an ambiguous owned-wallet transfer", async () => {
+    mocks.listInvestmentCryptoTransfers.mockResolvedValueOnce([{
+      id: "transfer-out",
+      account_id: "account-1",
+      source_activity_id: "activity-out",
+      matched_transfer_id: null,
+      direction: "out",
+      asset_symbol: "ETH",
+      quantity: "1.5",
+      occurred_at: "2025-08-01T12:00:00Z",
+      transaction_hash: null,
+      status: "ambiguous",
+      match_method: null,
+      confidence: "medium",
+      candidate_transfers: [{
+        id: "transfer-in",
+        account_id: "account-2",
+        account_name: "Cold wallet",
+        direction: "in",
+        occurred_at: "2025-08-01T12:05:00Z",
+        match_method: "quantity_time_window",
+        confidence: "medium",
+      }],
+      reason: "Multiple opposite movements match by quantity and time.",
+      assumptions: [],
+    }]);
+
+    render(<InvestmentImportWizard accounts={accounts} />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Confirm Cold wallet · medium",
+    }));
+
+    await waitFor(() => expect(mocks.confirmInvestmentCryptoTransfer).toHaveBeenCalledWith(
+      "transfer-out",
+      "transfer-in",
+    ));
   });
 });

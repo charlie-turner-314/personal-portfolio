@@ -24,6 +24,11 @@ from app.services.investment_activity_service import (
     revert_run,
 )
 from app.services.tax_report_service import build_australian_tax_report
+from app.services.crypto_accounting_service import (
+    confirm_owned_crypto_transfer,
+    rebuild_owned_crypto_transfers,
+    transfer_view,
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -452,6 +457,69 @@ def test_transfer_rebuild_is_deterministic_after_backfill(db_session, crypto_acc
     )
     assert duplicate["inserted_records"] == 0
     assert _holding(db_session, destination, "BTC").avg_cost == Decimal("10000.00000000")
+
+
+def test_ambiguous_transfer_exposes_confidence_and_preserves_user_confirmation(
+    db_session, crypto_accounts
+):
+    user, source, destination = crypto_accounts
+    other = Account(
+        user_id=user.id,
+        name="Other Wallet",
+        account_type="investment_brokerage",
+        currency="AUD",
+        is_active=True,
+    )
+    db_session.add(other)
+    bought_at = datetime(2025, 8, 1, 9)
+    moved_at = datetime(2025, 8, 2, 9)
+    _apply(
+        db_session, user=user, account=source, reference="confirm-buy",
+        activity=_activity("buy", bought_at, "BTC", quantity="2", price="10000"),
+    )
+    _apply(
+        db_session, user=user, account=source, reference="confirm-out",
+        activity=_activity("withdrawal", moved_at, "BTC", quantity="1", price=None),
+    )
+    _apply(
+        db_session, user=user, account=destination, reference="confirm-in-a",
+        activity=_activity(
+            "deposit", moved_at + timedelta(minutes=5), "BTC", quantity="1", price=None
+        ),
+    )
+    _apply(
+        db_session, user=user, account=other, reference="confirm-in-b",
+        activity=_activity(
+            "deposit", moved_at + timedelta(minutes=10), "BTC", quantity="1", price=None
+        ),
+    )
+    outbound = db_session.query(InvestmentCryptoTransfer).filter_by(
+        account_id=source.id
+    ).one()
+    inbound = db_session.query(InvestmentCryptoTransfer).filter_by(
+        account_id=destination.id
+    ).one()
+    view = transfer_view(outbound, db=db_session)
+    assert outbound.status == "ambiguous"
+    assert view["confidence"] == "medium"
+    assert {candidate["account_name"] for candidate in view["candidate_transfers"]} == {
+        "Owned Wallet", "Other Wallet"
+    }
+
+    confirmed = confirm_owned_crypto_transfer(
+        db_session,
+        user_id=user.id,
+        transfer_id=outbound.id,
+        candidate_transfer_id=inbound.id,
+        commit=False,
+    )
+    assert confirmed.status == "matched"
+    assert confirmed.match_method == "user_confirmed"
+    rebuild_owned_crypto_transfers(db_session, user_id=user.id)
+    db_session.flush()
+    db_session.refresh(confirmed)
+    assert confirmed.status == "matched"
+    assert confirmed.match_method == "user_confirmed"
 
 
 def test_exact_hash_wins_over_fallback_and_revert_restores_pending_state(

@@ -8,7 +8,7 @@ import {
   RiRefreshLine,
   RiShieldCheckLine,
 } from "@remixicon/react";
-import { createBrokerConnection } from "@/lib/api/investments";
+import { createBrokerConnection, type InvestmentAccount } from "@/lib/api/investments";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -64,7 +64,13 @@ const PROVIDER_DETAILS: Record<Provider, {
   },
 };
 
-export function BrokerForm({ onCancel }: { onCancel: () => void }) {
+export function BrokerForm({
+  accounts = [],
+  onCancel,
+}: {
+  accounts?: InvestmentAccount[];
+  onCancel: () => void;
+}) {
   const router = useRouter();
   const [provider, setProvider] = useState<Provider>("coinspot");
   const [accountName, setAccountName] = useState("CoinSpot Main");
@@ -79,14 +85,17 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
   const [historyStart, setHistoryStart] = useState("2013-01-01");
   const [tradePairs, setTradePairs] = useState("");
   const [readOnlyConfirmed, setReadOnlyConfirmed] = useState(false);
+  const [existingAccountId, setExistingAccountId] = useState("new");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const providerDetails = PROVIDER_DETAILS[provider];
+  const existingAccount = accounts.find((item) => item.id === existingAccountId);
 
   const changeProvider = (next: Provider) => {
     setProvider(next);
     setErr(null);
     setReadOnlyConfirmed(false);
+    if (existingAccount) return;
     if (next === "coinspot") {
       setAccountName("CoinSpot Main");
       setBaseCurrency("AUD");
@@ -113,6 +122,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
       if (provider === "coinspot") {
         await createBrokerConnection({
           provider,
+          ...(existingAccount ? { account_id: existingAccount.id } : {}),
           api_key: apiKey,
           api_secret: apiSecret,
           history_start_date: historyStart,
@@ -122,6 +132,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
       } else if (provider === "binance") {
         await createBrokerConnection({
           provider,
+          ...(existingAccount ? { account_id: existingAccount.id } : {}),
           api_key: apiKey,
           api_secret: apiSecret,
           history_start_date: historyStart,
@@ -135,6 +146,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
         }
         await createBrokerConnection({
           provider,
+          ...(existingAccount ? { account_id: existingAccount.id } : {}),
           api_key: apiKey,
           api_secret: apiSecret,
           history_start_date: historyStart,
@@ -145,6 +157,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
       } else {
         await createBrokerConnection({
           provider,
+          ...(existingAccount ? { account_id: existingAccount.id } : {}),
           flex_token: token,
           query_id_positions: qPos,
           query_id_trades: qTrades,
@@ -179,6 +192,36 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
               </SelectContent>
             </Select>
           </Field>
+
+          {accounts.length > 0 && (
+            <Field label="Portfolio account">
+              <Select
+                value={existingAccountId}
+                onValueChange={(value) => {
+                  const next = value ?? "new";
+                  setExistingAccountId(next);
+                  const selected = accounts.find((item) => item.id === next);
+                  if (selected) {
+                    setAccountName(selected.name);
+                    setBaseCurrency(selected.base_currency);
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="new">Create a new account</SelectItem>
+                  {accounts.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      Use {item.name} · preserves imported history
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Attach to an account previously populated from CSV when moving to API sync.
+              </p>
+            </Field>
+          )}
 
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 border border-border flex items-center justify-center font-bold text-[10px] text-muted-foreground">

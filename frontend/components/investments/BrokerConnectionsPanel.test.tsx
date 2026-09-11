@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   disconnect: vi.fn(),
   updateCredentials: vi.fn(),
   updatePairs: vi.fn(),
+  listRuns: vi.fn(),
+  diagnostics: vi.fn(),
   push: vi.fn(),
   refresh: vi.fn(),
   success: vi.fn(),
@@ -21,6 +23,8 @@ vi.mock("@/lib/api/investments", () => ({
   disconnectBrokerConnection: mocks.disconnect,
   updateBrokerApiCredentials: mocks.updateCredentials,
   updateBinanceTradeSymbols: mocks.updatePairs,
+  listInvestmentIngestionRuns: mocks.listRuns,
+  getBrokerConnectionDiagnostics: mocks.diagnostics,
 }));
 
 import { BrokerConnectionsPanel } from "./BrokerConnectionsPanel";
@@ -56,6 +60,8 @@ describe("BrokerConnectionsPanel", () => {
     mocks.disconnect.mockResolvedValue(undefined);
     mocks.updateCredentials.mockResolvedValue(undefined);
     mocks.updatePairs.mockResolvedValue(undefined);
+    mocks.listRuns.mockResolvedValue([]);
+    mocks.diagnostics.mockResolvedValue({ format: "syllogic-investment-diagnostics-v1" });
   });
 
   it("shows read-only health and a clear quantity difference", () => {

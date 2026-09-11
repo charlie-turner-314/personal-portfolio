@@ -426,6 +426,11 @@ export type BrokerConnection = {
     trade_symbols?: string[];
     configured_trade_symbols?: string[];
     read_only_verification?: string;
+    scheduled_sync?: "daily";
+    scheduled_sync_hour_utc?: number;
+    scheduled_sync_queued_at?: string;
+    last_attempt_at?: string;
+    skipped_cross_source_records?: number;
     partial_product_failures?: string[];
     missing_product_warnings?: string[];
     unpriced_assets?: string[];
@@ -435,6 +440,7 @@ export type BrokerConnection = {
 export type BrokerConnectionPayload =
   | {
       provider: "ibkr_flex";
+      account_id?: string;
       flex_token: string;
       query_id_positions: string;
       query_id_trades: string;
@@ -443,6 +449,7 @@ export type BrokerConnectionPayload =
     }
   | {
       provider: "coinspot";
+      account_id?: string;
       api_key: string;
       api_secret: string;
       history_start_date?: string;
@@ -451,6 +458,7 @@ export type BrokerConnectionPayload =
     }
   | {
       provider: "binance";
+      account_id?: string;
       api_key: string;
       api_secret: string;
       history_start_date?: string;
@@ -460,6 +468,7 @@ export type BrokerConnectionPayload =
     }
   | {
       provider: "crypto_com_exchange";
+      account_id?: string;
       api_key: string;
       api_secret: string;
       history_start_date?: string;
@@ -707,6 +716,7 @@ export type InvestmentImportRun = {
   id: string;
   account_id: string;
   provider: string;
+  ingestion_type?: "csv_import" | "api_sync" | "manual";
   status: "applying" | "completed" | "partial" | "failed" | "reverted";
   source_name: string | null;
   summary: Record<string, number | string | string[]>;
@@ -715,6 +725,20 @@ export type InvestmentImportRun = {
   started_at: string;
   completed_at: string | null;
   reverted_at: string | null;
+};
+
+export type InvestmentSourceRecord = {
+  id: string;
+  run_id: string;
+  provider: string;
+  provider_record_id: string | null;
+  idempotency_key: string;
+  payload_hash: string;
+  occurred_at: string;
+  source_payload: Record<string, unknown>;
+  source_metadata: Record<string, unknown>;
+  normalization_version: string;
+  created_at: string;
 };
 
 export type InvestmentCryptoTransfer = {
@@ -728,7 +752,17 @@ export type InvestmentCryptoTransfer = {
   occurred_at: string;
   transaction_hash: string | null;
   status: "pending" | "matched" | "ambiguous" | "internal";
-  match_method: "transaction_hash" | "quantity_time_window" | null;
+  match_method: "transaction_hash" | "quantity_time_window" | "user_confirmed" | null;
+  confidence: "high" | "medium" | "confirmed" | null;
+  candidate_transfers: Array<{
+    id: string;
+    account_id: string;
+    account_name: string;
+    direction: "in" | "out";
+    occurred_at: string;
+    match_method: "transaction_hash" | "quantity_time_window";
+    confidence: "high" | "medium";
+  }>;
   reason: string | null;
   assumptions: string[];
 };
@@ -780,6 +814,33 @@ export async function listInvestmentImports(accountId: string): Promise<Investme
   return readJsonOrThrow(resp);
 }
 
+export async function listInvestmentIngestionRuns(accountId: string): Promise<InvestmentImportRun[]> {
+  const resp = await signedFetch("GET", "/api/investments/ingestion-runs", {
+    query: { account_id: accountId },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentIngestionSourceRecords(
+  runId: string,
+): Promise<InvestmentSourceRecord[]> {
+  const resp = await signedFetch(
+    "GET",
+    `/api/investments/ingestion-runs/${runId}/source-records`,
+  );
+  return readJsonOrThrow(resp);
+}
+
+export async function getBrokerConnectionDiagnostics(
+  connectionId: string,
+): Promise<Record<string, unknown>> {
+  const resp = await signedFetch(
+    "GET",
+    `/api/investments/broker-connections/${connectionId}/diagnostics`,
+  );
+  return readJsonOrThrow(resp);
+}
+
 export async function listInvestmentCryptoTransfers(
   accountId?: string,
   status: InvestmentCryptoTransfer["status"] | "all" = "all",
@@ -787,6 +848,19 @@ export async function listInvestmentCryptoTransfers(
   const resp = await signedFetch("GET", "/api/investments/crypto-transfers", {
     query: { account_id: accountId, status },
   });
+  return readJsonOrThrow(resp);
+}
+
+export async function confirmInvestmentCryptoTransfer(
+  transferId: string,
+  candidateTransferId: string,
+): Promise<InvestmentCryptoTransfer> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "POST",
+    `/api/investments/crypto-transfers/${transferId}/confirm`,
+    { body: { candidate_transfer_id: candidateTransferId } },
+  );
   return readJsonOrThrow(resp);
 }
 
@@ -844,9 +918,10 @@ export async function listInvestmentReconciliationItems(
 export async function resolveInvestmentReconciliationItem(
   itemId: string,
   payload: {
-    action: "ignore" | "link_transaction" | "link_income_event" | "keep_existing" | "apply_statement";
+    action: "ignore" | "link_transaction" | "link_activity" | "link_income_event" | "keep_existing" | "apply_statement";
     income_event_id?: string;
     transaction_id?: string;
+    activity_id?: string;
   },
 ): Promise<InvestmentReconciliationItem> {
   await assertNotDemoRestricted();

@@ -105,4 +105,38 @@ describe("BrokerForm", () => {
       base_currency: "AUD",
     }));
   });
+
+  it("can attach API sync to an existing CSV-backed account", async () => {
+    render(<BrokerForm
+      accounts={[{
+        id: "imported-account",
+        name: "Imported Crypto",
+        base_currency: "AUD",
+        source: "manual",
+      }]}
+      onCancel={vi.fn()}
+    />);
+    const accountPicker = screen.getAllByRole("combobox")[1];
+    fireEvent.click(accountPicker);
+    const existing = screen.getByRole("option", {
+      name: "Use Imported Crypto · preserves imported history",
+    });
+    fireEvent.mouseMove(existing);
+    fireEvent.click(existing);
+    fireEvent.change(screen.getByPlaceholderText("Paste your CoinSpot API key"), {
+      target: { value: "key-value" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Paste your CoinSpot API secret"), {
+      target: { value: "secret-value" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect & sync" }));
+
+    await waitFor(() => expect(mocks.createBrokerConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "coinspot",
+        account_id: "imported-account",
+        account_name: "Imported Crypto",
+      }),
+    ));
+  });
 });

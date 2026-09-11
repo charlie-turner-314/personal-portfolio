@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Iterable
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -740,6 +741,14 @@ def rebuild_owned_crypto_transfers(db: Session, *, user_id: str) -> dict[str, in
     transfers = db.query(InvestmentCryptoTransfer).filter(
         InvestmentCryptoTransfer.user_id == user_id
     ).order_by(InvestmentCryptoTransfer.occurred_at, InvestmentCryptoTransfer.id).all()
+    by_id = {item.id: item for item in transfers}
+    confirmed_pairs = [
+        (item.id, item.matched_transfer_id)
+        for item in transfers
+        if item.direction == "out"
+        and item.match_method == "user_confirmed"
+        and item.matched_transfer_id in by_id
+    ]
     transfer_ids = [item.id for item in transfers]
     transfer_activity_ids = [item.source_activity_id for item in transfers]
     if transfer_ids:
@@ -774,8 +783,37 @@ def rebuild_owned_crypto_transfers(db: Session, *, user_id: str) -> dict[str, in
     outgoing = [item for item in transfers if item.direction == "out"]
     incoming = [item for item in transfers if item.direction == "in"]
     used_incoming: set[object] = set()
+    used_outgoing: set[object] = set()
     matched = 0
+    for outbound_id, inbound_id in confirmed_pairs:
+        outbound = by_id[outbound_id]
+        inbound = by_id[inbound_id]
+        is_candidate, _method = _transfer_candidates(outbound, inbound)
+        if not is_candidate:
+            outbound.status = inbound.status = "ambiguous"
+            outbound.reason = inbound.reason = (
+                "The previously confirmed transfer no longer has matching asset, quantity, or timing."
+            )
+            continue
+        success, pair_affected = _create_transfer_pair_lots(
+            db, outbound=outbound, inbound=inbound
+        )
+        if not success:
+            continue
+        outbound.matched_transfer_id = inbound.id
+        inbound.matched_transfer_id = outbound.id
+        outbound.status = inbound.status = "matched"
+        outbound.match_method = inbound.match_method = "user_confirmed"
+        outbound.reason = inbound.reason = (
+            "Matched between owned accounts after explicit user confirmation; original lot basis is preserved."
+        )
+        used_outgoing.add(outbound.id)
+        used_incoming.add(inbound.id)
+        affected.update(pair_affected)
+        matched += 1
     for outbound in outgoing:
+        if outbound.id in used_outgoing:
+            continue
         candidates: list[tuple[InvestmentCryptoTransfer, str]] = []
         for inbound in incoming:
             if inbound.id in used_incoming:
@@ -800,7 +838,7 @@ def rebuild_owned_crypto_transfers(db: Session, *, user_id: str) -> dict[str, in
         inbound, method = candidates[0]
         reverse_candidates = [
             other for other in outgoing
-            if _transfer_candidates(other, inbound)[0]
+            if other.id not in used_outgoing and _transfer_candidates(other, inbound)[0]
         ]
         exact_reverse_candidates = [
             other for other in reverse_candidates
@@ -844,7 +882,95 @@ def rebuild_owned_crypto_transfers(db: Session, *, user_id: str) -> dict[str, in
     }
 
 
-def transfer_view(item: InvestmentCryptoTransfer) -> dict[str, object]:
+def _transfer_candidate_views(
+    db: Session, item: InvestmentCryptoTransfer
+) -> list[dict[str, object]]:
+    if item.direction not in {"in", "out"}:
+        return []
+    opposite = "out" if item.direction == "in" else "in"
+    rows = db.query(InvestmentCryptoTransfer, Account).join(
+        Account, Account.id == InvestmentCryptoTransfer.account_id
+    ).filter(
+        InvestmentCryptoTransfer.user_id == item.user_id,
+        InvestmentCryptoTransfer.direction == opposite,
+        InvestmentCryptoTransfer.id != item.id,
+    ).order_by(
+        InvestmentCryptoTransfer.occurred_at,
+        InvestmentCryptoTransfer.id,
+    ).all()
+    candidates: list[dict[str, object]] = []
+    for candidate, account in rows:
+        outbound, inbound = (
+            (item, candidate) if item.direction == "out" else (candidate, item)
+        )
+        matches, method = _transfer_candidates(outbound, inbound)
+        if not matches or method is None:
+            continue
+        candidates.append({
+            "id": str(candidate.id),
+            "account_id": str(candidate.account_id),
+            "account_name": account.name,
+            "direction": candidate.direction,
+            "occurred_at": candidate.occurred_at.isoformat(),
+            "match_method": method,
+            "confidence": "high" if method == "transaction_hash" else "medium",
+        })
+    return candidates
+
+
+def confirm_owned_crypto_transfer(
+    db: Session,
+    *,
+    user_id: str,
+    transfer_id: str | UUID,
+    candidate_transfer_id: str | UUID,
+    commit: bool = True,
+) -> InvestmentCryptoTransfer:
+    first = db.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.id == transfer_id,
+        InvestmentCryptoTransfer.user_id == user_id,
+    ).one_or_none()
+    second = db.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.id == candidate_transfer_id,
+        InvestmentCryptoTransfer.user_id == user_id,
+    ).one_or_none()
+    if first is None or second is None:
+        raise ValueError("owned transfer observations are required")
+    outbound, inbound = (first, second) if first.direction == "out" else (second, first)
+    if outbound.direction != "out" or inbound.direction != "in":
+        raise ValueError("a confirmed pair must contain one sent and one received movement")
+    matches, _method = _transfer_candidates(outbound, inbound)
+    if not matches:
+        raise ValueError("the selected movements do not match by asset, quantity, and timing")
+    outbound.matched_transfer_id = inbound.id
+    inbound.matched_transfer_id = outbound.id
+    outbound.match_method = inbound.match_method = "user_confirmed"
+    db.flush()
+    rebuild_owned_crypto_transfers(db, user_id=user_id)
+    db.flush()
+    if outbound.status != "matched" or inbound.status != "matched":
+        raise ValueError(outbound.reason or "the transfer pair could not be confirmed")
+    if commit:
+        db.commit()
+        db.refresh(first)
+    else:
+        db.flush()
+    return first
+
+
+def transfer_view(
+    item: InvestmentCryptoTransfer, *, db: Session | None = None
+) -> dict[str, object]:
+    candidates = _transfer_candidate_views(db, item) if db is not None else []
+    confidence = (
+        "confirmed"
+        if item.match_method == "user_confirmed"
+        else "high"
+        if item.match_method == "transaction_hash"
+        else "medium"
+        if item.match_method == "quantity_time_window" or candidates
+        else None
+    )
     return {
         "id": str(item.id),
         "account_id": str(item.account_id),
@@ -857,6 +983,8 @@ def transfer_view(item: InvestmentCryptoTransfer) -> dict[str, object]:
         "transaction_hash": item.transaction_hash,
         "status": item.status,
         "match_method": item.match_method,
+        "confidence": confidence,
+        "candidate_transfers": candidates,
         "reason": item.reason,
         "assumptions": item.assumptions or [],
     }

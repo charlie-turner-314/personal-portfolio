@@ -26,7 +26,12 @@ from app.models import (
     PriceSnapshot,
     User,
 )
-from app.routes.investments import create_broker_connection, update_coinspot_credentials
+from app.routes.investments import (
+    create_broker_connection,
+    export_broker_connection_diagnostics,
+    list_investment_ingestion_runs,
+    update_coinspot_credentials,
+)
 from app.schemas import BrokerConnectionCreate, CoinSpotCredentialsUpdate
 from app.services.credentials_crypto import decrypt, encrypt, generate_key
 from app.services.investment_activity_service import (
@@ -167,6 +172,20 @@ def test_initial_and_incremental_exchange_sync_are_idempotent_and_reconciled(db_
         assert db_session.query(InvestmentSourceRecord).filter_by(account_id=account.id).count() == 1
         assert db_session.query(InvestmentActivity).filter_by(account_id=account.id).count() == 1
         assert db_session.query(InvestmentIngestionRun).filter_by(account_id=account.id).count() == 2
+        context = set_request_user_id(user_id)
+        try:
+            runs = list_investment_ingestion_runs(
+                account_id=account.id, user_id=user_id, db=db_session
+            )
+            assert [run["ingestion_type"] for run in runs] == ["api_sync", "api_sync"]
+            diagnostics = export_broker_connection_diagnostics(
+                connection.id, user_id=user_id, db=db_session
+            )
+            assert diagnostics["connection"]["credentials_included"] is False
+            assert len(diagnostics["runs"]) == 2
+            assert "secret" not in str(diagnostics).lower()
+        finally:
+            clear_request_user_id(context)
         holding = db_session.query(Holding).filter_by(account_id=account.id, symbol=symbol).one()
         assert Decimal(holding.quantity) == Decimal("0.5")
         assert holding.source == "crypto_com_api"
@@ -226,6 +245,12 @@ def test_exchange_failure_state_is_recoverable(db_session, failure, status, has_
         assert (connection.read_only_verified_at is None) is isinstance(
             failure, CryptoComExchangeAuthError
         )
+        failed_run = db_session.query(InvestmentIngestionRun).filter_by(
+            account_id=account.id,
+            status="failed",
+        ).one()
+        assert failed_run.ingestion_type == "api_sync"
+        assert str(failure) in failed_run.error
     finally:
         _cleanup(db_session, user_id=user_id)
 
@@ -284,6 +309,47 @@ def test_exchange_connection_requires_attestation_and_encrypts_verified_credenti
         db_session.refresh(connection)
         assert decrypt(connection.credentials_encrypted)["api_key"] == "NEW_KEY"
         assert connection.last_sync_status == "pending"
+    finally:
+        clear_request_user_id(context)
+        _cleanup(db_session, user_id=user_id)
+
+
+def test_exchange_connection_can_reuse_csv_backed_account(db_session):
+    suffix = uuid4().hex[:8]
+    user_id = f"cdc-existing-{suffix}"
+    user = User(
+        id=user_id,
+        email=f"{user_id}@example.test",
+        functional_currency="AUD",
+    )
+    account = Account(
+        user_id=user_id,
+        name="Imported Exchange History",
+        account_type="investment_manual",
+        currency="AUD",
+        provider="manual",
+    )
+    db_session.add_all([user, account])
+    db_session.commit()
+    context = set_request_user_id(user_id)
+    try:
+        payload = BrokerConnectionCreate(
+            provider="crypto_com_exchange",
+            account_id=account.id,
+            api_key="EXISTING_KEY",
+            api_secret="EXISTING_SECRET",
+            read_only_confirmed=True,
+            account_name="ignored for existing account",
+            base_currency="AUD",
+        )
+        with patch("app.routes.investments.CryptoComExchangeAdapter.verify_read_only"):
+            result = create_broker_connection(payload, BackgroundTasks(), db=db_session)
+        db_session.refresh(account)
+        assert result["account_id"] == str(account.id)
+        assert db_session.query(Account).filter_by(user_id=user_id).count() == 1
+        assert account.name == "Imported Exchange History"
+        assert account.account_type == "investment_brokerage"
+        assert account.provider == "crypto_com_exchange"
     finally:
         clear_request_user_id(context)
         _cleanup(db_session, user_id=user_id)

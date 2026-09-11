@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from io import StringIO
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -75,6 +76,7 @@ from app.schemas import (
     InvestmentIncomeEventCreate,
     InvestmentIncomeEventResponse,
     InvestmentIncomeSummary,
+    InvestmentCryptoTransferResolve,
     InvestmentReconciliationResolve,
     ManualAccountCreate,
     PortfolioSummary,
@@ -96,9 +98,37 @@ from app.services.investment_income_reconciliation_service import (
     reconciliation_item_view,
     resolve_reconciliation_item,
 )
-from app.services.crypto_accounting_service import transfer_view
+from app.services.crypto_accounting_service import (
+    confirm_owned_crypto_transfer,
+    transfer_view,
+)
 
 logger = __import__("logging").getLogger(__name__)
+
+
+def _ingestion_run_view(run: InvestmentIngestionRun) -> dict:
+    return {
+        "id": str(run.id),
+        "account_id": str(run.account_id),
+        "provider": run.provider,
+        "ingestion_type": run.ingestion_type,
+        "status": run.status,
+        "source_name": run.source_name,
+        "summary": run.summary or {},
+        "warnings": run.warnings or [],
+        "error": run.error,
+        "started_at": run.started_at.isoformat(),
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "reverted_at": run.reverted_at.isoformat() if run.reverted_at else None,
+    }
+
+
+def _investment_sync_hour_utc() -> int:
+    try:
+        value = int(os.getenv("PERSONAL_PORTFOLIO_INVESTMENT_SYNC_HOUR_UTC", "2"))
+    except ValueError:
+        value = 2
+    return max(0, min(23, value))
 
 # ---------------------------------------------------------------------------
 # Helper: in-process sync (FastAPI BackgroundTask, no Celery/Redis required)
@@ -275,21 +305,48 @@ def list_investment_imports(
     if account_id is not None:
         query = query.filter(InvestmentIngestionRun.account_id == account_id)
     return [
-        {
-            "id": str(run.id),
-            "account_id": str(run.account_id),
-            "provider": run.provider,
-            "status": run.status,
-            "source_name": run.source_name,
-            "summary": run.summary or {},
-            "warnings": run.warnings or [],
-            "error": run.error,
-            "started_at": run.started_at.isoformat(),
-            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-            "reverted_at": run.reverted_at.isoformat() if run.reverted_at else None,
-        }
+        _ingestion_run_view(run)
         for run in query.order_by(InvestmentIngestionRun.started_at.desc()).limit(100).all()
     ]
+
+
+@router.get("/ingestion-runs")
+def list_investment_ingestion_runs(
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return CSV and API ingestion history through one operational view."""
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.user_id == user_id
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentIngestionRun.account_id == account_id)
+    return [
+        _ingestion_run_view(run)
+        for run in query.order_by(InvestmentIngestionRun.started_at.desc()).limit(100).all()
+    ]
+
+
+@router.get("/ingestion-runs/{run_id:uuid}/source-records")
+def list_investment_ingestion_source_records(
+    run_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    run = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.id == run_id,
+        InvestmentIngestionRun.user_id == user_id,
+    ).one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Investment ingestion run not found")
+    records = db.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.run_id == run.id,
+        InvestmentSourceRecord.user_id == user_id,
+    ).order_by(InvestmentSourceRecord.occurred_at, InvestmentSourceRecord.created_at).all()
+    return [source_record_view(record) for record in records]
 
 
 @router.get("/imports/{run_id:uuid}/source-records")
@@ -647,6 +704,7 @@ def resolve_investment_reconciliation(
             action=payload.action,
             income_event_id=payload.income_event_id,
             transaction_id=payload.transaction_id,
+            activity_id=payload.activity_id,
         )
         return reconciliation_item_view(item)
     except ValueError as exc:
@@ -710,12 +768,33 @@ def list_investment_crypto_transfers(
     if status and status != "all":
         query = query.filter(InvestmentCryptoTransfer.status == status)
     return [
-        transfer_view(item)
+        transfer_view(item, db=db)
         for item in query.order_by(
             InvestmentCryptoTransfer.occurred_at.desc(),
             InvestmentCryptoTransfer.id,
         ).limit(500).all()
     ]
+
+
+@router.post("/crypto-transfers/{transfer_id:uuid}/confirm")
+def confirm_investment_crypto_transfer(
+    transfer_id: UUID,
+    payload: InvestmentCryptoTransferResolve,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        item = confirm_owned_crypto_transfer(
+            db,
+            user_id=user_id,
+            transfer_id=transfer_id,
+            candidate_transfer_id=payload.candidate_transfer_id,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return transfer_view(item, db=db)
 
 
 # ---------------------------------------------------------------------------
@@ -819,16 +898,38 @@ def create_broker_connection(
             payload.api_key or "", payload.api_secret or ""
         )
 
-    # Create the underlying brokerage account.
-    account = Account(
-        user_id=user_id,
-        name=payload.account_name,
-        account_type="investment_brokerage",
-        currency=payload.base_currency,
-        provider=payload.provider,
-    )
-    db.add(account)
-    db.flush()
+    if payload.account_id is not None:
+        account = db.query(Account).filter(
+            Account.id == payload.account_id,
+            Account.user_id == user_id,
+            Account.account_type.in_(["investment_manual", "investment_brokerage"]),
+        ).one_or_none()
+        if account is None:
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        if db.query(BrokerConnection.id).filter(
+            BrokerConnection.account_id == account.id
+        ).first():
+            raise HTTPException(
+                status_code=409,
+                detail="This investment account already has an automatic connection.",
+            )
+        if (account.currency or "").upper() != payload.base_currency.upper():
+            raise HTTPException(
+                status_code=400,
+                detail="The existing account currency must match the connector base currency.",
+            )
+        account.account_type = "investment_brokerage"
+        account.provider = payload.provider
+    else:
+        account = Account(
+            user_id=user_id,
+            name=payload.account_name,
+            account_type="investment_brokerage",
+            currency=payload.base_currency,
+            provider=payload.provider,
+        )
+        db.add(account)
+        db.flush()
 
     if payload.provider in {"coinspot", "binance", "crypto_com_exchange"}:
         creds = {
@@ -921,10 +1022,88 @@ def list_broker_connections(
             ),
             "consecutive_failures": c.consecutive_failures or 0,
             "next_retry_at": c.next_retry_at.isoformat() if c.next_retry_at else None,
-            "health_details": c.health_details or {},
+            "health_details": {
+                **(c.health_details or {}),
+                "scheduled_sync": "daily",
+                "scheduled_sync_hour_utc": _investment_sync_hour_utc(),
+            },
         }
         for c in conns
     ]
+
+
+@router.get("/broker-connections/{connection_id}/diagnostics")
+def export_broker_connection_diagnostics(
+    connection_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Export a credential-free support bundle for one investment connection."""
+    user_id = get_user_id(user_id)
+    conn = db.query(BrokerConnection).filter(
+        BrokerConnection.id == connection_id,
+        BrokerConnection.user_id == user_id,
+    ).one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    runs = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.account_id == conn.account_id,
+        InvestmentIngestionRun.user_id == user_id,
+    ).order_by(InvestmentIngestionRun.started_at.desc()).limit(100).all()
+    records = db.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.account_id == conn.account_id,
+        InvestmentSourceRecord.user_id == user_id,
+    ).order_by(InvestmentSourceRecord.occurred_at.desc()).limit(200).all()
+    transfers = db.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.account_id == conn.account_id,
+        InvestmentCryptoTransfer.user_id == user_id,
+    ).order_by(InvestmentCryptoTransfer.occurred_at.desc()).limit(200).all()
+    reconciliation_items = db.query(InvestmentReconciliationItem).filter(
+        InvestmentReconciliationItem.account_id == conn.account_id,
+        InvestmentReconciliationItem.user_id == user_id,
+    ).order_by(
+        InvestmentReconciliationItem.created_at.desc(),
+        InvestmentReconciliationItem.id,
+    ).limit(200).all()
+    return {
+        "format": "syllogic-investment-diagnostics-v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "account": {
+            "id": str(conn.account.id),
+            "name": conn.account.name,
+            "currency": conn.account.currency,
+            "provider": conn.provider,
+            "active": bool(conn.account.is_active),
+        },
+        "connection": {
+            "id": str(conn.id),
+            "last_sync_at": conn.last_sync_at.isoformat() if conn.last_sync_at else None,
+            "last_sync_status": conn.last_sync_status,
+            "last_sync_error": conn.last_sync_error,
+            "consecutive_failures": conn.consecutive_failures or 0,
+            "next_retry_at": conn.next_retry_at.isoformat() if conn.next_retry_at else None,
+            "read_only_verified_at": (
+                conn.read_only_verified_at.isoformat()
+                if conn.read_only_verified_at else None
+            ),
+            "health_details": conn.health_details or {},
+            "scheduled_sync": {
+                "frequency": "daily",
+                "hour_utc": _investment_sync_hour_utc(),
+            },
+            "credentials_included": False,
+        },
+        "runs": [_ingestion_run_view(run) for run in runs],
+        "source_records": [source_record_view(record) for record in records],
+        "transfers": [transfer_view(item, db=db) for item in transfers],
+        "reconciliation_items": [
+            reconciliation_item_view(item) for item in reconciliation_items
+        ],
+        "retention": (
+            "Disconnect removes encrypted credentials and stops future sync; imported "
+            "history and provenance remain until the account is deleted."
+        ),
+    }
 
 
 @router.post("/broker-connections/{connection_id}/sync")

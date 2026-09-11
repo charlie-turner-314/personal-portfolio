@@ -5,16 +5,20 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   RiDeleteBinLine,
+  RiDownloadLine,
   RiErrorWarningLine,
   RiRefreshLine,
   RiShieldCheckLine,
 } from "@remixicon/react";
 import {
   disconnectBrokerConnection,
+  getBrokerConnectionDiagnostics,
+  listInvestmentIngestionRuns,
   syncBrokerConnection,
   updateBrokerApiCredentials,
   updateBinanceTradeSymbols,
   type BrokerConnection,
+  type InvestmentImportRun,
 } from "@/lib/api/investments";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -57,6 +61,7 @@ export function BrokerConnectionsPanel({
   const [replacementReadOnlyConfirmed, setReplacementReadOnlyConfirmed] = useState(false);
   const [pairEditId, setPairEditId] = useState<string | null>(null);
   const [pairEditValue, setPairEditValue] = useState("");
+  const [runsByAccount, setRunsByAccount] = useState<Record<string, InvestmentImportRun[]>>({});
 
   const pendingKey = connections
     .filter((connection) => connection.last_sync_status === "pending")
@@ -67,6 +72,21 @@ export function BrokerConnectionsPanel({
     const interval = window.setInterval(() => router.refresh(), 10_000);
     return () => window.clearInterval(interval);
   }, [pendingKey, router]);
+
+  const connectionAccountsKey = connections.map((item) => item.account_id).join(",");
+  useEffect(() => {
+    let cancelled = false;
+    const accountIds = [...new Set(connectionAccountsKey.split(",").filter(Boolean))];
+    Promise.all(accountIds.map(async (accountId) => [
+      accountId,
+      await listInvestmentIngestionRuns(accountId),
+    ] as const)).then((entries) => {
+      if (!cancelled) setRunsByAccount(Object.fromEntries(entries));
+    }).catch(() => {
+      // Connection status remains useful if run history is temporarily unavailable.
+    });
+    return () => { cancelled = true; };
+  }, [connectionAccountsKey]);
 
   if (connections.length === 0) return null;
 
@@ -94,6 +114,26 @@ export function BrokerConnectionsPanel({
       router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Disconnect failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const downloadDiagnostics = async (connection: BrokerConnection) => {
+    setBusyId(connection.id);
+    try {
+      const diagnostics = await getBrokerConnectionDiagnostics(connection.id);
+      const blob = new Blob([JSON.stringify(diagnostics, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `investment-diagnostics-${connection.provider}-${connection.id}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Diagnostics export failed");
     } finally {
       setBusyId(null);
     }
@@ -156,6 +196,7 @@ export function BrokerConnectionsPanel({
             const differences = connection.health_details.differences || [];
             const isBusy = busyId === connection.id;
             const isProblem = status === "error" || status === "needs_reauth";
+            const recentRuns = (runsByAccount[connection.account_id] || []).slice(0, 3);
             return (
               <div key={connection.id} className="p-3.5 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -203,6 +244,15 @@ export function BrokerConnectionsPanel({
                         <Button
                           size="icon-sm"
                           variant="ghost"
+                          aria-label={`Download diagnostics for ${connection.account_name}`}
+                          disabled={isBusy}
+                          onClick={() => void downloadDiagnostics(connection)}
+                        >
+                          <RiDownloadLine />
+                        </Button>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
                           aria-label={`Disconnect ${connection.account_name}`}
                           disabled={isBusy}
                           onClick={() => disconnect(connection)}
@@ -213,6 +263,27 @@ export function BrokerConnectionsPanel({
                     )}
                   </div>
                 </div>
+
+                <div className="text-[11px] text-muted-foreground">
+                  Scheduled sync: daily at {connection.health_details.scheduled_sync_hour_utc ?? 2}:00 UTC
+                  {connection.health_details.scheduled_sync_queued_at
+                    ? ` · last queued ${dateTimeLabel(connection.health_details.scheduled_sync_queued_at)}`
+                    : " · awaiting first scheduled run"}
+                </div>
+
+                {recentRuns.length > 0 && (
+                  <div className="border border-border p-2.5 text-xs">
+                    <div className="mb-1.5 font-medium">Recent ingestion runs</div>
+                    <div className="space-y-1 text-muted-foreground">
+                      {recentRuns.map((run) => (
+                        <div key={run.id} className="flex flex-wrap justify-between gap-2">
+                          <span>{run.provider} · {run.ingestion_type?.replace("_", " ") ?? "import"}</span>
+                          <span>{run.status} · {dateTimeLabel(run.started_at)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
                   <div>Provider: <span className="text-foreground">{providerLabel(connection.provider)}</span></div>
