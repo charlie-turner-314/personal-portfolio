@@ -24,6 +24,14 @@ from app.integrations.coinspot_adapter import (
     CoinSpotReadOnlyClient,
     CoinSpotTransientError,
 )
+from app.integrations.binance_adapter import (
+    BinanceAdapter,
+    BinanceAuthError,
+    BinanceError,
+    BinancePermissionError,
+    BinanceReadOnlyClient,
+    BinanceTransientError,
+)
 from app.models import (
     Account,
     AccountBalance,
@@ -47,6 +55,7 @@ from app.investment_import_schemas import (
     InvestmentImportRequest,
 )
 from app.schemas import (
+    BinanceTradeSymbolsUpdate,
     BrokerConnectionCreate,
     CoinSpotCredentialsUpdate,
     HoldingCreate,
@@ -730,6 +739,34 @@ def _verify_coinspot_credentials(api_key: str, api_secret: str) -> None:
         adapter.close()
 
 
+def _verify_binance_credentials(api_key: str, api_secret: str) -> None:
+    adapter = BinanceAdapter(BinanceReadOnlyClient(api_key=api_key, api_secret=api_secret))
+    try:
+        adapter.verify_read_only()
+    except BinancePermissionError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Binance key is not least privilege. Enable reading only and disable "
+                "Spot/margin trading, withdrawals, futures, options, and transfers."
+            ),
+        ) from exc
+    except BinanceAuthError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Binance rejected the API key. Check the key, secret, and IP restrictions.",
+        ) from exc
+    except BinanceTransientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Binance is temporarily unavailable or rate limited. Try connecting again shortly.",
+        ) from exc
+    except BinanceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
+    finally:
+        adapter.close()
+
+
 @router.post("/broker-connections")
 def create_broker_connection(
     payload: BrokerConnectionCreate,
@@ -743,6 +780,8 @@ def create_broker_connection(
         # The client is deliberately incapable of leaving CoinSpot's V2
         # read-only namespace. Validate credentials before persisting anything.
         _verify_coinspot_credentials(payload.api_key or "", payload.api_secret or "")
+    elif payload.provider == "binance":
+        _verify_binance_credentials(payload.api_key or "", payload.api_secret or "")
 
     # Create the underlying brokerage account.
     account = Account(
@@ -755,12 +794,17 @@ def create_broker_connection(
     db.add(account)
     db.flush()
 
-    if payload.provider == "coinspot":
+    if payload.provider in {"coinspot", "binance"}:
         creds = {
             "api_key": payload.api_key,
             "api_secret": payload.api_secret,
-            "history_start_date": (payload.history_start_date or date(2013, 1, 1)).isoformat(),
+            "history_start_date": (
+                payload.history_start_date
+                or (date(2013, 1, 1) if payload.provider == "coinspot" else date(2017, 7, 1))
+            ).isoformat(),
         }
+        if payload.provider == "binance":
+            creds["trade_symbols"] = payload.trade_symbols
     else:
         creds = {
             "flex_token": payload.flex_token,
@@ -775,11 +819,19 @@ def create_broker_connection(
         provider=payload.provider,
         credentials_encrypted=encrypted,
         last_sync_status="pending",
-        read_only_verified_at=datetime.utcnow() if payload.provider == "coinspot" else None,
+        read_only_verified_at=(
+            datetime.utcnow() if payload.provider in {"coinspot", "binance"} else None
+        ),
         consecutive_failures=0,
         health_details=(
-            {"read_only_namespace": "https://www.coinspot.com.au/api/v2/ro"}
-            if payload.provider == "coinspot" else {}
+            {
+                "read_only_namespace": (
+                    "https://www.coinspot.com.au/api/v2/ro"
+                    if payload.provider == "coinspot"
+                    else "Binance signed USER_DATA GET allowlist"
+                )
+            }
+            if payload.provider in {"coinspot", "binance"} else {}
         ),
     )
     db.add(conn)
@@ -862,15 +914,22 @@ def update_coinspot_credentials(
     ).one_or_none()
     if conn is None:
         raise HTTPException(status_code=404, detail="Broker connection not found")
-    if conn.provider != "coinspot":
-        raise HTTPException(status_code=400, detail="Credential replacement is only available for CoinSpot")
+    if conn.provider not in {"coinspot", "binance"}:
+        raise HTTPException(status_code=400, detail="Credential replacement is only available for API connections")
 
-    _verify_coinspot_credentials(payload.api_key, payload.api_secret)
+    if conn.provider == "coinspot":
+        _verify_coinspot_credentials(payload.api_key, payload.api_secret)
+    else:
+        _verify_binance_credentials(payload.api_key, payload.api_secret)
     existing = credentials_crypto.decrypt(conn.credentials_encrypted)
     conn.credentials_encrypted = credentials_crypto.encrypt({
         **existing,
         "api_key": payload.api_key,
         "api_secret": payload.api_secret,
+        **(
+            {"trade_symbols": payload.trade_symbols}
+            if conn.provider == "binance" and payload.trade_symbols is not None else {}
+        ),
     })
     conn.read_only_verified_at = datetime.utcnow()
     conn.last_sync_status = "pending"
@@ -880,7 +939,44 @@ def update_coinspot_credentials(
     conn.health_details = {
         **(conn.health_details or {}),
         "failure_kind": None,
-        "read_only_namespace": "https://www.coinspot.com.au/api/v2/ro",
+        "read_only_namespace": (
+            "https://www.coinspot.com.au/api/v2/ro"
+            if conn.provider == "coinspot"
+            else "Binance signed USER_DATA GET allowlist"
+        ),
+    }
+    db.commit()
+    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    return {"status": "queued", "account_id": str(conn.account_id)}
+
+
+@router.patch("/broker-connections/{connection_id}/configuration")
+def update_binance_configuration(
+    connection_id: UUID,
+    payload: BinanceTradeSymbolsUpdate,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    conn = db.query(BrokerConnection).filter(
+        BrokerConnection.id == connection_id,
+        BrokerConnection.user_id == user_id,
+    ).one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    if conn.provider != "binance":
+        raise HTTPException(status_code=400, detail="Spot-pair configuration is only available for Binance")
+    existing = credentials_crypto.decrypt(conn.credentials_encrypted)
+    conn.credentials_encrypted = credentials_crypto.encrypt({
+        **existing, "trade_symbols": payload.trade_symbols,
+    })
+    conn.last_sync_status = "pending"
+    conn.last_sync_error = None
+    conn.next_retry_at = None
+    conn.health_details = {
+        **(conn.health_details or {}),
+        "configured_trade_symbols": payload.trade_symbols,
     }
     db.commit()
     background_tasks.add_task(_run_sync_in_process, conn.account_id)

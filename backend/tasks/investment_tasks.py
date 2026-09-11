@@ -12,6 +12,7 @@ from app.services.investment_sync_service import InvestmentSyncService
 from app.services.exchange_rate_service import ExchangeRateService
 from app.integrations.ibkr_flex_adapter import FlexStatementNotReady
 from app.integrations.coinspot_adapter import CoinSpotTransientError
+from app.integrations.binance_adapter import BinanceTransientError
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,14 @@ def sync_investment_account(self, account_id: str) -> dict:
         return {"account_id": account_id, "status": "ok"}
     except (FlexStatementNotReady, CoinSpotTransientError):
         raise
+    except BinanceTransientError as exc:
+        retry_after = int(exc.retry_after_seconds or 0)
+        exponential = min(60 * (2 ** int(self.request.retries or 0)), 3600)
+        raise self.retry(
+            exc=exc,
+            countdown=min(max(retry_after, exponential), 259200),
+            max_retries=6,
+        )
     except Exception:
         logger.exception("Investment sync failed for %s", account_id)
         raise

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   sync: vi.fn(),
   disconnect: vi.fn(),
   updateCredentials: vi.fn(),
+  updatePairs: vi.fn(),
   push: vi.fn(),
   refresh: vi.fn(),
   success: vi.fn(),
@@ -18,7 +19,8 @@ vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error }
 vi.mock("@/lib/api/investments", () => ({
   syncBrokerConnection: mocks.sync,
   disconnectBrokerConnection: mocks.disconnect,
-  updateCoinSpotCredentials: mocks.updateCredentials,
+  updateBrokerApiCredentials: mocks.updateCredentials,
+  updateBinanceTradeSymbols: mocks.updatePairs,
 }));
 
 import { BrokerConnectionsPanel } from "./BrokerConnectionsPanel";
@@ -53,6 +55,7 @@ describe("BrokerConnectionsPanel", () => {
     mocks.sync.mockResolvedValue(undefined);
     mocks.disconnect.mockResolvedValue(undefined);
     mocks.updateCredentials.mockResolvedValue(undefined);
+    mocks.updatePairs.mockResolvedValue(undefined);
   });
 
   it("shows read-only health and a clear quantity difference", () => {
@@ -93,6 +96,41 @@ describe("BrokerConnectionsPanel", () => {
     await waitFor(() => expect(mocks.updateCredentials).toHaveBeenCalledWith(
       "connection-1",
       { api_key: "new-key", api_secret: "new-secret" },
+    ));
+  });
+
+  it("surfaces Binance coverage and unpriced-asset warnings", () => {
+    render(<BrokerConnectionsPanel connections={[{
+      ...connection,
+      account_name: "Binance Main",
+      provider: "binance",
+      last_sync_status: "ok",
+      last_sync_error: null,
+      health_details: {
+        balances_reconciled: true,
+        missing_product_warnings: ["Funding wallet activity is not imported."],
+        unpriced_assets: ["RARE"],
+      },
+    }]} />);
+    expect(screen.getByText("Binance")).toBeTruthy();
+    expect(screen.getByText("Coverage notes")).toBeTruthy();
+    expect(screen.getByText(/Funding wallet activity/)).toBeTruthy();
+    expect(screen.getByText(/No current AUD market route for: RARE/)).toBeTruthy();
+  });
+
+  it("updates Binance historical pairs without replacing credentials", async () => {
+    render(<BrokerConnectionsPanel connections={[{
+      ...connection,
+      provider: "binance",
+      health_details: { balances_reconciled: true, trade_symbols: ["BTCUSDT"] },
+    }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit pairs" }));
+    fireEvent.change(screen.getByLabelText("Binance historical Spot pairs"), {
+      target: { value: "btcusdt, ethusdt" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & sync" }));
+    await waitFor(() => expect(mocks.updatePairs).toHaveBeenCalledWith(
+      "connection-1", ["BTCUSDT", "ETHUSDT"],
     ));
   });
 });

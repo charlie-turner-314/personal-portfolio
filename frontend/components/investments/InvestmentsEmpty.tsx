@@ -68,8 +68,8 @@ export function InvestmentsEmpty({
               </Badge>
             </div>
             <div className="text-xs text-muted-foreground leading-relaxed">
-              Connect CoinSpot through its read-only API or Interactive Brokers
-              through Flex Query. Activity syncs automatically.
+              Connect CoinSpot or Binance through a read-only API, or Interactive
+              Brokers through Flex Query. Activity syncs automatically.
             </div>
             <ul className="mt-1 pl-4 list-disc space-y-1">
               {[

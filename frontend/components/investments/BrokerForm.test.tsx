@@ -45,4 +45,35 @@ describe("BrokerForm", () => {
     }));
     expect(mocks.push).toHaveBeenCalledWith("/investments");
   });
+
+  it("documents Binance read-only permissions and submits explicit historical pairs", async () => {
+    render(<BrokerForm onCancel={vi.fn()} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    const option = screen.getByRole("option", { name: "Binance · read-only API" });
+    fireEvent.mouseMove(option);
+    fireEvent.click(option);
+
+    expect(screen.getByText(/Disable Spot & Margin Trading/)).toBeTruthy();
+    expect(screen.getByText(/sold-out historical pairs must be listed/)).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("Paste your Binance API key"), {
+      target: { value: "binance-key" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Paste your Binance API secret"), {
+      target: { value: "binance-secret" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("BTCAUD, ETHUSDT, BNBBTC"), {
+      target: { value: "btcusdt, ethusdt" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect & sync" }));
+
+    await waitFor(() => expect(mocks.createBrokerConnection).toHaveBeenCalledWith({
+      provider: "binance",
+      api_key: "binance-key",
+      api_secret: "binance-secret",
+      history_start_date: "2017-07-01",
+      trade_symbols: ["BTCUSDT", "ETHUSDT"],
+      account_name: "Binance Main",
+      base_currency: "AUD",
+    }));
+  });
 });

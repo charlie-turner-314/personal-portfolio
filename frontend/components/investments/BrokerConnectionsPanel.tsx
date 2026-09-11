@@ -12,7 +12,8 @@ import {
 import {
   disconnectBrokerConnection,
   syncBrokerConnection,
-  updateCoinSpotCredentials,
+  updateBrokerApiCredentials,
+  updateBinanceTradeSymbols,
   type BrokerConnection,
 } from "@/lib/api/investments";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +47,8 @@ export function BrokerConnectionsPanel({
   const [reconnectId, setReconnectId] = useState<string | null>(null);
   const [replacementKey, setReplacementKey] = useState("");
   const [replacementSecret, setReplacementSecret] = useState("");
+  const [pairEditId, setPairEditId] = useState<string | null>(null);
+  const [pairEditValue, setPairEditValue] = useState("");
 
   const pendingKey = connections
     .filter((connection) => connection.last_sync_status === "pending")
@@ -91,7 +94,7 @@ export function BrokerConnectionsPanel({
   const reconnect = async (connection: BrokerConnection) => {
     setBusyId(connection.id);
     try {
-      await updateCoinSpotCredentials(connection.id, {
+      await updateBrokerApiCredentials(connection.id, {
         api_key: replacementKey,
         api_secret: replacementSecret,
       });
@@ -102,6 +105,23 @@ export function BrokerConnectionsPanel({
       router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Key verification failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const savePairs = async (connection: BrokerConnection) => {
+    setBusyId(connection.id);
+    try {
+      await updateBinanceTradeSymbols(
+        connection.id,
+        pairEditValue.split(/[\s,]+/).filter(Boolean).map((value) => value.toUpperCase()),
+      );
+      setPairEditId(null);
+      toast.success(`${connection.account_name} pairs updated; sync queued`);
+      router.refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Pair update failed");
     } finally {
       setBusyId(null);
     }
@@ -137,6 +157,19 @@ export function BrokerConnectionsPanel({
                     </span>
                   )}
                   <div className="ml-auto flex items-center gap-1.5">
+                    {connection.provider === "binance" && !readOnly && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const opening = pairEditId !== connection.id;
+                          setPairEditId(opening ? connection.id : null);
+                          if (opening) setPairEditValue((connection.health_details.trade_symbols || []).join(", "));
+                        }}
+                      >
+                        Edit pairs
+                      </Button>
+                    )}
                     {status === "needs_reauth" && !readOnly && (
                       <Button
                         size="sm"
@@ -166,7 +199,7 @@ export function BrokerConnectionsPanel({
                 </div>
 
                 <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
-                  <div>Provider: <span className="text-foreground">{connection.provider === "coinspot" ? "CoinSpot" : "IBKR Flex"}</span></div>
+                  <div>Provider: <span className="text-foreground">{connection.provider === "coinspot" ? "CoinSpot" : connection.provider === "binance" ? "Binance" : "IBKR Flex"}</span></div>
                   <div>Last successful sync: <span className="text-foreground">{dateTimeLabel(connection.last_sync_at)}</span></div>
                   <div>
                     Balance check:{" "}
@@ -185,7 +218,7 @@ export function BrokerConnectionsPanel({
                   </div>
                 )}
 
-                {reconnectId === connection.id && connection.provider === "coinspot" && (
+                {reconnectId === connection.id && connection.provider !== "ibkr_flex" && (
                   <form
                     className="grid gap-2 border border-border bg-muted/30 p-3 sm:grid-cols-[1fr_1fr_auto]"
                     onSubmit={(event) => {
@@ -196,8 +229,8 @@ export function BrokerConnectionsPanel({
                     <Input
                       required
                       autoComplete="off"
-                      aria-label="Replacement CoinSpot API key"
-                      placeholder="New Read Only API key"
+                      aria-label={`Replacement ${connection.provider === "coinspot" ? "CoinSpot" : "Binance"} API key`}
+                      placeholder="New read-only API key"
                       value={replacementKey}
                       onChange={(event) => setReplacementKey(event.target.value)}
                     />
@@ -205,13 +238,46 @@ export function BrokerConnectionsPanel({
                       required
                       type="password"
                       autoComplete="new-password"
-                      aria-label="Replacement CoinSpot API secret"
+                      aria-label={`Replacement ${connection.provider === "coinspot" ? "CoinSpot" : "Binance"} API secret`}
                       placeholder="New API secret"
                       value={replacementSecret}
                       onChange={(event) => setReplacementSecret(event.target.value)}
                     />
                     <Button type="submit" disabled={isBusy}>Verify & sync</Button>
                   </form>
+                )}
+
+                {pairEditId === connection.id && connection.provider === "binance" && (
+                  <form
+                    className="flex flex-col gap-2 border border-border bg-muted/30 p-3 sm:flex-row"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void savePairs(connection);
+                    }}
+                  >
+                    <Input
+                      aria-label="Binance historical Spot pairs"
+                      placeholder="BTCAUD, ETHUSDT, BNBBTC"
+                      value={pairEditValue}
+                      onChange={(event) => setPairEditValue(event.target.value.toUpperCase())}
+                    />
+                    <Button type="submit" disabled={isBusy}>Save &amp; sync</Button>
+                  </form>
+                )}
+
+                {(connection.health_details.missing_product_warnings || []).length > 0 && (
+                  <div className="border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                    <div className="font-medium">Coverage notes</div>
+                    {(connection.health_details.missing_product_warnings || []).map((warning) => (
+                      <div key={warning}>• {warning}</div>
+                    ))}
+                  </div>
+                )}
+
+                {(connection.health_details.unpriced_assets || []).length > 0 && (
+                  <div className="text-[11px] text-muted-foreground">
+                    No current AUD market route for: {connection.health_details.unpriced_assets?.join(", ")}
+                  </div>
                 )}
 
                 {differences.length > 0 && (
@@ -221,7 +287,7 @@ export function BrokerConnectionsPanel({
                         <tr>
                           <th className="px-2.5 py-2 text-left font-medium">Asset</th>
                           <th className="px-2.5 py-2 text-right font-medium">Activity ledger</th>
-                          <th className="px-2.5 py-2 text-right font-medium">CoinSpot</th>
+                          <th className="px-2.5 py-2 text-right font-medium">{connection.provider === "coinspot" ? "CoinSpot" : "Provider"}</th>
                           <th className="px-2.5 py-2 text-right font-medium">Difference</th>
                         </tr>
                       </thead>

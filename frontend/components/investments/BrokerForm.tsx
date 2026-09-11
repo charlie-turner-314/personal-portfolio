@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Field, Input } from "./_form-bits";
 
-type Provider = "coinspot" | "ibkr_flex";
+type Provider = "coinspot" | "binance" | "ibkr_flex";
 
 export function BrokerForm({ onCancel }: { onCancel: () => void }) {
   const router = useRouter();
@@ -35,6 +35,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
   const [apiSecret, setApiSecret] = useState("");
   const [secretVisible, setSecretVisible] = useState(false);
   const [historyStart, setHistoryStart] = useState("2013-01-01");
+  const [tradePairs, setTradePairs] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -44,6 +45,11 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
     if (next === "coinspot") {
       setAccountName("CoinSpot Main");
       setBaseCurrency("AUD");
+      setHistoryStart("2013-01-01");
+    } else if (next === "binance") {
+      setAccountName("Binance Main");
+      setBaseCurrency("AUD");
+      setHistoryStart("2017-07-01");
     } else {
       setAccountName("IBKR Main");
       setBaseCurrency("EUR");
@@ -61,6 +67,16 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
           api_key: apiKey,
           api_secret: apiSecret,
           history_start_date: historyStart,
+          account_name: accountName,
+          base_currency: "AUD",
+        });
+      } else if (provider === "binance") {
+        await createBrokerConnection({
+          provider,
+          api_key: apiKey,
+          api_secret: apiSecret,
+          history_start_date: historyStart,
+          trade_symbols: tradePairs.split(/[\s,]+/).filter(Boolean),
           account_name: accountName,
           base_currency: "AUD",
         });
@@ -95,6 +111,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="coinspot">CoinSpot · read-only API</SelectItem>
+                <SelectItem value="binance">Binance · read-only API</SelectItem>
                 <SelectItem value="ibkr_flex">Interactive Brokers · Flex Query</SelectItem>
               </SelectContent>
             </Select>
@@ -102,38 +119,42 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
 
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 border border-border flex items-center justify-center font-bold text-[10px] text-muted-foreground">
-              {provider === "coinspot" ? "CS" : "IBKR"}
+              {provider === "coinspot" ? "CS" : provider === "binance" ? "BN" : "IBKR"}
             </div>
             <div>
               <div className="font-semibold text-sm">
-                {provider === "coinspot" ? "CoinSpot" : "Interactive Brokers"}
+                {provider === "coinspot" ? "CoinSpot" : provider === "binance" ? "Binance" : "Interactive Brokers"}
               </div>
               <div className="text-xs text-muted-foreground mt-0.5">
                 {provider === "coinspot"
                   ? "Balances and completed activity sync through CoinSpot V2"
-                  : "Positions and trade history sync through the Flex Web Service"}
+                  : provider === "binance"
+                    ? "Spot balances, fills, Convert, transfers, and supported Earn rewards"
+                    : "Positions and trade history sync through the Flex Web Service"}
               </div>
             </div>
           </div>
 
-          {provider === "coinspot" ? (
+          {provider !== "ibkr_flex" ? (
             <div className="bg-muted/40 border border-border px-4 py-3 space-y-2">
               <div className="flex gap-2 text-xs font-medium">
                 <RiShieldCheckLine size={15} className="shrink-0 text-emerald-600" />
                 Read-only by design
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Syllogic is locked to CoinSpot&apos;s documented <code>/api/v2/ro</code>
-                namespace. It cannot place trades or request withdrawals. Generate a Read Only
-                API key in CoinSpot, then paste its key and secret below.
+                {provider === "coinspot" ? (
+                  <>Syllogic is locked to CoinSpot&apos;s documented <code>/api/v2/ro</code> namespace. It cannot place trades or request withdrawals. Generate a Read Only API key in CoinSpot, then paste its key and secret below.</>
+                ) : (
+                  <>Create a Binance API key with reading enabled only. Disable Spot &amp; Margin Trading, withdrawals, futures, options, and transfer permissions. Syllogic calls a fixed allowlist of signed <code>GET</code> endpoints and rejects keys with write permissions.</>
+                )}
               </p>
               <a
-                href="https://www.coinspot.com.au/v2/api"
+                href={provider === "coinspot" ? "https://www.coinspot.com.au/v2/api" : "https://developers.binance.com/en/docs/catalog/core-trading-wallet/api/rest-api/account#get-api-key-permission"}
                 target="_blank"
                 rel="noreferrer"
                 className="text-xs text-foreground inline-flex items-center gap-1 hover:underline"
               >
-                <RiExternalLinkLine size={11} /> CoinSpot V2 API guide
+                <RiExternalLinkLine size={11} /> {provider === "coinspot" ? "CoinSpot V2 API guide" : "Binance API permission guide"}
               </a>
             </div>
           ) : (
@@ -160,7 +181,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
                 <Input required value={accountName} onChange={(event) => setAccountName(event.target.value)} />
               </Field>
               <Field label="Base currency" className="flex-1">
-                {provider === "coinspot" ? (
+                {provider !== "ibkr_flex" ? (
                   <Input value="AUD" disabled />
                 ) : (
                   <Select value={baseCurrency} onValueChange={(value) => value && setBaseCurrency(value)}>
@@ -175,10 +196,10 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
               </Field>
             </div>
 
-            {provider === "coinspot" ? (
+            {provider !== "ibkr_flex" ? (
               <>
                 <Field label="API key">
-                  <Input required autoComplete="off" placeholder="Paste your CoinSpot API key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+                  <Input required autoComplete="off" placeholder={`Paste your ${provider === "coinspot" ? "CoinSpot" : "Binance"} API key`} value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
                 </Field>
                 <Field label="API secret">
                   <div className="relative">
@@ -186,7 +207,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
                       required
                       autoComplete="new-password"
                       type={secretVisible ? "text" : "password"}
-                      placeholder="Paste your CoinSpot API secret"
+                      placeholder={`Paste your ${provider === "coinspot" ? "CoinSpot" : "Binance"} API secret`}
                       value={apiSecret}
                       onChange={(event) => setApiSecret(event.target.value)}
                       className="pr-9"
@@ -205,7 +226,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
                   <Input
                     required
                     type="date"
-                    min="2013-01-01"
+                    min={provider === "coinspot" ? "2013-01-01" : "2017-07-01"}
                     max={new Date().toISOString().slice(0, 10)}
                     value={historyStart}
                     onChange={(event) => setHistoryStart(event.target.value)}
@@ -214,6 +235,19 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
                     The first sync backfills from this date. Later syncs overlap the last two days safely.
                   </div>
                 </Field>
+                {provider === "binance" && (
+                  <Field label="Historical Spot pairs (recommended)">
+                    <Input
+                      autoComplete="off"
+                      placeholder="BTCAUD, ETHUSDT, BNBBTC"
+                      value={tradePairs}
+                      onChange={(event) => setTradePairs(event.target.value.toUpperCase())}
+                    />
+                    <div className="text-[11px] text-muted-foreground mt-1.5">
+                      Binance requires a pair for trade history. We discover pairs from visible assets, but sold-out historical pairs must be listed here for a complete ledger.
+                    </div>
+                  </Field>
+                )}
               </>
             ) : (
               <>

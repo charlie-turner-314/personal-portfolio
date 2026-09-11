@@ -285,13 +285,14 @@ from typing import Literal
 
 
 class BrokerConnectionCreate(BaseModel):
-    provider: Literal["ibkr_flex", "coinspot"]
+    provider: Literal["ibkr_flex", "coinspot", "binance"]
     flex_token: Optional[str] = None
     query_id_positions: Optional[str] = None
     query_id_trades: Optional[str] = None
     api_key: Optional[str] = None
     api_secret: Optional[str] = None
     history_start_date: Optional[_date_date] = None
+    trade_symbols: list[str] = Field(default_factory=list)
     account_name: str
     base_currency: str = "EUR"
 
@@ -317,8 +318,16 @@ class BrokerConnectionCreate(BaseModel):
             )
         if not self.account_name:
             raise ValueError("account name is required")
-        if self.provider == "coinspot" and self.base_currency.upper() != "AUD":
-            raise ValueError("CoinSpot accounts must use AUD as their base currency")
+        if self.provider in {"coinspot", "binance"} and self.base_currency.upper() != "AUD":
+            raise ValueError(f"{self.provider.title()} accounts must use AUD as their base currency")
+        normalized_symbols: list[str] = []
+        for value in self.trade_symbols:
+            symbol = value.strip().upper()
+            if not symbol or len(symbol) > 32 or not symbol.isalnum():
+                raise ValueError("Binance Spot pairs must contain only letters and numbers")
+            if symbol not in normalized_symbols:
+                normalized_symbols.append(symbol)
+        self.trade_symbols = normalized_symbols
         self.base_currency = self.base_currency.upper()
         return self
 
@@ -339,6 +348,7 @@ class BrokerConnectionResponse(BaseModel):
 class CoinSpotCredentialsUpdate(BaseModel):
     api_key: str
     api_secret: str
+    trade_symbols: Optional[list[str]] = None
 
     @field_validator("api_key", "api_secret")
     @classmethod
@@ -347,6 +357,36 @@ class CoinSpotCredentialsUpdate(BaseModel):
         if not value:
             raise ValueError("credential is required")
         return value
+
+    @field_validator("trade_symbols")
+    @classmethod
+    def _normalize_trade_symbols(cls, values: Optional[list[str]]) -> Optional[list[str]]:
+        if values is None:
+            return None
+        result: list[str] = []
+        for value in values:
+            symbol = value.strip().upper()
+            if not symbol or len(symbol) > 32 or not symbol.isalnum():
+                raise ValueError("Binance Spot pairs must contain only letters and numbers")
+            if symbol not in result:
+                result.append(symbol)
+        return result
+
+
+class BinanceTradeSymbolsUpdate(BaseModel):
+    trade_symbols: list[str]
+
+    @field_validator("trade_symbols")
+    @classmethod
+    def _normalize_trade_symbols(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            symbol = value.strip().upper()
+            if not symbol or len(symbol) > 32 or not symbol.isalnum():
+                raise ValueError("Binance Spot pairs must contain only letters and numbers")
+            if symbol not in result:
+                result.append(symbol)
+        return result
 
 
 class ManualAccountCreate(BaseModel):
