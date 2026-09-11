@@ -35,6 +35,13 @@ function dateTimeLabel(value: string | null): string {
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString("en-AU");
 }
 
+function providerLabel(provider: BrokerConnection["provider"]): string {
+  if (provider === "coinspot") return "CoinSpot";
+  if (provider === "binance") return "Binance";
+  if (provider === "crypto_com_exchange") return "Crypto.com Exchange";
+  return "IBKR Flex";
+}
+
 export function BrokerConnectionsPanel({
   connections,
   readOnly = false,
@@ -47,6 +54,7 @@ export function BrokerConnectionsPanel({
   const [reconnectId, setReconnectId] = useState<string | null>(null);
   const [replacementKey, setReplacementKey] = useState("");
   const [replacementSecret, setReplacementSecret] = useState("");
+  const [replacementReadOnlyConfirmed, setReplacementReadOnlyConfirmed] = useState(false);
   const [pairEditId, setPairEditId] = useState<string | null>(null);
   const [pairEditValue, setPairEditValue] = useState("");
 
@@ -97,9 +105,13 @@ export function BrokerConnectionsPanel({
       await updateBrokerApiCredentials(connection.id, {
         api_key: replacementKey,
         api_secret: replacementSecret,
+        read_only_confirmed: connection.provider === "crypto_com_exchange"
+          ? replacementReadOnlyConfirmed
+          : undefined,
       });
       setReplacementKey("");
       setReplacementSecret("");
+      setReplacementReadOnlyConfirmed(false);
       setReconnectId(null);
       toast.success(`${connection.account_name} key verified; sync queued`);
       router.refresh();
@@ -153,7 +165,7 @@ export function BrokerConnectionsPanel({
                   </Badge>
                   {connection.read_only_verified_at && (
                     <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
-                      <RiShieldCheckLine size={12} /> Read-only verified
+                      <RiShieldCheckLine size={12} /> {connection.provider === "crypto_com_exchange" ? "Read-only confirmed" : "Read-only verified"}
                     </span>
                   )}
                   <div className="ml-auto flex items-center gap-1.5">
@@ -172,9 +184,13 @@ export function BrokerConnectionsPanel({
                     )}
                     {status === "needs_reauth" && !readOnly && (
                       <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setReconnectId((current) => current === connection.id ? null : connection.id)}
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const opening = reconnectId !== connection.id;
+                        setReconnectId(opening ? connection.id : null);
+                        if (opening) setReplacementReadOnlyConfirmed(false);
+                      }}
                       >
                         Replace key
                       </Button>
@@ -199,7 +215,7 @@ export function BrokerConnectionsPanel({
                 </div>
 
                 <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
-                  <div>Provider: <span className="text-foreground">{connection.provider === "coinspot" ? "CoinSpot" : connection.provider === "binance" ? "Binance" : "IBKR Flex"}</span></div>
+                  <div>Provider: <span className="text-foreground">{providerLabel(connection.provider)}</span></div>
                   <div>Last successful sync: <span className="text-foreground">{dateTimeLabel(connection.last_sync_at)}</span></div>
                   <div>
                     Balance check:{" "}
@@ -229,7 +245,7 @@ export function BrokerConnectionsPanel({
                     <Input
                       required
                       autoComplete="off"
-                      aria-label={`Replacement ${connection.provider === "coinspot" ? "CoinSpot" : "Binance"} API key`}
+                      aria-label={`Replacement ${providerLabel(connection.provider)} API key`}
                       placeholder="New read-only API key"
                       value={replacementKey}
                       onChange={(event) => setReplacementKey(event.target.value)}
@@ -238,12 +254,23 @@ export function BrokerConnectionsPanel({
                       required
                       type="password"
                       autoComplete="new-password"
-                      aria-label={`Replacement ${connection.provider === "coinspot" ? "CoinSpot" : "Binance"} API secret`}
+                      aria-label={`Replacement ${providerLabel(connection.provider)} API secret`}
                       placeholder="New API secret"
                       value={replacementSecret}
                       onChange={(event) => setReplacementSecret(event.target.value)}
                     />
                     <Button type="submit" disabled={isBusy}>Verify & sync</Button>
+                    {connection.provider === "crypto_com_exchange" && (
+                      <label className="flex items-start gap-2 text-xs sm:col-span-3">
+                        <input
+                          required
+                          type="checkbox"
+                          checked={replacementReadOnlyConfirmed}
+                          onChange={(event) => setReplacementReadOnlyConfirmed(event.target.checked)}
+                        />
+                        <span>I confirm this Exchange key has Can Read only; Trading and Withdrawal are disabled.</span>
+                      </label>
+                    )}
                   </form>
                 )}
 

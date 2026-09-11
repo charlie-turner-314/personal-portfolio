@@ -38,10 +38,10 @@ export function ConnectPathPicker({
       id: "broker",
       icon: <RiLinksLine size={17} />,
       title: "Connect broker",
-      sub: "Read-only CoinSpot, Binance, and IBKR positions and activity sync automatically.",
+      sub: "Read-only CoinSpot, Binance, Crypto.com Exchange, and IBKR activity sync automatically.",
       badge: "RECOMMENDED",
       detail:
-        "CoinSpot and Binance read-only APIs or Interactive Brokers Flex Query.",
+        "Exchange APIs are separate from the Crypto.com App CSV import workflow.",
     },
     {
       id: "manual",

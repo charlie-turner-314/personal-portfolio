@@ -285,7 +285,7 @@ from typing import Literal
 
 
 class BrokerConnectionCreate(BaseModel):
-    provider: Literal["ibkr_flex", "coinspot", "binance"]
+    provider: Literal["ibkr_flex", "coinspot", "binance", "crypto_com_exchange"]
     flex_token: Optional[str] = None
     query_id_positions: Optional[str] = None
     query_id_trades: Optional[str] = None
@@ -293,6 +293,7 @@ class BrokerConnectionCreate(BaseModel):
     api_secret: Optional[str] = None
     history_start_date: Optional[_date_date] = None
     trade_symbols: list[str] = Field(default_factory=list)
+    read_only_confirmed: bool = False
     account_name: str
     base_currency: str = "EUR"
 
@@ -318,8 +319,10 @@ class BrokerConnectionCreate(BaseModel):
             )
         if not self.account_name:
             raise ValueError("account name is required")
-        if self.provider in {"coinspot", "binance"} and self.base_currency.upper() != "AUD":
+        if self.provider in {"coinspot", "binance", "crypto_com_exchange"} and self.base_currency.upper() != "AUD":
             raise ValueError(f"{self.provider.title()} accounts must use AUD as their base currency")
+        if self.provider == "crypto_com_exchange" and not self.read_only_confirmed:
+            raise ValueError("Crypto.com Exchange requires confirmation that the API key is Can Read only")
         normalized_symbols: list[str] = []
         for value in self.trade_symbols:
             symbol = value.strip().upper()
@@ -349,6 +352,7 @@ class CoinSpotCredentialsUpdate(BaseModel):
     api_key: str
     api_secret: str
     trade_symbols: Optional[list[str]] = None
+    read_only_confirmed: bool = False
 
     @field_validator("api_key", "api_secret")
     @classmethod

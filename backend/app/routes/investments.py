@@ -32,6 +32,13 @@ from app.integrations.binance_adapter import (
     BinanceReadOnlyClient,
     BinanceTransientError,
 )
+from app.integrations.crypto_com_exchange_adapter import (
+    CryptoComExchangeAdapter,
+    CryptoComExchangeAuthError,
+    CryptoComExchangeError,
+    CryptoComExchangeReadOnlyClient,
+    CryptoComExchangeTransientError,
+)
 from app.models import (
     Account,
     AccountBalance,
@@ -767,6 +774,31 @@ def _verify_binance_credentials(api_key: str, api_secret: str) -> None:
         adapter.close()
 
 
+def _verify_crypto_com_exchange_credentials(api_key: str, api_secret: str) -> None:
+    adapter = CryptoComExchangeAdapter(CryptoComExchangeReadOnlyClient(
+        api_key=api_key, api_secret=api_secret,
+    ))
+    try:
+        adapter.verify_read_only()
+    except CryptoComExchangeAuthError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Crypto.com Exchange rejected the key. Check the key, secret, IP allowlist, "
+                "and system clock, and confirm the key is Can Read only."
+            ),
+        ) from exc
+    except CryptoComExchangeTransientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Crypto.com Exchange is temporarily unavailable or rate limited. Try again shortly.",
+        ) from exc
+    except CryptoComExchangeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
+    finally:
+        adapter.close()
+
+
 @router.post("/broker-connections")
 def create_broker_connection(
     payload: BrokerConnectionCreate,
@@ -782,6 +814,10 @@ def create_broker_connection(
         _verify_coinspot_credentials(payload.api_key or "", payload.api_secret or "")
     elif payload.provider == "binance":
         _verify_binance_credentials(payload.api_key or "", payload.api_secret or "")
+    elif payload.provider == "crypto_com_exchange":
+        _verify_crypto_com_exchange_credentials(
+            payload.api_key or "", payload.api_secret or ""
+        )
 
     # Create the underlying brokerage account.
     account = Account(
@@ -794,13 +830,19 @@ def create_broker_connection(
     db.add(account)
     db.flush()
 
-    if payload.provider in {"coinspot", "binance"}:
+    if payload.provider in {"coinspot", "binance", "crypto_com_exchange"}:
         creds = {
             "api_key": payload.api_key,
             "api_secret": payload.api_secret,
             "history_start_date": (
                 payload.history_start_date
-                or (date(2013, 1, 1) if payload.provider == "coinspot" else date(2017, 7, 1))
+                or (
+                    date(2013, 1, 1)
+                    if payload.provider == "coinspot"
+                    else date(2017, 7, 1)
+                    if payload.provider == "binance"
+                    else date(2019, 1, 1)
+                )
             ).isoformat(),
         }
         if payload.provider == "binance":
@@ -820,7 +862,9 @@ def create_broker_connection(
         credentials_encrypted=encrypted,
         last_sync_status="pending",
         read_only_verified_at=(
-            datetime.utcnow() if payload.provider in {"coinspot", "binance"} else None
+            datetime.utcnow()
+            if payload.provider in {"coinspot", "binance", "crypto_com_exchange"}
+            else None
         ),
         consecutive_failures=0,
         health_details=(
@@ -829,9 +873,16 @@ def create_broker_connection(
                     "https://www.coinspot.com.au/api/v2/ro"
                     if payload.provider == "coinspot"
                     else "Binance signed USER_DATA GET allowlist"
-                )
+                    if payload.provider == "binance"
+                    else "Crypto.com Exchange signed read-method allowlist"
+                ),
+                **(
+                    {"read_only_verification": "user_confirmed_and_read_access_verified"}
+                    if payload.provider == "crypto_com_exchange"
+                    else {}
+                ),
             }
-            if payload.provider in {"coinspot", "binance"} else {}
+            if payload.provider in {"coinspot", "binance", "crypto_com_exchange"} else {}
         ),
     )
     db.add(conn)
@@ -914,13 +965,20 @@ def update_coinspot_credentials(
     ).one_or_none()
     if conn is None:
         raise HTTPException(status_code=404, detail="Broker connection not found")
-    if conn.provider not in {"coinspot", "binance"}:
+    if conn.provider not in {"coinspot", "binance", "crypto_com_exchange"}:
         raise HTTPException(status_code=400, detail="Credential replacement is only available for API connections")
 
     if conn.provider == "coinspot":
         _verify_coinspot_credentials(payload.api_key, payload.api_secret)
-    else:
+    elif conn.provider == "binance":
         _verify_binance_credentials(payload.api_key, payload.api_secret)
+    else:
+        if not payload.read_only_confirmed:
+            raise HTTPException(
+                status_code=400,
+                detail="Confirm the replacement Crypto.com Exchange key is Can Read only.",
+            )
+        _verify_crypto_com_exchange_credentials(payload.api_key, payload.api_secret)
     existing = credentials_crypto.decrypt(conn.credentials_encrypted)
     conn.credentials_encrypted = credentials_crypto.encrypt({
         **existing,
@@ -943,6 +1001,13 @@ def update_coinspot_credentials(
             "https://www.coinspot.com.au/api/v2/ro"
             if conn.provider == "coinspot"
             else "Binance signed USER_DATA GET allowlist"
+            if conn.provider == "binance"
+            else "Crypto.com Exchange signed read-method allowlist"
+        ),
+        **(
+            {"read_only_verification": "user_confirmed_and_read_access_verified"}
+            if conn.provider == "crypto_com_exchange"
+            else {}
         ),
     }
     db.commit()

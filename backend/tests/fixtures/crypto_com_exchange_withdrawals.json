@@ -1,0 +1,11 @@
+{
+  "id": 1,
+  "method": "private/get-withdrawal-history",
+  "code": 0,
+  "result": {
+    "withdrawal_list": [
+      {"id": "wid-1", "currency": "BTC", "amount": "0.01000000", "fee": "0.00010000", "create_time": 1767348000000, "update_time": 1767348060000, "status": "5", "txid": "sanitized-tx", "network_id": "BTC", "address": "sanitized"},
+      {"id": "wid-pending", "currency": "ETH", "amount": "0.10000000", "fee": "0.00100000", "create_time": 1767348100000, "update_time": 1767348100000, "status": "1", "address": "sanitized"}
+    ]
+  }
+}

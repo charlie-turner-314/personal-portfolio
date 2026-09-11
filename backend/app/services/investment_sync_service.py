@@ -37,6 +37,15 @@ from app.integrations.binance_adapter import (
     BinanceTransientError,
     FIAT_CODES,
 )
+from app.integrations.crypto_com_exchange_adapter import (
+    CryptoComExchangeAdapter,
+    CryptoComExchangeAuthError,
+    CryptoComExchangeBalance,
+    CryptoComExchangeError,
+    CryptoComExchangeHistoryLimitError,
+    CryptoComExchangeReadOnlyClient,
+    CryptoComExchangeTransientError,
+)
 from app.services.investment_activity_service import apply_batch
 
 logger = logging.getLogger(__name__)
@@ -44,6 +53,7 @@ logger = logging.getLogger(__name__)
 AdapterFactory = Callable[[dict], IBKRFlexAdapter]
 CoinSpotAdapterFactory = Callable[[dict], CoinSpotAdapter]
 BinanceAdapterFactory = Callable[[dict], BinanceAdapter]
+CryptoComExchangeAdapterFactory = Callable[[dict], CryptoComExchangeAdapter]
 
 
 def _default_factory(creds: dict) -> IBKRFlexAdapter:
@@ -68,11 +78,19 @@ def _default_binance_factory(creds: dict) -> BinanceAdapter:
     ))
 
 
+def _default_crypto_com_exchange_factory(creds: dict) -> CryptoComExchangeAdapter:
+    return CryptoComExchangeAdapter(CryptoComExchangeReadOnlyClient(
+        api_key=creds["api_key"],
+        api_secret=creds["api_secret"],
+    ))
+
+
 class InvestmentSyncService:
     def __init__(self, db: Session, fx: FxConverter,
                  adapter_factory: AdapterFactory | None = None,
                  coinspot_adapter_factory: CoinSpotAdapterFactory | None = None,
                  binance_adapter_factory: BinanceAdapterFactory | None = None,
+                 crypto_com_exchange_adapter_factory: CryptoComExchangeAdapterFactory | None = None,
                  price_service: PriceService | None = None,
                  valuation_service: HoldingValuationService | None = None):
         self.db = db
@@ -80,6 +98,9 @@ class InvestmentSyncService:
         self.adapter_factory = adapter_factory or _default_factory
         self.coinspot_adapter_factory = coinspot_adapter_factory or _default_coinspot_factory
         self.binance_adapter_factory = binance_adapter_factory or _default_binance_factory
+        self.crypto_com_exchange_adapter_factory = (
+            crypto_com_exchange_adapter_factory or _default_crypto_com_exchange_factory
+        )
         self.price_service = price_service or PriceService(db=db)
         self.valuation_service = valuation_service or HoldingValuationService(db=db, fx=fx, price_service=self.price_service)
 
@@ -107,6 +128,12 @@ class InvestmentSyncService:
                 logger.info("Binance sync already running for account %s", account.id)
                 return
             self._sync_binance(account, conn, creds, on)
+            return
+        if conn.provider == "crypto_com_exchange":
+            if not self._try_provider_sync_lock(account.id):
+                logger.info("Crypto.com Exchange sync already running for account %s", account.id)
+                return
+            self._sync_crypto_com_exchange(account, conn, creds, on)
             return
         if conn.provider != "ibkr_flex":
             raise ValueError(f"Unsupported investment provider: {conn.provider}")
@@ -389,6 +416,136 @@ class InvestmentSyncService:
         }
         self.db.commit()
 
+    def _sync_crypto_com_exchange(
+        self,
+        account: Account,
+        conn: BrokerConnection,
+        creds: dict,
+        on: date,
+    ) -> None:
+        """Apply Exchange histories atomically, then anchor to live Spot balances."""
+        adapter = self.crypto_com_exchange_adapter_factory(creds)
+        cursor = conn.sync_cursor or {}
+        configured_start = date.fromisoformat(creds.get("history_start_date") or "2019-01-01")
+        cursor_through = cursor.get("history_through")
+        if cursor_through:
+            start = max(configured_start, date.fromisoformat(cursor_through) - timedelta(days=2))
+        else:
+            start = configured_start
+        if start > on:
+            start = on
+
+        try:
+            adapter.verify_read_only()
+            conn.read_only_verified_at = datetime.utcnow()
+            aud_per_usd = Decimal(self.fx.convert(Decimal("1"), "USD", "AUD", on))
+            balances = adapter.fetch_balances(aud_per_usd=aud_per_usd)
+            history = adapter.fetch_history(start=start, end=on)
+            application = apply_batch(
+                self.db,
+                user_id=account.user_id,
+                account_id=account.id,
+                batch=history.batch,
+                commit=False,
+            )
+            self.db.flush()
+            expected = self._canonical_provider_balances(account.id)
+            reconciliation = self._provider_reconciliation(expected, balances)
+            self._upsert_provider_balances(
+                account,
+                balances,
+                on,
+                source="crypto_com_api",
+                price_provider="crypto_com_exchange",
+            )
+            self.valuation_service.compute(account_id=account.id, on=on, commit=False)
+        except CryptoComExchangeAuthError as exc:
+            self._record_crypto_com_exchange_failure(
+                conn, exc, status="needs_reauth", retry=False
+            )
+            raise
+        except CryptoComExchangeTransientError as exc:
+            self._record_crypto_com_exchange_failure(conn, exc, status="pending", retry=True)
+            raise
+        except (CryptoComExchangeHistoryLimitError, CryptoComExchangeError) as exc:
+            self._record_crypto_com_exchange_failure(conn, exc, status="error", retry=False)
+            raise
+        finally:
+            close = getattr(adapter, "close", None)
+            if close is not None:
+                close()
+
+        has_partial = bool(reconciliation["differences"] or history.partial_product_failures)
+        conn.sync_cursor = dict(history.batch.cursor or {"history_through": on.isoformat()})
+        conn.last_sync_status = "partial" if has_partial else "ok"
+        if reconciliation["differences"]:
+            conn.last_sync_error = (
+                "Crypto.com Exchange balances differ from normalized activity; "
+                "review connection details."
+            )
+        elif history.partial_product_failures:
+            conn.last_sync_error = (
+                "Some Crypto.com Exchange product history was unavailable; review coverage notes."
+            )
+        else:
+            conn.last_sync_error = None
+        conn.health_details = {
+            "read_only_namespace": "Crypto.com Exchange signed read-method allowlist",
+            "read_only_verification": "user_confirmed_and_read_access_verified",
+            "history_from": start.isoformat(),
+            "history_through": on.isoformat(),
+            "windows_requested": history.requests_made,
+            "pending_records": history.pending_records,
+            "partial_product_failures": list(history.partial_product_failures),
+            "missing_product_warnings": list(history.missing_product_warnings),
+            "unpriced_assets": sorted(item.symbol for item in balances if item.aud_rate <= 0),
+            "ingestion_run_id": application["run_id"],
+            "inserted_records": application["inserted_records"],
+            "skipped_duplicate_records": application["skipped_duplicate_records"],
+            **reconciliation,
+        }
+        conn.last_sync_at = datetime.utcnow()
+        conn.consecutive_failures = 0
+        conn.next_retry_at = None
+        self.db.commit()
+
+    def _record_crypto_com_exchange_failure(
+        self,
+        conn: BrokerConnection,
+        exc: Exception,
+        *,
+        status: str,
+        retry: bool,
+    ) -> None:
+        self.db.rollback()
+        conn = self.db.query(BrokerConnection).filter_by(id=conn.id).one()
+        failures = int(conn.consecutive_failures or 0) + 1
+        now = datetime.utcnow()
+        conn.last_sync_status = status
+        conn.last_sync_error = str(exc)[:1000]
+        conn.consecutive_failures = failures
+        if isinstance(exc, CryptoComExchangeAuthError):
+            conn.read_only_verified_at = None
+        retry_seconds = min(60 * (2 ** (failures - 1)), 3600)
+        provider_retry = getattr(exc, "retry_after_seconds", None)
+        if provider_retry is not None:
+            retry_seconds = min(max(retry_seconds, int(provider_retry)), 259200)
+        conn.next_retry_at = now + timedelta(seconds=retry_seconds) if retry else None
+        conn.health_details = {
+            **(conn.health_details or {}),
+            "last_attempt_at": now.isoformat(),
+            "failure_kind": (
+                "authentication"
+                if isinstance(exc, CryptoComExchangeAuthError)
+                else "transient"
+                if isinstance(exc, CryptoComExchangeTransientError)
+                else "history_limit"
+                if isinstance(exc, CryptoComExchangeHistoryLimitError)
+                else "provider"
+            ),
+        }
+        self.db.commit()
+
     def _try_provider_sync_lock(self, account_id: UUID) -> bool:
         """Serialize credential-bearing requests for one account across workers."""
         bind = self.db.get_bind()
@@ -491,7 +648,7 @@ class InvestmentSyncService:
     @staticmethod
     def _provider_reconciliation(
         expected: dict[str, Decimal],
-        balances: tuple[CoinSpotBalance | BinanceBalance, ...],
+        balances: tuple[CoinSpotBalance | BinanceBalance | CryptoComExchangeBalance, ...],
     ) -> dict:
         provider = {item.symbol: item for item in balances}
         differences: list[dict[str, str]] = []
@@ -523,7 +680,7 @@ class InvestmentSyncService:
     def _upsert_provider_balances(
         self,
         account: Account,
-        balances: tuple[CoinSpotBalance | BinanceBalance, ...],
+        balances: tuple[CoinSpotBalance | BinanceBalance | CryptoComExchangeBalance, ...],
         on: date,
         *,
         source: str,

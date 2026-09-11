@@ -20,7 +20,49 @@ import {
 } from "@/components/ui/select";
 import { Field, Input } from "./_form-bits";
 
-type Provider = "coinspot" | "binance" | "ibkr_flex";
+type Provider = "coinspot" | "binance" | "crypto_com_exchange" | "ibkr_flex";
+
+const PROVIDER_DETAILS: Record<Provider, {
+  initials: string;
+  name: string;
+  description: string;
+  historyMinimum: string;
+  guideUrl: string;
+  guideLabel: string;
+}> = {
+  coinspot: {
+    initials: "CS",
+    name: "CoinSpot",
+    description: "Balances and completed activity sync through CoinSpot V2",
+    historyMinimum: "2013-01-01",
+    guideUrl: "https://www.coinspot.com.au/v2/api",
+    guideLabel: "CoinSpot V2 API guide",
+  },
+  binance: {
+    initials: "BN",
+    name: "Binance",
+    description: "Spot balances, fills, Convert, transfers, and supported Earn rewards",
+    historyMinimum: "2017-07-01",
+    guideUrl: "https://developers.binance.com/en/docs/catalog/core-trading-wallet/api/rest-api/account#get-api-key-permission",
+    guideLabel: "Binance API permission guide",
+  },
+  crypto_com_exchange: {
+    initials: "CDC",
+    name: "Crypto.com Exchange",
+    description: "Exchange Spot balances, fills, transfers, and supported staking rewards",
+    historyMinimum: "2019-01-01",
+    guideUrl: "https://exchange-developer.crypto.com/exchange/v1/docs/api/rest-common-api-reference",
+    guideLabel: "Crypto.com Exchange API guide",
+  },
+  ibkr_flex: {
+    initials: "IBKR",
+    name: "Interactive Brokers",
+    description: "Positions and trade history sync through the Flex Web Service",
+    historyMinimum: "",
+    guideUrl: "https://www.interactivebrokers.com/en/index.php?f=1325",
+    guideLabel: "IBKR Flex Query guide",
+  },
+};
 
 export function BrokerForm({ onCancel }: { onCancel: () => void }) {
   const router = useRouter();
@@ -36,12 +78,15 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
   const [secretVisible, setSecretVisible] = useState(false);
   const [historyStart, setHistoryStart] = useState("2013-01-01");
   const [tradePairs, setTradePairs] = useState("");
+  const [readOnlyConfirmed, setReadOnlyConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const providerDetails = PROVIDER_DETAILS[provider];
 
   const changeProvider = (next: Provider) => {
     setProvider(next);
     setErr(null);
+    setReadOnlyConfirmed(false);
     if (next === "coinspot") {
       setAccountName("CoinSpot Main");
       setBaseCurrency("AUD");
@@ -50,6 +95,10 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
       setAccountName("Binance Main");
       setBaseCurrency("AUD");
       setHistoryStart("2017-07-01");
+    } else if (next === "crypto_com_exchange") {
+      setAccountName("Crypto.com Exchange");
+      setBaseCurrency("AUD");
+      setHistoryStart("2019-01-01");
     } else {
       setAccountName("IBKR Main");
       setBaseCurrency("EUR");
@@ -77,6 +126,19 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
           api_secret: apiSecret,
           history_start_date: historyStart,
           trade_symbols: tradePairs.split(/[\s,]+/).filter(Boolean),
+          account_name: accountName,
+          base_currency: "AUD",
+        });
+      } else if (provider === "crypto_com_exchange") {
+        if (!readOnlyConfirmed) {
+          throw new Error("Confirm that Trading and Withdrawal are disabled for this Exchange key.");
+        }
+        await createBrokerConnection({
+          provider,
+          api_key: apiKey,
+          api_secret: apiSecret,
+          history_start_date: historyStart,
+          read_only_confirmed: true,
           account_name: accountName,
           base_currency: "AUD",
         });
@@ -112,6 +174,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
               <SelectContent>
                 <SelectItem value="coinspot">CoinSpot · read-only API</SelectItem>
                 <SelectItem value="binance">Binance · read-only API</SelectItem>
+                <SelectItem value="crypto_com_exchange">Crypto.com Exchange · read-only API</SelectItem>
                 <SelectItem value="ibkr_flex">Interactive Brokers · Flex Query</SelectItem>
               </SelectContent>
             </Select>
@@ -119,18 +182,14 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
 
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 border border-border flex items-center justify-center font-bold text-[10px] text-muted-foreground">
-              {provider === "coinspot" ? "CS" : provider === "binance" ? "BN" : "IBKR"}
+              {providerDetails.initials}
             </div>
             <div>
               <div className="font-semibold text-sm">
-                {provider === "coinspot" ? "CoinSpot" : provider === "binance" ? "Binance" : "Interactive Brokers"}
+                {providerDetails.name}
               </div>
               <div className="text-xs text-muted-foreground mt-0.5">
-                {provider === "coinspot"
-                  ? "Balances and completed activity sync through CoinSpot V2"
-                  : provider === "binance"
-                    ? "Spot balances, fills, Convert, transfers, and supported Earn rewards"
-                    : "Positions and trade history sync through the Flex Web Service"}
+                {providerDetails.description}
               </div>
             </div>
           </div>
@@ -144,17 +203,19 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
               <p className="text-xs text-muted-foreground leading-relaxed">
                 {provider === "coinspot" ? (
                   <>Syllogic is locked to CoinSpot&apos;s documented <code>/api/v2/ro</code> namespace. It cannot place trades or request withdrawals. Generate a Read Only API key in CoinSpot, then paste its key and secret below.</>
-                ) : (
+                ) : provider === "binance" ? (
                   <>Create a Binance API key with reading enabled only. Disable Spot &amp; Margin Trading, withdrawals, futures, options, and transfer permissions. Syllogic calls a fixed allowlist of signed <code>GET</code> endpoints and rejects keys with write permissions.</>
+                ) : (
+                  <>This connects the Crypto.com <strong>Exchange</strong>, not the consumer App. Leave the API key at its default <strong>Can Read</strong> setting; do not enable Trading or Withdrawal. Crypto.com exposes no permission-check endpoint, so you must confirm this below. Syllogic only exposes signed read methods.</>
                 )}
               </p>
               <a
-                href={provider === "coinspot" ? "https://www.coinspot.com.au/v2/api" : "https://developers.binance.com/en/docs/catalog/core-trading-wallet/api/rest-api/account#get-api-key-permission"}
+                href={providerDetails.guideUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="text-xs text-foreground inline-flex items-center gap-1 hover:underline"
               >
-                <RiExternalLinkLine size={11} /> {provider === "coinspot" ? "CoinSpot V2 API guide" : "Binance API permission guide"}
+                <RiExternalLinkLine size={11} /> {providerDetails.guideLabel}
               </a>
             </div>
           ) : (
@@ -199,7 +260,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
             {provider !== "ibkr_flex" ? (
               <>
                 <Field label="API key">
-                  <Input required autoComplete="off" placeholder={`Paste your ${provider === "coinspot" ? "CoinSpot" : "Binance"} API key`} value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+                  <Input required autoComplete="off" placeholder={`Paste your ${providerDetails.name} API key`} value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
                 </Field>
                 <Field label="API secret">
                   <div className="relative">
@@ -207,7 +268,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
                       required
                       autoComplete="new-password"
                       type={secretVisible ? "text" : "password"}
-                      placeholder={`Paste your ${provider === "coinspot" ? "CoinSpot" : "Binance"} API secret`}
+                      placeholder={`Paste your ${providerDetails.name} API secret`}
                       value={apiSecret}
                       onChange={(event) => setApiSecret(event.target.value)}
                       className="pr-9"
@@ -226,7 +287,7 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
                   <Input
                     required
                     type="date"
-                    min={provider === "coinspot" ? "2013-01-01" : "2017-07-01"}
+                    min={providerDetails.historyMinimum}
                     max={new Date().toISOString().slice(0, 10)}
                     value={historyStart}
                     onChange={(event) => setHistoryStart(event.target.value)}
@@ -247,6 +308,20 @@ export function BrokerForm({ onCancel }: { onCancel: () => void }) {
                       Binance requires a pair for trade history. We discover pairs from visible assets, but sold-out historical pairs must be listed here for a complete ledger.
                     </div>
                   </Field>
+                )}
+                {provider === "crypto_com_exchange" && (
+                  <label className="flex items-start gap-2 border border-border bg-muted/30 p-3 text-xs leading-relaxed">
+                    <input
+                      required
+                      type="checkbox"
+                      checked={readOnlyConfirmed}
+                      onChange={(event) => setReadOnlyConfirmed(event.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      I confirm this is a Crypto.com Exchange API key with <strong>Can Read</strong> only. Trading and Withdrawal are disabled.
+                    </span>
+                  </label>
                 )}
               </>
             ) : (

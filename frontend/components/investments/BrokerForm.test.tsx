@@ -76,4 +76,33 @@ describe("BrokerForm", () => {
       base_currency: "AUD",
     }));
   });
+
+  it("distinguishes Crypto.com Exchange from App CSV and requires read-only confirmation", async () => {
+    render(<BrokerForm onCancel={vi.fn()} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    const option = screen.getByRole("option", { name: "Crypto.com Exchange · read-only API" });
+    fireEvent.mouseMove(option);
+    fireEvent.click(option);
+
+    expect(screen.getByText(/connects the Crypto.com/)).toBeTruthy();
+    expect(screen.getByText(/not the consumer App/)).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("Paste your Crypto.com Exchange API key"), {
+      target: { value: "exchange-key" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Paste your Crypto.com Exchange API secret"), {
+      target: { value: "exchange-secret" },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Connect & sync" }));
+
+    await waitFor(() => expect(mocks.createBrokerConnection).toHaveBeenCalledWith({
+      provider: "crypto_com_exchange",
+      api_key: "exchange-key",
+      api_secret: "exchange-secret",
+      history_start_date: "2019-01-01",
+      read_only_confirmed: true,
+      account_name: "Crypto.com Exchange",
+      base_currency: "AUD",
+    }));
+  });
 });

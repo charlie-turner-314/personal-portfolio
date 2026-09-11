@@ -133,4 +133,42 @@ describe("BrokerConnectionsPanel", () => {
       "connection-1", ["BTCUSDT", "ETHUSDT"],
     ));
   });
+
+  it("shows Exchange coverage distinctly and confirms replacement keys are read-only", async () => {
+    render(<BrokerConnectionsPanel connections={[{
+      ...connection,
+      account_name: "Crypto.com Exchange",
+      provider: "crypto_com_exchange",
+      last_sync_status: "needs_reauth",
+      last_sync_error: "Crypto.com Exchange rejected the key.",
+      read_only_verified_at: "2026-01-10T10:00:00Z",
+      health_details: {
+        balances_reconciled: true,
+        missing_product_warnings: [
+          "Crypto.com App activity is not available through the Exchange connector; import the consumer App CSV separately.",
+        ],
+      },
+    }]} />);
+
+    expect(screen.getAllByText("Crypto.com Exchange")).toHaveLength(2);
+    expect(screen.getByText("Read-only confirmed")).toBeTruthy();
+    expect(screen.getByText(/consumer App CSV separately/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Replace key" }));
+    fireEvent.change(screen.getByLabelText("Replacement Crypto.com Exchange API key"), {
+      target: { value: "new-key" },
+    });
+    fireEvent.change(screen.getByLabelText("Replacement Crypto.com Exchange API secret"), {
+      target: { value: "new-secret" },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Verify & sync" }));
+    await waitFor(() => expect(mocks.updateCredentials).toHaveBeenCalledWith(
+      "connection-1",
+      {
+        api_key: "new-key",
+        api_secret: "new-secret",
+        read_only_confirmed: true,
+      },
+    ));
+  });
 });

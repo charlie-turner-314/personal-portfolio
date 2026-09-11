@@ -26,7 +26,7 @@ export type Holding = {
   quantity: string;
   avg_cost?: string | null;
   as_of_date?: string | null;
-  source: "manual" | "ibkr_flex" | "trade_import" | "activity_import" | "coinspot_api" | "binance_api";
+  source: "manual" | "ibkr_flex" | "trade_import" | "activity_import" | "coinspot_api" | "binance_api" | "crypto_com_api";
   current_price?: string | null;
   current_value_user_currency?: string | null;
   cost_basis_user_currency?: string | null;
@@ -403,7 +403,7 @@ export type BrokerConnection = {
   id: string;
   account_id: string;
   account_name: string;
-  provider: "ibkr_flex" | "coinspot" | "binance";
+  provider: "ibkr_flex" | "coinspot" | "binance" | "crypto_com_exchange";
   last_sync_at: string | null;
   last_sync_status: "pending" | "ok" | "partial" | "needs_reauth" | "error" | null;
   last_sync_error: string | null;
@@ -425,6 +425,8 @@ export type BrokerConnection = {
     }>;
     trade_symbols?: string[];
     configured_trade_symbols?: string[];
+    read_only_verification?: string;
+    partial_product_failures?: string[];
     missing_product_warnings?: string[];
     unpriced_assets?: string[];
   };
@@ -455,6 +457,15 @@ export type BrokerConnectionPayload =
       trade_symbols?: string[];
       account_name: string;
       base_currency: "AUD";
+    }
+  | {
+      provider: "crypto_com_exchange";
+      api_key: string;
+      api_secret: string;
+      history_start_date?: string;
+      read_only_confirmed: true;
+      account_name: string;
+      base_currency: "AUD";
     };
 
 export async function createBrokerConnection(
@@ -483,7 +494,12 @@ export async function syncBrokerConnection(connectionId: string): Promise<void> 
 
 export async function updateBrokerApiCredentials(
   connectionId: string,
-  payload: { api_key: string; api_secret: string; trade_symbols?: string[] },
+  payload: {
+    api_key: string;
+    api_secret: string;
+    trade_symbols?: string[];
+    read_only_confirmed?: boolean;
+  },
 ): Promise<void> {
   await assertNotDemoRestricted();
   const resp = await signedFetch(
