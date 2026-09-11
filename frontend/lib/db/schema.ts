@@ -1018,6 +1018,14 @@ export const brokerConnections = pgTable("broker_connections", {
   lastSyncAt: timestamp("last_sync_at"),
   lastSyncStatus: text("last_sync_status").default("pending"),
   lastSyncError: text("last_sync_error"),
+  syncCursor: jsonb("sync_cursor").$type<Record<string, unknown>>(),
+  readOnlyVerifiedAt: timestamp("read_only_verified_at"),
+  consecutiveFailures: integer("consecutive_failures").default(0).notNull(),
+  nextRetryAt: timestamp("next_retry_at"),
+  healthDetails: jsonb("health_details")
+    .$type<Record<string, unknown>>()
+    .default({})
+    .notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1027,6 +1035,7 @@ export const holdings = pgTable("holdings", {
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
   symbol: text("symbol").notNull(),
+  providerSymbol: text("provider_symbol"),
   name: text("name"),
   currency: text("currency").notNull(),
   instrumentType: text("instrument_type").notNull(),

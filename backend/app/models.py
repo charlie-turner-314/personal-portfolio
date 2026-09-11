@@ -1117,6 +1117,13 @@ class BrokerConnection(Base):
     last_sync_at = Column(DateTime, nullable=True)
     last_sync_status = Column(String(20), default="pending")
     last_sync_error = Column(Text, nullable=True)
+    sync_cursor = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
+    read_only_verified_at = Column(DateTime, nullable=True)
+    consecutive_failures = Column(Integer, nullable=False, default=0)
+    next_retry_at = Column(DateTime, nullable=True)
+    health_details = Column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
+    )
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

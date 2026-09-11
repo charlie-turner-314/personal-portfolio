@@ -17,6 +17,13 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.db_helpers import get_user_id
 from app.integrations.price_provider import get_price_provider
+from app.integrations.coinspot_adapter import (
+    CoinSpotAdapter,
+    CoinSpotAuthError,
+    CoinSpotError,
+    CoinSpotReadOnlyClient,
+    CoinSpotTransientError,
+)
 from app.models import (
     Account,
     AccountBalance,
@@ -41,6 +48,7 @@ from app.investment_import_schemas import (
 )
 from app.schemas import (
     BrokerConnectionCreate,
+    CoinSpotCredentialsUpdate,
     HoldingCreate,
     HoldingLot,
     CgtAllocationResponse,
@@ -699,6 +707,29 @@ def list_investment_crypto_transfers(
 # ---------------------------------------------------------------------------
 
 
+def _verify_coinspot_credentials(api_key: str, api_secret: str) -> None:
+    adapter = CoinSpotAdapter(CoinSpotReadOnlyClient(
+        api_key=api_key,
+        api_secret=api_secret,
+    ))
+    try:
+        adapter.verify_read_only()
+    except CoinSpotAuthError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="CoinSpot rejected the API key. Generate a Read Only API key and try again.",
+        ) from exc
+    except CoinSpotTransientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="CoinSpot is temporarily unavailable. Try connecting again shortly.",
+        ) from exc
+    except CoinSpotError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
+    finally:
+        adapter.close()
+
+
 @router.post("/broker-connections")
 def create_broker_connection(
     payload: BrokerConnectionCreate,
@@ -707,6 +738,11 @@ def create_broker_connection(
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
+
+    if payload.provider == "coinspot":
+        # The client is deliberately incapable of leaving CoinSpot's V2
+        # read-only namespace. Validate credentials before persisting anything.
+        _verify_coinspot_credentials(payload.api_key or "", payload.api_secret or "")
 
     # Create the underlying brokerage account.
     account = Account(
@@ -719,11 +755,18 @@ def create_broker_connection(
     db.add(account)
     db.flush()
 
-    creds = {
-        "flex_token": payload.flex_token,
-        "query_id_positions": payload.query_id_positions,
-        "query_id_trades": payload.query_id_trades,
-    }
+    if payload.provider == "coinspot":
+        creds = {
+            "api_key": payload.api_key,
+            "api_secret": payload.api_secret,
+            "history_start_date": (payload.history_start_date or date(2013, 1, 1)).isoformat(),
+        }
+    else:
+        creds = {
+            "flex_token": payload.flex_token,
+            "query_id_positions": payload.query_id_positions,
+            "query_id_trades": payload.query_id_trades,
+        }
     encrypted = credentials_crypto.encrypt(creds)
 
     conn = BrokerConnection(
@@ -732,6 +775,12 @@ def create_broker_connection(
         provider=payload.provider,
         credentials_encrypted=encrypted,
         last_sync_status="pending",
+        read_only_verified_at=datetime.utcnow() if payload.provider == "coinspot" else None,
+        consecutive_failures=0,
+        health_details=(
+            {"read_only_namespace": "https://www.coinspot.com.au/api/v2/ro"}
+            if payload.provider == "coinspot" else {}
+        ),
     )
     db.add(conn)
     db.commit()
@@ -760,9 +809,16 @@ def list_broker_connections(
             "id": str(c.id),
             "account_id": str(c.account_id),
             "provider": c.provider,
+            "account_name": c.account.name,
             "last_sync_at": c.last_sync_at.isoformat() if c.last_sync_at else None,
             "last_sync_status": c.last_sync_status,
             "last_sync_error": c.last_sync_error,
+            "read_only_verified_at": (
+                c.read_only_verified_at.isoformat() if c.read_only_verified_at else None
+            ),
+            "consecutive_failures": c.consecutive_failures or 0,
+            "next_retry_at": c.next_retry_at.isoformat() if c.next_retry_at else None,
+            "health_details": c.health_details or {},
         }
         for c in conns
     ]
@@ -783,6 +839,50 @@ def trigger_sync(
     )
     if not conn:
         raise HTTPException(status_code=404, detail="Broker connection not found")
+    conn.last_sync_status = "pending"
+    conn.last_sync_error = None
+    conn.next_retry_at = None
+    db.commit()
+    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    return {"status": "queued", "account_id": str(conn.account_id)}
+
+
+@router.patch("/broker-connections/{connection_id}/credentials")
+def update_coinspot_credentials(
+    connection_id: UUID,
+    payload: CoinSpotCredentialsUpdate,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    conn = db.query(BrokerConnection).filter(
+        BrokerConnection.id == connection_id,
+        BrokerConnection.user_id == user_id,
+    ).one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    if conn.provider != "coinspot":
+        raise HTTPException(status_code=400, detail="Credential replacement is only available for CoinSpot")
+
+    _verify_coinspot_credentials(payload.api_key, payload.api_secret)
+    existing = credentials_crypto.decrypt(conn.credentials_encrypted)
+    conn.credentials_encrypted = credentials_crypto.encrypt({
+        **existing,
+        "api_key": payload.api_key,
+        "api_secret": payload.api_secret,
+    })
+    conn.read_only_verified_at = datetime.utcnow()
+    conn.last_sync_status = "pending"
+    conn.last_sync_error = None
+    conn.consecutive_failures = 0
+    conn.next_retry_at = None
+    conn.health_details = {
+        **(conn.health_details or {}),
+        "failure_kind": None,
+        "read_only_namespace": "https://www.coinspot.com.au/api/v2/ro",
+    }
+    db.commit()
     background_tasks.add_task(_run_sync_in_process, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
@@ -825,6 +925,11 @@ def delete_broker_connection(
     )
     if not conn:
         raise HTTPException(status_code=404, detail="Broker connection not found")
+    # Disconnect credentials without deleting the user's imported history.
+    # The account remains usable as a manual investment account.
+    account = conn.account
+    account.account_type = "investment_manual"
+    account.provider = "manual"
     db.delete(conn)
     db.commit()
     return None

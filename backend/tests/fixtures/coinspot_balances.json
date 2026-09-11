@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "message": "ok",
+  "balances": [
+    {"AUD": {"balance": "250.00", "audbalance": "250.00", "rate": "1"}},
+    {"BTC": {"balance": "0.75", "audbalance": "75000.00", "rate": "100000.00"}},
+    {"ETH": {"balance": "2.5", "audbalance": "12500.00", "rate": "5000.00"}}
+  ]
+}

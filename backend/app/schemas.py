@@ -285,12 +285,42 @@ from typing import Literal
 
 
 class BrokerConnectionCreate(BaseModel):
-    provider: Literal["ibkr_flex"]
-    flex_token: str
-    query_id_positions: str
-    query_id_trades: str
+    provider: Literal["ibkr_flex", "coinspot"]
+    flex_token: Optional[str] = None
+    query_id_positions: Optional[str] = None
+    query_id_trades: Optional[str] = None
+    api_key: Optional[str] = None
+    api_secret: Optional[str] = None
+    history_start_date: Optional[_date_date] = None
     account_name: str
     base_currency: str = "EUR"
+
+    @field_validator(
+        "flex_token", "query_id_positions", "query_id_trades", "api_key", "api_secret",
+        "account_name", "base_currency",
+    )
+    @classmethod
+    def _trim_connection_values(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def _validate_provider_credentials(self):
+        required = (
+            ("flex_token", "query_id_positions", "query_id_trades")
+            if self.provider == "ibkr_flex"
+            else ("api_key", "api_secret")
+        )
+        missing = [name for name in required if not getattr(self, name)]
+        if missing:
+            raise ValueError(
+                f"{self.provider} requires {', '.join(name.replace('_', ' ') for name in missing)}"
+            )
+        if not self.account_name:
+            raise ValueError("account name is required")
+        if self.provider == "coinspot" and self.base_currency.upper() != "AUD":
+            raise ValueError("CoinSpot accounts must use AUD as their base currency")
+        self.base_currency = self.base_currency.upper()
+        return self
 
 
 class BrokerConnectionResponse(BaseModel):
@@ -300,6 +330,23 @@ class BrokerConnectionResponse(BaseModel):
     last_sync_at: Optional[datetime]
     last_sync_status: Optional[str]
     last_sync_error: Optional[str]
+    read_only_verified_at: Optional[datetime]
+    consecutive_failures: int = 0
+    next_retry_at: Optional[datetime]
+    health_details: dict[str, Any] = Field(default_factory=dict)
+
+
+class CoinSpotCredentialsUpdate(BaseModel):
+    api_key: str
+    api_secret: str
+
+    @field_validator("api_key", "api_secret")
+    @classmethod
+    def _non_empty_credential(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("credential is required")
+        return value
 
 
 class ManualAccountCreate(BaseModel):

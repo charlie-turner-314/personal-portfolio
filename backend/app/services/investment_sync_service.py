@@ -1,15 +1,16 @@
 from __future__ import annotations
 import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Callable
 from uuid import UUID
 import logging
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Account, BrokerConnection, Holding, BrokerTrade, PriceSnapshot,
+    Account, BrokerConnection, Holding, BrokerTrade, PriceSnapshot, InvestmentActivity,
 )
 from app.services.credentials_crypto import decrypt
 from app.services.holding_valuation_service import HoldingValuationService, FxConverter
@@ -17,10 +18,21 @@ from app.services.price_service import PriceService
 from app.integrations.ibkr_flex_adapter import (
     IBKRFlexAdapter, FlexAuthError, FlexStatementNotReady, FlexTransientError, FlexError,
 )
+from app.integrations.coinspot_adapter import (
+    CoinSpotAdapter,
+    CoinSpotAuthError,
+    CoinSpotBalance,
+    CoinSpotError,
+    CoinSpotHistoryLimitError,
+    CoinSpotReadOnlyClient,
+    CoinSpotTransientError,
+)
+from app.services.investment_activity_service import apply_batch
 
 logger = logging.getLogger(__name__)
 
 AdapterFactory = Callable[[dict], IBKRFlexAdapter]
+CoinSpotAdapterFactory = Callable[[dict], CoinSpotAdapter]
 
 
 def _default_factory(creds: dict) -> IBKRFlexAdapter:
@@ -31,14 +43,23 @@ def _default_factory(creds: dict) -> IBKRFlexAdapter:
     )
 
 
+def _default_coinspot_factory(creds: dict) -> CoinSpotAdapter:
+    return CoinSpotAdapter(CoinSpotReadOnlyClient(
+        api_key=creds["api_key"],
+        api_secret=creds["api_secret"],
+    ))
+
+
 class InvestmentSyncService:
     def __init__(self, db: Session, fx: FxConverter,
                  adapter_factory: AdapterFactory | None = None,
+                 coinspot_adapter_factory: CoinSpotAdapterFactory | None = None,
                  price_service: PriceService | None = None,
                  valuation_service: HoldingValuationService | None = None):
         self.db = db
         self.fx = fx
         self.adapter_factory = adapter_factory or _default_factory
+        self.coinspot_adapter_factory = coinspot_adapter_factory or _default_coinspot_factory
         self.price_service = price_service or PriceService(db=db)
         self.valuation_service = valuation_service or HoldingValuationService(db=db, fx=fx, price_service=self.price_service)
 
@@ -55,6 +76,17 @@ class InvestmentSyncService:
     def _sync_brokerage(self, account: Account, on: date) -> None:
         conn = self.db.query(BrokerConnection).filter_by(account_id=account.id).one()
         creds = decrypt(conn.credentials_encrypted)
+        if conn.provider == "coinspot":
+            if not self._try_coinspot_sync_lock(account.id):
+                logger.info("CoinSpot sync already running for account %s", account.id)
+                return
+            self._sync_coinspot(account, conn, creds, on)
+            return
+        if conn.provider != "ibkr_flex":
+            raise ValueError(f"Unsupported investment provider: {conn.provider}")
+        self._sync_ibkr(account, conn, creds, on)
+
+    def _sync_ibkr(self, account: Account, conn: BrokerConnection, creds: dict, on: date) -> None:
         adapter = self.adapter_factory(creds)
 
         # Step 1 — positions (fatal if it fails; nothing useful happens without them).
@@ -135,6 +167,254 @@ class InvestmentSyncService:
             conn.last_sync_error = None
         conn.last_sync_at = datetime.utcnow()
         self.db.commit()
+
+    def _sync_coinspot(
+        self,
+        account: Account,
+        conn: BrokerConnection,
+        creds: dict,
+        on: date,
+    ) -> None:
+        """Apply an overlapping CoinSpot history window, then anchor to live balances."""
+        adapter = self.coinspot_adapter_factory(creds)
+        cursor = conn.sync_cursor or {}
+        configured_start = date.fromisoformat(creds.get("history_start_date") or "2013-01-01")
+        cursor_through = cursor.get("history_through")
+        if cursor_through:
+            start = max(configured_start, date.fromisoformat(cursor_through) - timedelta(days=2))
+        else:
+            start = configured_start
+        if start > on:
+            start = on
+
+        try:
+            adapter.verify_read_only()
+            conn.read_only_verified_at = datetime.utcnow()
+            history = adapter.fetch_history(start=start, end=on)
+            application = apply_batch(
+                self.db,
+                user_id=account.user_id,
+                account_id=account.id,
+                batch=history.batch,
+                commit=False,
+            )
+            self.db.flush()
+            expected = self._canonical_coinspot_balances(account.id)
+            balances = adapter.fetch_balances()
+            reconciliation = self._coinspot_reconciliation(expected, balances)
+            self._upsert_coinspot_balances(account, balances, on)
+            self.valuation_service.compute(account_id=account.id, on=on, commit=False)
+        except CoinSpotAuthError as exc:
+            self._record_coinspot_failure(conn, exc, status="needs_reauth", retry=False)
+            raise
+        except CoinSpotTransientError as exc:
+            self._record_coinspot_failure(conn, exc, status="pending", retry=True)
+            raise
+        except (CoinSpotHistoryLimitError, CoinSpotError) as exc:
+            self._record_coinspot_failure(conn, exc, status="error", retry=False)
+            raise
+        finally:
+            close = getattr(adapter, "close", None)
+            if close is not None:
+                close()
+
+        conn.sync_cursor = dict(history.batch.cursor or {"history_through": on.isoformat()})
+        conn.last_sync_status = "partial" if reconciliation["differences"] else "ok"
+        conn.last_sync_error = (
+            "CoinSpot balances differ from normalized activity; review connection details."
+            if reconciliation["differences"] else None
+        )
+        conn.health_details = {
+            "read_only_namespace": "https://www.coinspot.com.au/api/v2/ro",
+            "history_from": start.isoformat(),
+            "history_through": on.isoformat(),
+            "windows_requested": history.windows_requested,
+            "pending_records": history.pending_records,
+            "ingestion_run_id": application["run_id"],
+            "inserted_records": application["inserted_records"],
+            "skipped_duplicate_records": application["skipped_duplicate_records"],
+            **reconciliation,
+        }
+        conn.last_sync_at = datetime.utcnow()
+        conn.consecutive_failures = 0
+        conn.next_retry_at = None
+        self.db.commit()
+
+    def _try_coinspot_sync_lock(self, account_id: UUID) -> bool:
+        """Serialize nonce-bearing requests for one credential across workers."""
+        bind = self.db.get_bind()
+        if bind.dialect.name != "postgresql":
+            return True
+        lock_key = account_id.int & ((1 << 63) - 1)
+        return bool(self.db.execute(
+            sql_text("SELECT pg_try_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
+        ).scalar_one())
+
+    def _record_coinspot_failure(
+        self,
+        conn: BrokerConnection,
+        exc: Exception,
+        *,
+        status: str,
+        retry: bool,
+    ) -> None:
+        self.db.rollback()
+        # Reload after rollback so health updates survive a failed canonical batch.
+        conn = self.db.query(BrokerConnection).filter_by(id=conn.id).one()
+        failures = int(conn.consecutive_failures or 0) + 1
+        now = datetime.utcnow()
+        conn.last_sync_status = status
+        conn.last_sync_error = str(exc)[:1000]
+        conn.consecutive_failures = failures
+        if isinstance(exc, CoinSpotAuthError):
+            conn.read_only_verified_at = None
+        conn.next_retry_at = (
+            now + timedelta(seconds=min(60 * (2 ** (failures - 1)), 3600))
+            if retry else None
+        )
+        conn.health_details = {
+            **(conn.health_details or {}),
+            "last_attempt_at": now.isoformat(),
+            "failure_kind": (
+                "authentication" if isinstance(exc, CoinSpotAuthError)
+                else "transient" if isinstance(exc, CoinSpotTransientError)
+                else "history_limit" if isinstance(exc, CoinSpotHistoryLimitError)
+                else "provider"
+            ),
+        }
+        self.db.commit()
+
+    def _canonical_coinspot_balances(self, account_id: UUID) -> dict[str, Decimal]:
+        balances: dict[str, Decimal] = {}
+
+        def add(symbol: str | None, quantity: Decimal) -> None:
+            if symbol:
+                normalized = symbol.upper()
+                balances[normalized] = balances.get(normalized, Decimal("0")) + quantity
+
+        activities = self.db.query(InvestmentActivity).filter(
+            InvestmentActivity.account_id == account_id,
+        ).order_by(InvestmentActivity.occurred_at, InvestmentActivity.id).all()
+        for activity in activities:
+            quantity = Decimal(activity.quantity or 0)
+            kind = activity.activity_type
+            if activity.asset_type == "crypto":
+                if kind in {"buy", "staking_reward", "airdrop", "interest", "deposit"}:
+                    add(activity.asset_symbol, quantity)
+                elif kind in {"sell", "withdrawal"}:
+                    add(activity.asset_symbol, -quantity)
+                elif kind == "transfer":
+                    if activity.direction == "in":
+                        add(activity.asset_symbol, quantity)
+                    elif activity.direction == "out":
+                        add(activity.asset_symbol, -quantity)
+                elif kind == "crypto_swap":
+                    add(activity.asset_symbol, -quantity)
+                    add(activity.counter_asset_symbol, Decimal(activity.counter_quantity or 0))
+                elif kind == "fee":
+                    add(activity.asset_symbol, -Decimal(activity.quantity or activity.fee_amount or 0))
+            elif activity.asset_type == "cash" and activity.asset_symbol == "AUD":
+                if kind == "deposit":
+                    add("AUD", quantity)
+                elif kind == "withdrawal":
+                    add("AUD", -quantity)
+
+            fee = Decimal(activity.fee_amount or 0)
+            if kind != "fee" and fee and activity.fee_currency:
+                add(activity.fee_currency, -fee)
+            if kind == "buy" and activity.currency == "AUD":
+                add("AUD", -Decimal(activity.aud_value or activity.gross_amount or 0))
+            elif kind == "sell" and activity.currency == "AUD":
+                add("AUD", Decimal(activity.aud_value or activity.net_amount or 0))
+        return balances
+
+    @staticmethod
+    def _coinspot_reconciliation(
+        expected: dict[str, Decimal],
+        balances: tuple[CoinSpotBalance, ...],
+    ) -> dict:
+        provider = {item.symbol: item for item in balances}
+        differences: list[dict[str, str]] = []
+        total_aud_difference = Decimal("0")
+        for symbol in sorted(set(expected) | set(provider)):
+            expected_quantity = expected.get(symbol, Decimal("0"))
+            item = provider.get(symbol)
+            actual_quantity = item.quantity if item else Decimal("0")
+            difference = actual_quantity - expected_quantity
+            tolerance = max(Decimal("0.00000001"), abs(actual_quantity) * Decimal("0.00000001"))
+            if abs(difference) <= tolerance:
+                continue
+            aud_rate = item.aud_rate if item else Decimal("0")
+            aud_difference = difference * aud_rate
+            total_aud_difference += abs(aud_difference)
+            differences.append({
+                "symbol": symbol,
+                "activity_quantity": format(expected_quantity, "f"),
+                "provider_quantity": format(actual_quantity, "f"),
+                "difference": format(difference, "f"),
+                "aud_difference": format(aud_difference, "f"),
+            })
+        return {
+            "balances_reconciled": not differences,
+            "differences": differences,
+            "total_absolute_aud_difference": format(total_aud_difference, "f"),
+        }
+
+    def _upsert_coinspot_balances(
+        self,
+        account: Account,
+        balances: tuple[CoinSpotBalance, ...],
+        on: date,
+    ) -> None:
+        reported = {item.symbol: item for item in balances}
+        existing = {
+            holding.symbol: holding
+            for holding in self.db.query(Holding).filter(Holding.account_id == account.id).all()
+        }
+        for symbol in set(existing) - set(reported):
+            existing[symbol].quantity = Decimal("0")
+            existing[symbol].as_of_date = on
+            existing[symbol].source = "coinspot_api"
+        for symbol, item in reported.items():
+            instrument_type = "cash" if symbol == "AUD" else "crypto"
+            holding = existing.get(symbol)
+            if holding is None:
+                holding = Holding(
+                    user_id=account.user_id,
+                    account_id=account.id,
+                    symbol=symbol,
+                    name="Cash (AUD)" if symbol == "AUD" else symbol,
+                    currency="AUD",
+                    instrument_type=instrument_type,
+                    quantity=item.quantity,
+                    as_of_date=on,
+                    source="coinspot_api",
+                    provider_symbol=item.provider_symbol,
+                )
+                self.db.add(holding)
+            else:
+                holding.quantity = item.quantity
+                holding.currency = "AUD"
+                holding.instrument_type = instrument_type
+                holding.as_of_date = on
+                holding.source = "coinspot_api"
+                holding.provider_symbol = item.provider_symbol
+            if symbol != "AUD" and item.aud_rate > 0:
+                snapshot = self.db.query(PriceSnapshot).filter_by(symbol=symbol, date=on).one_or_none()
+                if snapshot is None:
+                    self.db.add(PriceSnapshot(
+                        symbol=symbol,
+                        currency="AUD",
+                        date=on,
+                        close=item.aud_rate,
+                        provider="coinspot",
+                    ))
+                else:
+                    snapshot.currency = "AUD"
+                    snapshot.close = item.aud_rate
+                    snapshot.provider = "coinspot"
+        self.db.flush()
 
     def _sync_manual(self, account: Account, on: date) -> None:
         holdings = self.db.query(Holding).filter_by(account_id=account.id).all()

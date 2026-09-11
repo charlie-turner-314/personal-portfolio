@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import date
+from datetime import date, datetime
 import logging
 import os
 from uuid import UUID
@@ -11,6 +11,7 @@ from app.models import Account, BrokerConnection, User
 from app.services.investment_sync_service import InvestmentSyncService
 from app.services.exchange_rate_service import ExchangeRateService
 from app.integrations.ibkr_flex_adapter import FlexStatementNotReady
+from app.integrations.coinspot_adapter import CoinSpotTransientError
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,18 @@ def daily_investment_sync_all() -> dict:
                 "or resolvable; refusing to run investment sync."
             )
 
+        now = datetime.utcnow()
         broker_q = (
             db.query(Account)
             .join(BrokerConnection, BrokerConnection.account_id == Account.id)
-            .filter(Account.is_active == True, Account.account_type == "investment_brokerage")
+            .filter(
+                Account.is_active == True,
+                Account.account_type == "investment_brokerage",
+                (
+                    BrokerConnection.next_retry_at.is_(None)
+                    | (BrokerConnection.next_retry_at <= now)
+                ),
+            )
         )
         manual_q = (
             db.query(Account)
@@ -102,7 +111,7 @@ def daily_investment_sync_all() -> dict:
 @shared_task(
     name="tasks.investment_tasks.sync_investment_account",
     bind=True,
-    autoretry_for=(FlexStatementNotReady,),
+    autoretry_for=(FlexStatementNotReady, CoinSpotTransientError),
     retry_backoff=True,
     retry_backoff_max=1800,
     retry_jitter=True,
@@ -114,7 +123,7 @@ def sync_investment_account(self, account_id: str) -> dict:
         svc = InvestmentSyncService(db=db, fx=_FxAdapter(db))
         svc.sync_account(UUID(account_id))
         return {"account_id": account_id, "status": "ok"}
-    except FlexStatementNotReady:
+    except (FlexStatementNotReady, CoinSpotTransientError):
         raise
     except Exception:
         logger.exception("Investment sync failed for %s", account_id)

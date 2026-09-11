@@ -22,7 +22,7 @@ class HoldingValuationService:
         self.fx = fx
         self.price_service = price_service or PriceService(db=db)
 
-    def compute(self, account_id: UUID, on: date) -> Decimal:
+    def compute(self, account_id: UUID, on: date, *, commit: bool = True) -> Decimal:
         account = self.db.query(Account).filter_by(id=account_id).one()
         user = self.db.query(User).filter_by(id=account.user_id).one()
         user_currency = (getattr(user, "functional_currency", None) or account.currency or "EUR").upper()
@@ -43,7 +43,10 @@ class HoldingValuationService:
             total_account_ccy += value_acct
 
         self._upsert_account_balance(account, on, total_account_ccy, total_user)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return total_user
 
     # Number of days between `on` and the latest snapshot beyond which we

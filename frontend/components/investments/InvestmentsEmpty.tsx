@@ -68,14 +68,14 @@ export function InvestmentsEmpty({
               </Badge>
             </div>
             <div className="text-xs text-muted-foreground leading-relaxed">
-              Connect Interactive Brokers via Flex Query. Positions and trades
-              sync automatically.
+              Connect CoinSpot through its read-only API or Interactive Brokers
+              through Flex Query. Activity syncs automatically.
             </div>
             <ul className="mt-1 pl-4 list-disc space-y-1">
               {[
-                "Automatic position sync",
-                "Trade history imported",
-                "No manual entry needed",
+                "Read-only provider access",
+                "Balances and history imported",
+                "Automatic incremental sync",
               ].map((t) => (
                 <li key={t} className="text-xs text-muted-foreground">
                   {t}
@@ -83,7 +83,7 @@ export function InvestmentsEmpty({
               ))}
             </ul>
             <Button onClick={go} className="mt-1 w-full">
-              <RiLinksLine size={13} /> Connect IBKR
+              <RiLinksLine size={13} /> Connect provider
             </Button>
           </div>
           <div className="p-6 flex flex-col gap-3">

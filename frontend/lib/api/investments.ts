@@ -22,11 +22,11 @@ export type Holding = {
   provider_symbol?: string | null;
   name: string | null;
   currency: string;
-  instrument_type: "equity" | "etf" | "cash";
+  instrument_type: "equity" | "etf" | "cash" | "crypto" | "other";
   quantity: string;
   avg_cost?: string | null;
   as_of_date?: string | null;
-  source: "manual" | "ibkr_flex" | "trade_import";
+  source: "manual" | "ibkr_flex" | "trade_import" | "activity_import" | "coinspot_api";
   current_price?: string | null;
   current_value_user_currency?: string | null;
   cost_basis_user_currency?: string | null;
@@ -399,19 +399,98 @@ export async function searchSymbols(q: string): Promise<SymbolSearchResult[]> {
   return readJsonOrThrow<SymbolSearchResult[]>(resp);
 }
 
-export async function createBrokerConnection(payload: {
-  provider: "ibkr_flex";
-  flex_token: string;
-  query_id_positions: string;
-  query_id_trades: string;
+export type BrokerConnection = {
+  id: string;
+  account_id: string;
   account_name: string;
-  base_currency: string;
-}): Promise<{ connection_id: string; account_id: string }> {
+  provider: "ibkr_flex" | "coinspot";
+  last_sync_at: string | null;
+  last_sync_status: "pending" | "ok" | "partial" | "needs_reauth" | "error" | null;
+  last_sync_error: string | null;
+  read_only_verified_at: string | null;
+  consecutive_failures: number;
+  next_retry_at: string | null;
+  health_details: {
+    balances_reconciled?: boolean;
+    pending_records?: number;
+    total_absolute_aud_difference?: string;
+    history_from?: string;
+    history_through?: string;
+    differences?: Array<{
+      symbol: string;
+      activity_quantity: string;
+      provider_quantity: string;
+      difference: string;
+      aud_difference: string;
+    }>;
+  };
+};
+
+export type BrokerConnectionPayload =
+  | {
+      provider: "ibkr_flex";
+      flex_token: string;
+      query_id_positions: string;
+      query_id_trades: string;
+      account_name: string;
+      base_currency: string;
+    }
+  | {
+      provider: "coinspot";
+      api_key: string;
+      api_secret: string;
+      history_start_date?: string;
+      account_name: string;
+      base_currency: "AUD";
+    };
+
+export async function createBrokerConnection(
+  payload: BrokerConnectionPayload,
+): Promise<{ connection_id: string; account_id: string }> {
   await assertNotDemoRestricted();
   const resp = await signedFetch("POST", "/api/investments/broker-connections", {
     body: payload,
   });
   return readJsonOrThrow<{ connection_id: string; account_id: string }>(resp);
+}
+
+export async function getBrokerConnections(): Promise<BrokerConnection[]> {
+  const resp = await signedFetch("GET", "/api/investments/broker-connections");
+  return readJsonOrThrow<BrokerConnection[]>(resp);
+}
+
+export async function syncBrokerConnection(connectionId: string): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "POST",
+    `/api/investments/broker-connections/${connectionId}/sync`,
+  );
+  await readJsonOrThrow(resp);
+}
+
+export async function updateCoinSpotCredentials(
+  connectionId: string,
+  payload: { api_key: string; api_secret: string },
+): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "PATCH",
+    `/api/investments/broker-connections/${connectionId}/credentials`,
+    { body: payload },
+  );
+  await readJsonOrThrow(resp);
+}
+
+export async function disconnectBrokerConnection(connectionId: string): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "DELETE",
+    `/api/investments/broker-connections/${connectionId}`,
+  );
+  if (!resp.ok) {
+    const message = await resp.text().catch(() => "");
+    throw new Error(message || `Request failed: ${resp.status}`);
+  }
 }
 
 export async function createManualAccount(
