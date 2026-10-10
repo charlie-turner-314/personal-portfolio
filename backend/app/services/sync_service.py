@@ -316,6 +316,11 @@ class SyncService:
                 existing_transaction.booked_at = transaction_data.booked_at
                 existing_transaction.transaction_type = transaction_data.transaction_type
                 existing_transaction.pending = transaction_data.pending
+                if transaction_data.metadata:
+                    existing_transaction.enrichment_data = {
+                        **(existing_transaction.enrichment_data or {}),
+                        "provider": transaction_data.metadata,
+                    }
                 if transaction_data.counterparty_iban:
                     existing_transaction.counterparty_iban_ciphertext = encrypt_value(transaction_data.counterparty_iban)
                     existing_transaction.counterparty_iban_hash = blind_index(transaction_data.counterparty_iban)
@@ -343,6 +348,11 @@ class SyncService:
                     pending_match.booked_at = transaction_data.booked_at
                     if transaction_data.description:
                         pending_match.description = transaction_data.description
+                    if transaction_data.metadata:
+                        pending_match.enrichment_data = {
+                            **(pending_match.enrichment_data or {}),
+                            "provider": transaction_data.metadata,
+                        }
                     pending_match.merchant = merchant or transaction_data.merchant
                     pending_match.creditor = transaction_data.creditor
                     pending_match.debtor = transaction_data.debtor
@@ -398,6 +408,7 @@ class SyncService:
                 pending=transaction_data.pending,
                 category_system_id=category.id if category else None,
                 recurring_transaction_id=matched_subscription.id if matched_subscription else None,
+                enrichment_data={"provider": transaction_data.metadata} if transaction_data.metadata else None,
                 counterparty_iban_ciphertext=encrypt_value(transaction_data.counterparty_iban) if transaction_data.counterparty_iban else None,
                 counterparty_iban_hash=blind_index(transaction_data.counterparty_iban) if transaction_data.counterparty_iban else None,
             )

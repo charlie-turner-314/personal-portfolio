@@ -25,9 +25,17 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { triggerSync, disconnectBank, triggerRecategorize } from "@/lib/actions/bank-connections";
+import {
+  createUpConnection,
+  disconnectBank,
+  disconnectUp,
+  triggerRecategorize,
+  triggerSync,
+  triggerUpSync,
+} from "@/lib/actions/bank-connections";
 type BankConnectionItem = {
   id: string;
+  provider: string;
   aspspName: string;
   aspspCountry: string;
   status: string;
@@ -59,6 +67,9 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const [pollingIds, setPollingIds] = useState<Set<string>>(new Set());
   const [syncProgress, setSyncProgress] = useState<Map<string, SyncProgress>>(new Map());
   const [elapsedSeconds, setElapsedSeconds] = useState<Map<string, number>>(new Map());
+  const [upToken, setUpToken] = useState("");
+  const [isConnectingUp, setIsConnectingUp] = useState(false);
+  const [upError, setUpError] = useState<string | null>(null);
   const pollingTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const elapsedTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const initialSyncTimes = useRef<Map<string, string | null>>(new Map());
@@ -184,7 +195,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
     const currentLastSyncedAt = conn?.lastSyncedAt?.toISOString() || null;
 
     try {
-      const result = await triggerSync(connectionId);
+      const result = conn?.provider === "up" ? await triggerUpSync(connectionId) : await triggerSync(connectionId);
       if (!result.success) {
         console.error("Sync failed:", result.error);
         setSyncingIds((prev) => {
@@ -223,7 +234,8 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const handleDisconnect = async (connectionId: string) => {
     setDisconnectingIds((prev) => new Set(prev).add(connectionId));
     try {
-      const result = await disconnectBank(connectionId);
+      const connection = connections.find((item) => item.id === connectionId);
+      const result = connection?.provider === "up" ? await disconnectUp(connectionId) : await disconnectBank(connectionId);
       if (!result.success) {
         console.error("Disconnect failed:", result.error);
       }
@@ -234,6 +246,23 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
         next.delete(connectionId);
         return next;
       });
+    }
+  };
+
+  const handleConnectUp = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsConnectingUp(true);
+    setUpError(null);
+    try {
+      const result = await createUpConnection(upToken);
+      if (!result.success || !result.connectionId) {
+        setUpError(result.error || "Could not connect to Up");
+        return;
+      }
+      setUpToken("");
+      router.push(`/settings/connect-bank/map-accounts?connectionId=${result.connectionId}`);
+    } finally {
+      setIsConnectingUp(false);
     }
   };
 
@@ -277,19 +306,11 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
           <h2 className="text-lg font-semibold">Bank Connections</h2>
           <p className="text-sm text-muted-foreground">
             {isAustralianProfile
-              ? "Australian automatic bank sync is not available yet. Use CSV imports for now."
+              ? "Connect Up with a personal access token, or import a bank CSV."
               : "Connect your bank accounts via Open Banking to automatically sync transactions."}
           </p>
         </div>
-        {isAustralianProfile ? (
-          <Link
-            href="/transactions/import"
-            className={buttonVariants({ variant: "default", size: "default" })}
-          >
-            <RiAddLine className="mr-1.5 h-4 w-4" />
-            Import CSV
-          </Link>
-        ) : (
+        {!isAustralianProfile && (
           <Link
             href="/settings/connect-bank"
             className={buttonVariants({ variant: "default", size: "default" })}
@@ -301,10 +322,32 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
       </div>
 
       {isAustralianProfile && (
-        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-          Australian CDR bank connections are planned separately. Import bank CSVs from
-          CommBank, Westpac, NAB, ANZ, Macquarie, ING, and other providers from the
-          transactions import flow.
+        <div className="rounded-lg border bg-muted/30 p-4">
+          <div className="mb-3">
+            <h3 className="font-medium">Connect Up</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Paste a personal access token to discover your Up accounts. Your token is sent securely and is never shown here again.
+            </p>
+          </div>
+          <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleConnectUp}>
+            <input
+              aria-label="Up personal access token"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              type="password"
+              autoComplete="off"
+              placeholder="Up personal access token"
+              value={upToken}
+              onChange={(event) => setUpToken(event.target.value)}
+              disabled={isConnectingUp}
+            />
+            <Button type="submit" disabled={isConnectingUp || !upToken.trim()}>
+              {isConnectingUp ? "Testing..." : "Connect Up"}
+            </Button>
+          </form>
+          {upError && <p className="mt-2 text-sm text-destructive">{upError}</p>}
+          <p className="mt-3 text-xs text-muted-foreground">
+            Other Australian banks can still be imported from the <Link className="underline" href="/transactions/import">CSV import flow</Link>.
+          </p>
         </div>
       )}
 
@@ -313,7 +356,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
           <RiBankLine className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
           <p className="text-sm text-muted-foreground">
             {isAustralianProfile
-              ? "No live Australian bank connections yet. Use CSV import to bring in transactions."
+              ? "No Up connection yet. Paste a personal access token above to get started."
               : "No bank connections yet. Connect a bank to start syncing transactions automatically."}
           </p>
         </div>
@@ -346,7 +389,10 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                       </>
                     )}
                   </div>
-                  {isConsentExpiringSoon(connection) && (
+                    {connection.provider === "up" && (
+                      <span>Up</span>
+                    )}
+                    {connection.provider !== "up" && isConsentExpiringSoon(connection) && (
                     <div className="mt-1 flex items-center gap-1 text-xs text-amber-600">
                       <RiAlertLine className="h-3 w-3" />
                       <span>
@@ -360,7 +406,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                       </span>
                     </div>
                   )}
-                  {connection.status === "expired" && (
+                  {connection.provider !== "up" && connection.status === "expired" && (
                     <div className="mt-1 flex items-center gap-1 text-xs text-destructive">
                       <RiAlertLine className="h-3 w-3" />
                       <span>
@@ -397,7 +443,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                     {syncingIds.has(connection.id) ? "Syncing..." : "Sync Now"}
                   </Button>
                 )}
-                {connection.status === "active" && (
+                {connection.provider !== "up" && connection.status === "active" && (
                   <Button
                     variant="outline"
                     size="sm"
