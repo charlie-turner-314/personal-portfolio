@@ -28,10 +28,13 @@ from app.models import (
     CgtAllocation,
     Holding,
     HoldingValuation,
+    InvestmentCostBaseAdjustment,
     PriceSnapshot,
     User,
 )
 from app.services.pnl_service import (
+    CgtAudValues,
+    CostBaseAdjustment,
     Trade,
     cgt_aud_values_for_closed_lot,
     compute_fifo,
@@ -44,10 +47,11 @@ logger = logging.getLogger(__name__)
 
 
 VALID_SIDES = ("buy", "sell")
-CGT_CALCULATION_VERSION = "fifo-v1"
+CGT_CALCULATION_VERSION = "fifo-v2"
 CGT_ASSUMPTIONS = [
     "FIFO matching is calculated from recorded broker trades and their recorded fees.",
-    "Corporate actions, managed-fund cost-base adjustments, and other tax elections are not calculated.",
+    "Statement-supplied AMIT/AMMA net amounts are applied across units open on the recorded effective date.",
+    "Corporate actions and tax elections other than recorded AMIT/AMMA adjustments are not calculated.",
 ]
 
 
@@ -99,6 +103,7 @@ class ImportError(Exception):
 class _ValidatedTrade:
     index: int
     symbol: str
+    instrument_type: str
     trade_date: date
     side: str
     quantity: Decimal
@@ -115,6 +120,11 @@ def _validate_trade(index: int, raw: dict[str, Any]) -> tuple[_ValidatedTrade | 
         symbol = str(raw["symbol"]).strip()
         if not symbol:
             raise ValueError("symbol required")
+        instrument_type = str(raw.get("instrument_type") or "equity").strip().lower()
+        if instrument_type == "fund":
+            instrument_type = "etf"
+        if instrument_type not in {"equity", "etf", "cash", "crypto", "option", "bond", "other"}:
+            raise ValueError(f"unsupported instrument_type {instrument_type!r}")
         trade_date = date.fromisoformat(str(raw["trade_date"]))
         side = str(raw["side"]).lower()
         if side not in VALID_SIDES:
@@ -140,6 +150,7 @@ def _validate_trade(index: int, raw: dict[str, Any]) -> tuple[_ValidatedTrade | 
     return _ValidatedTrade(
         index=index,
         symbol=symbol,
+        instrument_type=instrument_type,
         trade_date=trade_date,
         side=side,
         quantity=quantity,
@@ -238,6 +249,7 @@ def import_trades(
         {
             "account_id": account.id,
             "symbol": vt.symbol.upper(),
+            "instrument_type": vt.instrument_type,
             "trade_date": vt.trade_date,
             "side": vt.side,
             "quantity": vt.quantity,
@@ -258,12 +270,13 @@ def import_trades(
     inserted_rows = db.execute(stmt).fetchall()
     inserted = len(inserted_rows)
     skipped = len(validated) - inserted
-    affected_symbols = sorted({vt.symbol.upper() for vt in validated})
+    affected_instruments = sorted({(vt.symbol.upper(), vt.instrument_type) for vt in validated})
+    affected_symbols = sorted({symbol for symbol, _ in affected_instruments})
 
     # Recompute holdings before deciding whether to commit so dry_run still
     # surfaces FIFO oversell errors and any other recompute failures.
-    for symbol in affected_symbols:
-        _recompute_holding(db, account, symbol)
+    for symbol, instrument_type in affected_instruments:
+        _recompute_holding(db, account, symbol, instrument_type)
 
     if dry_run:
         db.rollback()
@@ -292,28 +305,62 @@ def import_trades(
     }
 
 
-def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
+def _recompute_holding(
+    db: Session,
+    account: Account,
+    symbol: str,
+    instrument_type: str = "equity",
+) -> None:
     """Rebuild Holding(account, symbol) from full BrokerTrade history using FIFO."""
+    holding = (
+        db.query(Holding)
+        .filter(
+            Holding.account_id == account.id,
+            Holding.symbol == symbol,
+            Holding.instrument_type == instrument_type,
+        )
+        .first()
+    )
     trades = (
         db.query(BrokerTrade)
-        .filter(BrokerTrade.account_id == account.id, BrokerTrade.symbol == symbol)
-        .order_by(BrokerTrade.trade_date)
+        .filter(
+            BrokerTrade.account_id == account.id,
+            BrokerTrade.symbol == symbol,
+            BrokerTrade.instrument_type == instrument_type,
+        )
+        .order_by(BrokerTrade.trade_date, BrokerTrade.occurred_at, BrokerTrade.id)
         .all()
     )
     if not trades:
         db.query(CgtAllocation).filter(
             CgtAllocation.account_id == account.id,
             CgtAllocation.symbol == symbol,
+            CgtAllocation.instrument_type == instrument_type,
         ).delete(synchronize_session=False)
-        holding = (
-            db.query(Holding)
-            .filter(Holding.account_id == account.id, Holding.symbol == symbol, Holding.instrument_type == "equity")
-            .first()
-        )
         if holding is not None and holding.source == "trade_import":
             holding.quantity = Decimal("0")
             holding.avg_cost = None
         return
+
+    adjustment_rows = (
+        db.query(InvestmentCostBaseAdjustment)
+        .filter(InvestmentCostBaseAdjustment.holding_id == holding.id)
+        .order_by(InvestmentCostBaseAdjustment.effective_date, InvestmentCostBaseAdjustment.id)
+        .all()
+        if holding is not None
+        else []
+    )
+    fifo_adjustments = [
+        CostBaseAdjustment(
+            symbol=symbol,
+            effective_date=item.effective_date,
+            amount=Decimal(item.amount_native),
+            currency=item.currency,
+            adjustment_id=str(item.id),
+            sort_key=str(item.id),
+        )
+        for item in adjustment_rows
+    ]
 
     fifo_trades = [
         Trade(
@@ -324,10 +371,14 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
             price=Decimal(t.price),
             currency=t.currency,
             fees=Decimal(t.fees or 0),
+            trade_id=str(t.id),
+            sort_key=str(t.id),
+            occurred_at=t.occurred_at,
+            acquisition_date=t.acquisition_date,
         )
         for t in trades
     ]
-    result = compute_fifo(fifo_trades)
+    result = compute_fifo(fifo_trades, fifo_adjustments)
     open_lots = [l for l in result.open_lots if l.symbol == symbol]
 
     quantity = sum((l.quantity_remaining for l in open_lots), Decimal("0"))
@@ -336,22 +387,24 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
             (l.quantity_remaining * l.cost_per_share_native for l in open_lots),
             Decimal("0"),
         )
-        avg_cost = (total_cost / quantity).quantize(Decimal("0.00000001"))
+        trades_by_id = {str(item.id): item for item in trades}
+        has_missing_open_valuation = instrument_type == "crypto" and any(
+            lot.acquisition_trade_id
+            and trades_by_id[lot.acquisition_trade_id].valuation_missing
+            for lot in open_lots
+        )
+        avg_cost = (
+            None
+            if has_missing_open_valuation
+            else (total_cost / quantity).quantize(Decimal("0.00000001"))
+        )
         currency = open_lots[0].currency
     else:
         avg_cost = None
         currency = trades[-1].currency
 
-    last_date = max(t.trade_date for t in trades)
-
-    holding = (
-        db.query(Holding)
-        .filter(
-            Holding.account_id == account.id,
-            Holding.symbol == symbol,
-            Holding.instrument_type == "equity",
-        )
-        .first()
+    last_date = max(
+        [t.trade_date for t in trades] + [item.effective_date for item in adjustment_rows]
     )
     if holding is None:
         holding = Holding(
@@ -359,7 +412,7 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
             account_id=account.id,
             symbol=symbol,
             currency=currency,
-            instrument_type="equity",
+            instrument_type=instrument_type,
             quantity=quantity,
             avg_cost=avg_cost,
             as_of_date=last_date,
@@ -374,19 +427,29 @@ def _recompute_holding(db: Session, account: Account, symbol: str) -> None:
         if not holding.currency:
             holding.currency = currency
 
-    _recompute_cgt_allocations(db, account, symbol, trades)
+    _recompute_cgt_allocations(
+        db,
+        account,
+        symbol,
+        instrument_type,
+        trades,
+        fifo_adjustments,
+    )
 
 
 def _recompute_cgt_allocations(
     db: Session,
     account: Account,
     symbol: str,
+    instrument_type: str,
     trades: list[BrokerTrade],
+    adjustments: list[CostBaseAdjustment],
 ) -> None:
     """Replace one symbol's derived CGT allocations from the authoritative trade ledger."""
     db.query(CgtAllocation).filter(
         CgtAllocation.account_id == account.id,
         CgtAllocation.symbol == symbol,
+        CgtAllocation.instrument_type == instrument_type,
     ).delete(synchronize_session=False)
     if not trades:
         return
@@ -402,9 +465,11 @@ def _recompute_cgt_allocations(
             fees=Decimal(trade.fees or 0),
             trade_id=str(trade.id),
             sort_key=str(trade.id),
+            occurred_at=trade.occurred_at,
+            acquisition_date=trade.acquisition_date,
         )
         for trade in trades
-    ])
+    ], adjustments)
 
     # CGT must convert cost and proceeds at their respective transaction dates.
     from app.services.exchange_rate_service import ExchangeRateService
@@ -413,22 +478,35 @@ def _recompute_cgt_allocations(
     except ImportError:
         fx_service = None
 
+    trades_by_id = {str(item.id): item for item in trades}
     for lot in fifo.realized:
         # These IDs are populated for BrokerTrade-derived FIFO inputs. Guarding
         # avoids persisting an incomplete audit row if this service is reused.
         if not lot.acquisition_trade_id or not lot.disposal_trade_id:
             continue
-        aud_values = cgt_aud_values_for_closed_lot(
-            lot,
-            lambda source, target, on: (
-                None if fx_service is None else fx_service.get_exchange_rate(source, target, on)
-            ),
-        )
+        acquisition = trades_by_id[lot.acquisition_trade_id]
+        disposal = trades_by_id[lot.disposal_trade_id]
+        if not disposal.taxable_disposal:
+            continue
+        if acquisition.valuation_missing or disposal.valuation_missing:
+            aud_values = CgtAudValues(None, None, None, None, fx_missing=True)
+        else:
+            aud_values = cgt_aud_values_for_closed_lot(
+                lot,
+                lambda source, target, on: (
+                    None if fx_service is None else fx_service.get_exchange_rate(source, target, on)
+                ),
+            )
+        assumptions = list(CGT_ASSUMPTIONS)
+        for item in [*(acquisition.assumptions or []), *(disposal.assumptions or [])]:
+            if item not in assumptions:
+                assumptions.append(item)
         db.add(CgtAllocation(
             account_id=account.id,
             acquisition_trade_id=lot.acquisition_trade_id,
             disposal_trade_id=lot.disposal_trade_id,
             symbol=lot.symbol,
+            instrument_type=instrument_type,
             acquisition_date=lot.open_date,
             disposal_date=lot.close_date,
             quantity=lot.quantity,
@@ -436,13 +514,24 @@ def _recompute_cgt_allocations(
             cost_base_native=lot.cost_native,
             proceeds_native=lot.proceeds_native,
             gain_native=lot.pnl_native,
+            cost_base_adjustment_native=lot.cost_base_adjustment_native,
             cost_base_aud=aud_values.cost_base_aud,
             proceeds_aud=aud_values.proceeds_aud,
             gain_aud=aud_values.gain_aud,
+            cost_base_adjustment_aud=aud_values.cost_base_adjustment_aud,
+            adjustment_ids=[
+                item.adjustment_id for item in lot.adjustments if item.adjustment_id
+            ],
+            acquisition_valuation_source=acquisition.valuation_source,
+            disposal_valuation_source=disposal.valuation_source,
+            acquisition_valuation_timestamp=acquisition.valuation_timestamp,
+            disposal_valuation_timestamp=disposal.valuation_timestamp,
+            acquisition_economic_type=acquisition.economic_type,
+            disposal_economic_type=disposal.economic_type,
             fx_missing=aud_values.fx_missing,
             discount_eligible=is_cgt_discount_eligible(lot.open_date, lot.close_date),
             calculation_version=CGT_CALCULATION_VERSION,
-            assumptions=list(CGT_ASSUMPTIONS),
+            assumptions=assumptions,
         ))
 
 
@@ -464,7 +553,7 @@ def remove_trade(
     symbol = trade.symbol
     db.delete(trade)
     db.flush()
-    _recompute_holding(db, account, symbol)
+    _recompute_holding(db, account, symbol, trade.instrument_type)
     if commit:
         db.commit()
     return True

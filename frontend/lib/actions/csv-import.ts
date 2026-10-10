@@ -267,7 +267,9 @@ export async function initializeCsvImport(
     const savedProfile = await db.query.csvImportProfiles.findFirst({
       where: and(
         eq(csvImportProfiles.accountId, accountId),
-        eq(csvImportProfiles.userId, session.user.id)
+        eq(csvImportProfiles.userId, session.user.id),
+        eq(csvImportProfiles.importKind, "transactions"),
+        eq(csvImportProfiles.provider, "generic")
       ),
     });
 
@@ -580,6 +582,8 @@ export async function saveColumnMapping(
         .values({
           userId,
           accountId: importSession.accountId,
+          importKind: "transactions",
+          provider: "generic",
           name: "Default CSV mapping",
           columnMapping: normalizedMapping,
           headerSignature,
@@ -587,7 +591,12 @@ export async function saveColumnMapping(
           updatedAt: new Date(),
         })
         .onConflictDoUpdate({
-          target: [csvImportProfiles.userId, csvImportProfiles.accountId],
+          target: [
+            csvImportProfiles.userId,
+            csvImportProfiles.accountId,
+            csvImportProfiles.importKind,
+            csvImportProfiles.provider,
+          ],
           set: {
             columnMapping: normalizedMapping,
             headerSignature,

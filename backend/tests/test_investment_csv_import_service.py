@@ -1,0 +1,766 @@
+from decimal import Decimal
+from pathlib import Path
+import uuid
+
+import base64
+
+import pytest
+
+from app.models import (
+    Account,
+    BrokerTrade,
+    Holding,
+    InvestmentActivity,
+    InvestmentIncomeEvent,
+    InvestmentIngestionRun,
+    InvestmentSourceRecord,
+    User,
+)
+from app.services import investment_activity_service
+from app.services.investment_activity_service import ActivityApplicationError, revert_run
+from app.services.investment_csv_import_service import (
+    InvestmentCsvImportError,
+    apply_investment_csv,
+    parse_investment_csv,
+    preview_investment_csv,
+)
+from app.services.superhero_report_service import parse_superhero_amit_pdf
+
+
+MAPPING = {
+    "occurred_at": "Date",
+    "activity_type": "Type",
+    "asset_symbol": "Symbol",
+    "asset_type": "Asset type",
+    "quantity": "Quantity",
+    "price": "Price",
+    "gross_amount": "Gross",
+    "net_amount": "Net",
+    "currency": "Currency",
+    "fee_amount": "Fee",
+    "fee_currency": "Fee currency",
+    "tax_amount": "Tax",
+    "tax_currency": "Tax currency",
+    "source_reference": "Reference",
+}
+
+
+@pytest.fixture
+def investment_account(db_session):
+    user = User(
+        id=f"csv-investment-{uuid.uuid4()}",
+        email=f"{uuid.uuid4()}@csv-investment.test",
+        functional_currency="AUD",
+    )
+    account = Account(
+        user_id=user.id,
+        name="CSV Investments",
+        account_type="investment_brokerage",
+        currency="AUD",
+        is_active=True,
+    )
+    db_session.add_all([user, account])
+    db_session.commit()
+    yield user, account
+    db_session.rollback()
+    db_session.query(InvestmentActivity).filter(InvestmentActivity.account_id == account.id).delete()
+    db_session.query(InvestmentSourceRecord).filter(InvestmentSourceRecord.account_id == account.id).delete()
+    db_session.query(InvestmentIngestionRun).filter(InvestmentIngestionRun.account_id == account.id).delete()
+    db_session.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.account_id == account.id).delete()
+    db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).delete()
+    db_session.query(Holding).filter(Holding.account_id == account.id).delete()
+    db_session.delete(account)
+    db_session.delete(user)
+    db_session.commit()
+
+
+def _content() -> str:
+    return """Reference,Date,Type,Symbol,Asset type,Quantity,Price,Gross,Net,Currency,Fee,Fee currency,Tax,Tax currency
+buy-1,2025-01-02,Purchase,VAS,shares,10,100,,,AUD,9.50,AUD,,
+sell-1,2025-02-03,Sale,VAS,equity,2,110,,,AUD,5,AUD,,
+income-1,2025-02-20,Dividend,VAS,equity,,,20,18,AUD,,,2,AUD
+fee-1,2025-02-21,Fee,AUD,cash,,,,,AUD,3.25,AUD,,
+"""
+
+
+def _options(content: str | None = None) -> dict:
+    return {
+        "file_name": "statement.csv",
+        "file_content": content or _content(),
+        "provider": "Generic Broker",
+        "mapping": MAPPING,
+        "date_format": "AUTO",
+        "amount_format": "DOT_DECIMAL",
+        "default_asset_type": "equity",
+        "default_currency": "AUD",
+    }
+
+
+def test_parser_normalizes_trades_income_fees_and_mixed_currencies():
+    content = """Reference;Date;Type;Symbol;Asset type;Quantity;Price;Gross;Net;Currency;Fee;Fee currency;Tax;Tax currency
+b1;31/01/2025;Buy;VAS;ETF;10;100,50;;;AUD;9,50;AUD;;
+d1;01/02/2025;Distribution;VGS;fund;;;25,75;20,00;USD;;;5,75;USD
+f1;02/02/2025;Commission;USD;cash;;;;;USD;2,25;USD;;
+"""
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "date_format": "DD-MM-YYYY",
+        "amount_format": "COMMA_DECIMAL",
+    })
+
+    assert len(parsed.batch.records) == 3
+    buy = parsed.batch.records[0].activities[0]
+    distribution = parsed.batch.records[1].activities[0]
+    fee = parsed.batch.records[2].activities[0]
+    assert (buy.activity_type, buy.asset_type, buy.price, buy.fee_amount) == (
+        "buy", "fund", Decimal("100.50"), Decimal("9.50")
+    )
+    assert (distribution.activity_type, distribution.currency, distribution.tax_amount) == (
+        "distribution", "USD", Decimal("5.75")
+    )
+    assert fee.activity_type == "fee" and fee.fee_amount == Decimal("2.25")
+
+
+def test_superhero_transaction_preset_skips_preamble_and_combines_gst():
+    content = (
+        Path(__file__).parent / "fixtures" / "superhero_transaction_statement_aus.csv"
+    ).read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "Transaction Statement (AUS).csv",
+        "provider": "Superhero",
+        "mapping": {},
+        "date_format": "AUTO",
+        "amount_format": "AUTO",
+    })
+
+    assert parsed.batch.provider == "superhero"
+    assert parsed.batch.normalization_version == "superhero-transaction-v1"
+    assert parsed.batch.warnings == (
+        "Superhero Transaction Statement preset applied; leading report rows were "
+        "detected and Brokerage plus GST were combined.",
+    )
+    assert [row["row_number"] for row in parsed.rows] == [11, 12]
+    assert parsed.rejected_rows[0]["row_number"] == 13
+    buy, sell = [record.activities[0] for record in parsed.batch.records]
+    assert (buy.activity_type, buy.asset_symbol, buy.quantity, buy.price) == (
+        "buy", "EXM", Decimal("50"), Decimal("6.47")
+    )
+    assert buy.fee_amount == Decimal("5.45")
+    assert buy.currency == "AUD"
+    assert buy.metadata["settlement_date"] == "2024-09-16"
+    assert buy.metadata["superhero_report"]["market"] == "AUS"
+    assert sell.activity_type == "sell"
+    assert sell.fee_amount == Decimal("2.20")
+
+    with pytest.raises(InvestmentCsvImportError, match="trade activity files"):
+        parse_investment_csv(**{
+            **_options(content),
+            "provider": "Superhero",
+            "mapping": {},
+            "income_data_kind": "annual_statement",
+        })
+
+
+def test_superhero_transaction_preset_infers_us_currency_from_report_title():
+    content = (
+        Path(__file__).parent / "fixtures" / "superhero_transaction_statement_aus.csv"
+    ).read_text().replace("Transaction Statement (AUS)", "Transaction Statement (US)")
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "provider": "Superhero",
+        "mapping": {},
+    })
+
+    assert parsed.batch.records[0].activities[0].currency == "USD"
+    assert parsed.batch.records[0].activities[0].metadata["superhero_report"]["market"] == "US"
+
+
+def test_superhero_unknown_report_keeps_manual_mapping_after_preamble():
+    content = """Entity Name,Synthetic Investor
+Account Name,Synthetic Superhero Account
+Income Report (AUS)
+Payment Date,Security,Security Code,Transaction Type,Gross Amount,Franking Credit,Tax
+14/09/2024,Example Holdings,EXM,Dividend,$10.00,$4.29,$0.00
+"""
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "provider": "Superhero",
+        "mapping": {
+            "occurred_at": "Payment Date",
+            "asset_name": "Security",
+            "asset_symbol": "Security Code",
+            "activity_type": "Transaction Type",
+            "gross_amount": "Gross Amount",
+            "franking_credit": "Franking Credit",
+            "tax_amount": "Tax",
+        },
+        "date_format": "DD-MM-YYYY",
+    })
+
+    assert parsed.headers[0] == "Payment Date"
+    assert parsed.rows[0]["row_number"] == 5
+    assert parsed.batch.records[0].activities[0].activity_type == "dividend"
+
+
+def test_superhero_aus_income_preset_uses_exact_delayed_header_contract():
+    content = (Path(__file__).parent / "fixtures" / "superhero_income_report_aus.csv").read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "Income Report (AUS).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    })
+
+    assert parsed.batch.normalization_version == "superhero-income-v1"
+    assert [row["row_number"] for row in parsed.rows] == [11, 12]
+    assert len(parsed.batch.records) == 2
+    first = parsed.batch.records[0]
+    activity = first.activities[0]
+    assert first.provider_record_id == "AUS:EXM:2025-08-01:2025-08-15:85.00"
+    assert activity.activity_type == "dividend"
+    assert activity.currency == "AUD"
+    assert activity.gross_amount == Decimal("85.00")
+    assert activity.net_amount == Decimal("85.00")
+    assert activity.tax_amount == Decimal("0.00")
+    assert activity.metadata["franked_amount"] == "70"
+    assert activity.metadata["unfranked_amount"] == "15"
+    assert activity.metadata["franking_credit"] == "30"
+    assert "entity_name" not in first.metadata["superhero_report"]
+    assert all("TOTAL" not in record.raw_payload.values() for record in parsed.batch.records)
+
+
+def test_superhero_us_income_preset_supports_empty_and_withholding_reports():
+    fixture_dir = Path(__file__).parent / "fixtures"
+    empty = parse_investment_csv(**{
+        **_options((fixture_dir / "superhero_income_report_us_empty.csv").read_text()),
+        "file_name": "Income Report (US).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    })
+    assert empty.batch.records == ()
+    assert empty.rejected_rows == ()
+
+    populated = parse_investment_csv(**{
+        **_options((fixture_dir / "superhero_income_report_us_synthetic.csv").read_text()),
+        "file_name": "Income Report (US).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    })
+    activity = populated.batch.records[0].activities[0]
+    assert activity.asset_symbol == "AAPL"
+    assert activity.currency == "USD"
+    assert activity.metadata["foreign_income"] == "10"
+    assert activity.metadata["foreign_tax_paid"] == "1.5"
+    assert activity.tax_amount == Decimal("1.50")
+
+
+def test_superhero_amit_pdf_extracts_annual_components_without_personal_header(monkeypatch):
+    class Page:
+        def __init__(self, text):
+            self.text = text
+
+        def extract_text(self):
+            return self.text
+
+    pages = [
+        Page("""Synthetic Investor\n1 Example Street\nEXAMPLE INDEX ETF - EXM
+ATTRIBUTION MANAGED INVESTMENT TRUST MEMBER ANNUAL STATEMENT
+FOR THE YEAR ENDED 30 JUNE 2026
+Gross Interest 10L $1.25
+Share of net income from trusts, less net capital gains, foreign income & franked distributions 13U $20.00
+Franked distribution from trusts 13C $30.00
+Share of franking credits from franked dividends 13Q $12.86
+Net capital gain 18A $8.00
+Total current year capital gains 18H $16.00
+Other net foreign source income 20M $4.00
+Foreign income tax offset 20O $0.60"""),
+        Page("COMPONENTS OF ATTRIBUTION"),
+        Page("""Tax-Deferred Amount $2.00 $2.00
+Tax Free Income $1.00 $1.00
+Total Non-assessable amounts $3.00 $3.00
+Gross Cash Distribution $50.00
+Less: TFN/ABN Withholding Tax $1.25
+Net Cash Distribution $48.75"""),
+        Page("""ATTRIBUTION MANAGED INVESTMENT TRUST ('AMIT') COST BASE ADJUSTMENTS AMOUNT
+AMIT cost base net decrease amount $5.00
+AMIT cost base net increase amount $100.00"""),
+    ]
+    monkeypatch.setattr("app.services.superhero_report_service.PdfReader", lambda _stream: type("Reader", (), {"pages": pages})())
+    encoded = base64.b64encode(b"%PDF-1.7 synthetic test payload").decode()
+    parsed = parse_superhero_amit_pdf(file_name="amit-statement.pdf", encoded_content=encoded)
+
+    assert parsed.batch.normalization_version == "superhero-amit-v1"
+    assert parsed.rows[0]["row_number"] == 1
+    record = parsed.batch.records[0]
+    activity = record.activities[0]
+    assert record.provider_record_id == "amit:2026:EXM"
+    assert activity.asset_symbol == "EXM"
+    assert activity.gross_amount == Decimal("50.00")
+    assert activity.net_amount == Decimal("48.75")
+    assert activity.metadata["annual_aggregate"] is True
+    assert activity.metadata["franked_amount"] == "30"
+    assert activity.metadata["unfranked_amount"] == "20"
+    assert activity.metadata["cost_base_increase"] == "100"
+    assert activity.metadata["cost_base_decrease"] == "5"
+    assert activity.metadata["amit_amma_components"]["ato_18a_net_capital_gain"] == "8.00"
+    assert activity.metadata["amit_amma_components"]["ato_18h_total_current_year_capital_gains"] == "16.00"
+    assert "Synthetic Investor" not in str(record.raw_payload)
+    assert "Example Street" not in str(record.metadata)
+
+
+def test_pdf_dispatch_requires_superhero_and_base64(monkeypatch):
+    with pytest.raises(InvestmentCsvImportError, match="only for Superhero"):
+        parse_investment_csv(**{
+            **_options("not-used"),
+            "file_name": "statement.pdf",
+            "file_encoding": "base64",
+            "provider": "Generic",
+        })
+    with pytest.raises(InvestmentCsvImportError, match="base64"):
+        parse_investment_csv(**{
+            **_options("not-used"),
+            "file_name": "statement.pdf",
+            "provider": "Superhero",
+        })
+
+
+def test_superhero_overlapping_transaction_reports_are_idempotent(
+    db_session, investment_account
+):
+    user, account = investment_account
+    content = (
+        Path(__file__).parent / "fixtures" / "superhero_transaction_statement_aus.csv"
+    ).read_text()
+    options = {
+        **_options(content),
+        "provider": "Superhero",
+        "mapping": {},
+    }
+
+    first = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=options,
+    )
+    second = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=options,
+    )
+
+    assert first["inserted_activities"] == 2
+    assert second["inserted_activities"] == 0
+    assert second["skipped_duplicate_records"] == 2
+    run = db_session.query(InvestmentIngestionRun).filter_by(id=first["run_id"]).one()
+    assert any("Superhero Transaction Statement preset applied" in item for item in run.warnings)
+
+
+def test_superhero_overlapping_income_reports_are_idempotent(
+    db_session, investment_account
+):
+    user, account = investment_account
+    content = (Path(__file__).parent / "fixtures" / "superhero_income_report_aus.csv").read_text()
+    options = {
+        **_options(content),
+        "file_name": "Income Report (AUS).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    }
+
+    first = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=options,
+    )
+    overlapping = {
+        **options,
+        "file_content": content.replace("Report Start Date,01/07/2025", "Report Start Date,01/01/2025"),
+    }
+    second = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=overlapping,
+    )
+
+    assert first["inserted_activities"] == 2
+    assert second["inserted_activities"] == 0
+    assert second["skipped_duplicate_records"] == 2
+    run = db_session.query(InvestmentIngestionRun).filter_by(id=first["run_id"]).one()
+    assert run.source_name == "Superhero Income Report (AUS).csv"
+
+
+def test_parser_preserves_crypto_market_value_and_fee_provenance():
+    content = """Reference,Timestamp,Type,Symbol,Asset type,Quantity,Counter asset,Counter quantity,AUD value,Value source,Value timestamp,Fee,Fee currency,Fee AUD,Fee source,Fee timestamp,Transaction hash
+swap-1,2025-01-31 10:15:00,Swap,BTC,crypto,1,ETH,10,15000,execution_report,2025-01-31 10:15:00,0.001,BTC,15,execution_report,2025-01-31 10:15:00,chain-1
+reward-1,2025-02-01 11:00:00,Staking reward,ETH,crypto,0.2,,,,,,,,,,,
+"""
+    mapping = {
+        "source_reference": "Reference",
+        "occurred_at": "Timestamp",
+        "activity_type": "Type",
+        "asset_symbol": "Symbol",
+        "asset_type": "Asset type",
+        "quantity": "Quantity",
+        "counter_asset_symbol": "Counter asset",
+        "counter_quantity": "Counter quantity",
+        "aud_value": "AUD value",
+        "valuation_source": "Value source",
+        "valuation_timestamp": "Value timestamp",
+        "fee_amount": "Fee",
+        "fee_currency": "Fee currency",
+        "fee_aud_value": "Fee AUD",
+        "fee_valuation_source": "Fee source",
+        "fee_valuation_timestamp": "Fee timestamp",
+        "transaction_hash": "Transaction hash",
+    }
+
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "mapping": mapping,
+        "default_asset_type": "crypto",
+    })
+
+    swap = parsed.batch.records[0].activities[0]
+    assert swap.activity_type == "crypto_swap"
+    assert swap.aud_value == Decimal("15000")
+    assert swap.valuation_source == "execution_report"
+    assert swap.fee_aud_value == Decimal("15")
+    assert swap.fee_valuation_source == "execution_report"
+    assert swap.external_group_id == "chain-1"
+    assert swap.metadata["transaction_hash"] == "chain-1"
+    reward = parsed.batch.records[1].activities[0]
+    assert "AUD market value is missing" in reward.warnings[0]
+
+
+def test_crypto_com_app_preset_normalizes_major_token_wallet_kinds_and_flags_review_rows():
+    content = (Path(__file__).parent / "fixtures" / "crypto_com_app_token_wallet.csv").read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "crypto_transactions_record_20250114.csv",
+        "provider": "Crypto.com App",
+        "mapping": {},
+        "default_asset_type": "equity",
+    })
+
+    activities = [record.activities[0] for record in parsed.batch.records]
+    by_kind = {
+        activity.metadata["crypto_com_transaction_kind"]: activity
+        for activity in activities
+    }
+    assert parsed.batch.provider == "crypto.com_app"
+    assert parsed.amount_format == "DOT_DECIMAL"
+    assert len(parsed.batch.records) == 11
+    assert len(parsed.rejected_rows) == 3
+    btc_purchase = next(activity for activity in activities if activity.asset_symbol == "BTC" and activity.activity_type == "buy")
+    assert btc_purchase.aud_value == Decimal("1000.00")
+    assert by_kind["crypto_exchange"].activity_type == "crypto_swap"
+    assert by_kind["crypto_exchange"].counter_asset_symbol == "ETH"
+    assert by_kind["crypto_earn_interest_paid"].activity_type == "interest"
+    assert by_kind["finance.lockup.dpos_compound_interest.crypto_wallet"].activity_type == "staking_reward"
+    assert by_kind["campaign_reward"].activity_type == "airdrop"
+    assert by_kind["crypto_deposit"].activity_type == "deposit"
+    assert by_kind["crypto_withdrawal"].activity_type == "withdrawal"
+    assert by_kind["card_top_up"].activity_type == "sell"
+    assert by_kind["crypto_network_fee"].activity_type == "fee"
+    paired = by_kind["crypto_wallet_swap"]
+    assert (paired.activity_type, paired.asset_symbol, paired.counter_asset_symbol) == (
+        "crypto_swap", "LUNA", "LUNC"
+    )
+    reasons = " ".join(reason for row in parsed.rejected_rows for reason in row["reasons"])
+    assert "cashback/reimbursement" in reasons
+    assert "beneficial ownership" in reasons
+    assert "Unsupported Crypto.com App Transaction Kind" in reasons
+
+
+def test_crypto_com_app_overlapping_exports_are_idempotent(db_session, investment_account):
+    user, account = investment_account
+    content = (Path(__file__).parent / "fixtures" / "crypto_com_app_token_wallet.csv").read_text()
+    options = {
+        **_options(content),
+        "file_name": "crypto_transactions_record_20250114.csv",
+        "provider": "Crypto.com App",
+        "mapping": {},
+    }
+
+    first = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=options
+    )
+    second = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=options
+    )
+
+    assert first["inserted_records"] == 11
+    assert first["inserted_activities"] == 11
+    assert first["status"] == "partial"
+    assert first["rejected_rows"] == 3
+    assert second["inserted_records"] == 0
+    assert second["skipped_duplicate_records"] == 11
+    holdings = {
+        holding.symbol: Decimal(holding.quantity)
+        for holding in db_session.query(Holding).filter(Holding.account_id == account.id).all()
+    }
+    assert holdings == {
+        "ABC": Decimal("2"),
+        "BTC": Decimal("0.0069"),
+        "CRO": Decimal("10"),
+        "ETH": Decimal("0.031"),
+        "LUNA": Decimal("10"),
+        "LUNC": Decimal("10"),
+    }
+    assert sorted(
+        event.event_type
+        for event in db_session.query(InvestmentIncomeEvent).filter(
+            InvestmentIncomeEvent.account_id == account.id
+        ).all()
+    ) == ["airdrop", "interest", "staking_reward"]
+    assert db_session.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.account_id == account.id,
+        InvestmentSourceRecord.provider == "crypto.com_app",
+    ).count() == 11
+
+
+def test_crypto_com_app_preset_retains_cash_funding_but_rejects_untyped_spending():
+    content = (Path(__file__).parent / "fixtures" / "crypto_com_app_cash_wallet.csv").read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "fiat_transactions_record_20250103.csv",
+        "provider": "Crypto.com App",
+        "mapping": {},
+    })
+
+    assert [record.activities[0].activity_type for record in parsed.batch.records] == [
+        "deposit", "withdrawal"
+    ]
+    assert all(record.activities[0].asset_type == "cash" for record in parsed.batch.records)
+    assert all("does not alter crypto holdings" in record.activities[0].warnings[0] for record in parsed.batch.records)
+    assert len(parsed.rejected_rows) == 1
+    assert "card or cash spending" in parsed.rejected_rows[0]["reasons"][0]
+
+
+def test_parser_maps_final_statement_tax_and_amma_fields_without_inference():
+    content = '''Reference,Date,Type,Symbol,Asset type,Gross,Net,Currency,Franked,Unfranked,Franking,Foreign income,Foreign tax,TFN,AMMA,Increase,Decrease,Adjustment date,Statement ref,Interest
+amma-1,2025-06-30,Distribution,VAS,ETF,50,50,AUD,30,20,12.86,4,0.60,1.25,"{""capital_gains_discounted"":""8""}",100,0,2025-06-30,AMMA-2025,3
+'''
+    mapping = {
+        "occurred_at": "Date", "activity_type": "Type", "asset_symbol": "Symbol",
+        "asset_type": "Asset type", "gross_amount": "Gross", "net_amount": "Net",
+        "currency": "Currency", "source_reference": "Reference",
+        "franked_amount": "Franked", "unfranked_amount": "Unfranked",
+        "franking_credit": "Franking", "foreign_income": "Foreign income",
+        "foreign_tax_paid": "Foreign tax", "tfn_withholding": "TFN",
+        "amit_amma_components": "AMMA", "cost_base_increase": "Increase",
+        "cost_base_decrease": "Decrease", "cost_base_effective_date": "Adjustment date",
+        "annual_statement_reference": "Statement ref",
+        "amma_interest": "Interest",
+    }
+
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "mapping": mapping,
+        "income_data_kind": "annual_statement",
+    })
+
+    metadata = parsed.batch.records[0].activities[0].metadata
+    assert metadata["is_annual_statement"] is True
+    assert metadata["franking_credit"] == "12.86"
+    assert metadata["foreign_tax_paid"] == "0.6"
+    assert metadata["tfn_withholding"] == "1.25"
+    assert metadata["amit_amma_components"] == {"capital_gains_discounted": "8", "interest": "3"}
+    assert metadata["cost_base_increase"] == "100"
+    assert metadata["cost_base_effective_date"] == "2025-06-30"
+
+
+def test_parser_rejects_non_object_amma_components():
+    parsed = parse_investment_csv(**{
+        **_options("Date,Type,Symbol,AMMA\n2025-06-30,Distribution,VAS,[]\n"),
+        "mapping": {
+            "occurred_at": "Date",
+            "activity_type": "Type",
+            "asset_symbol": "Symbol",
+            "amit_amma_components": "AMMA",
+        },
+        "income_data_kind": "annual_statement",
+    })
+
+    assert parsed.batch.records == ()
+    assert "must be a JSON object" in parsed.rejected_rows[0]["reasons"][0]
+
+
+def test_fund_trade_rebuilds_an_etf_holding(db_session, investment_account):
+    user, account = investment_account
+    content = _content().splitlines()[0] + "\n" + _content().splitlines()[1].replace(",shares,", ",ETF,") + "\n"
+    result = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=_options(content),
+    )
+    assert result["inserted_records"] == 1
+    trade = db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).one()
+    holding = db_session.query(Holding).filter(Holding.account_id == account.id).one()
+    assert trade.instrument_type == "etf"
+    assert holding.instrument_type == "etf"
+
+
+def test_parser_excludes_ambiguous_and_malformed_rows_with_actionable_reasons():
+    content = """Reference,Date,Type,Symbol,Asset type,Quantity,Price,Gross,Net,Currency,Fee,Fee currency,Tax,Tax currency
+a1,02/03/2025,Buy,VAS,equity,10,"1,234",,,AUD,,AUD,,AUD
+a2,31/02/2025,Buy,VAS,equity,10,100,,,AUD,,AUD,,AUD
+a3,2025-03-05,Mystery,VAS,equity,10,100,,,AUD,,AUD,,AUD
+"""
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "date_format": "AUTO",
+        "amount_format": "AUTO",
+    })
+
+    assert parsed.batch.records == ()
+    assert len(parsed.rejected_rows) == 3
+    messages = [" ".join(row["reasons"]) for row in parsed.rejected_rows]
+    assert "ambiguous" in messages[0]
+    assert "valid calendar date" in messages[1]
+    assert "unsupported activity type" in messages[2]
+
+
+def test_preview_apply_reimport_and_revert_are_scoped_and_idempotent(db_session, investment_account):
+    user, account = investment_account
+    _, preview = preview_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=_options()
+    )
+    assert preview["summary"] == {
+        "total_rows": 4,
+        "ready_rows": 4,
+        "duplicate_rows": 0,
+        "rejected_rows": 0,
+        "conflict_rows": 0,
+        "warning_rows": 0,
+    }
+    assert preview["unmatched_assets"] == ["AUD", "VAS"]
+
+    first = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=_options()
+    )
+    assert first["inserted_records"] == 4
+    assert first["inserted_activities"] == 4
+    assert db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).count() == 2
+    assert db_session.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.account_id == account.id).count() == 1
+    holding = db_session.query(Holding).filter(Holding.account_id == account.id, Holding.symbol == "VAS").one()
+    assert holding.quantity == Decimal("8.00000000")
+
+    _, second_preview = preview_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=_options()
+    )
+    assert second_preview["summary"]["duplicate_rows"] == 4
+    second = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=_options()
+    )
+    assert second["inserted_records"] == 0
+    assert second["skipped_duplicate_records"] == 4
+
+    reverted = revert_run(db_session, user_id=user.id, run_id=first["run_id"])
+    assert reverted["removed_trades"] == 2
+    assert reverted["removed_income_events"] == 1
+    assert db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).count() == 0
+    assert db_session.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.account_id == account.id).count() == 0
+    assert db_session.query(InvestmentSourceRecord).filter(InvestmentSourceRecord.account_id == account.id).count() == 4
+    assert db_session.query(InvestmentActivity).filter(InvestmentActivity.account_id == account.id).count() == 4
+    assert revert_run(db_session, user_id=user.id, run_id=first["run_id"])["removed_trades"] == 0
+
+
+def test_selected_rows_and_downstream_failure_rollback(db_session, investment_account, monkeypatch):
+    user, account = investment_account
+    selected = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=_options(),
+        selected_row_numbers=[2],
+    )
+    assert selected["inserted_records"] == 1
+    assert db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).count() == 1
+
+    def fail_income(*args, **kwargs):
+        raise RuntimeError("import failed after trade")
+
+    monkeypatch.setattr(investment_activity_service, "_apply_income_activity", fail_income)
+    failing = _content().replace("buy-1", "buy-2").replace("sell-1", "sell-2").replace("income-1", "income-2")
+    with pytest.raises(ActivityApplicationError, match="failed atomically"):
+        apply_investment_csv(
+            db_session,
+            user_id=user.id,
+            account_id=account.id,
+            parse_options=_options(failing),
+        )
+    assert db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).count() == 1
+    assert db_session.query(InvestmentSourceRecord).filter(InvestmentSourceRecord.account_id == account.id).count() == 1
+
+
+def test_apply_reports_partial_success_when_malformed_rows_are_excluded(db_session, investment_account):
+    user, account = investment_account
+    content = _content() + "bad-row,31/02/2025,Buy,VAS,equity,1,10,,,AUD,,AUD,,AUD\n"
+    result = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=_options(content),
+    )
+
+    assert result["status"] == "partial"
+    assert result["inserted_records"] == 4
+    assert result["rejected_rows"] == 1
+    run = db_session.query(InvestmentIngestionRun).filter(InvestmentIngestionRun.id == result["run_id"]).one()
+    assert run.status == "partial"
+    assert run.summary["rejected_rows"] == 1
+
+
+def test_revert_keeps_economic_records_from_another_provider(db_session, investment_account):
+    user, account = investment_account
+    first = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=_options(_content().splitlines()[0] + "\n" + _content().splitlines()[1] + "\n"),
+    )
+    other_options = _options(
+        _content().splitlines()[0] + "\n" + _content().splitlines()[1].replace("buy-1", "other-buy").replace(",10,", ",5,") + "\n"
+    )
+    other_options["provider"] = "another_broker"
+    second = apply_investment_csv(
+        db_session,
+        user_id=user.id,
+        account_id=account.id,
+        parse_options=other_options,
+    )
+    assert first["inserted_records"] == second["inserted_records"] == 1
+    holding = db_session.query(Holding).filter(Holding.account_id == account.id, Holding.symbol == "VAS").one()
+    assert holding.quantity == Decimal("15.00000000")
+
+    revert_run(db_session, user_id=user.id, run_id=first["run_id"])
+    assert db_session.query(BrokerTrade).filter(BrokerTrade.account_id == account.id).count() == 1
+    assert holding.quantity == Decimal("5.00000000")
+
+
+def test_preview_blocks_overwriting_a_position_managed_by_another_source(db_session, investment_account):
+    user, account = investment_account
+    db_session.add(Holding(
+        user_id=user.id,
+        account_id=account.id,
+        symbol="VAS",
+        currency="AUD",
+        instrument_type="equity",
+        quantity=Decimal("12"),
+        avg_cost=Decimal("80"),
+        source="manual",
+    ))
+    db_session.commit()
+    one_row = _content().splitlines()[0] + "\n" + _content().splitlines()[1] + "\n"
+    _, preview = preview_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=_options(one_row)
+    )
+    assert preview["summary"]["ready_rows"] == 0
+    assert preview["summary"]["conflict_rows"] == 1
+    assert preview["rows"][0]["status"] == "conflict"
+    assert "separate account" in preview["rows"][0]["conflict_reason"]
+    with pytest.raises(ValueError, match="No rows can be imported"):
+        apply_investment_csv(
+            db_session, user_id=user.id, account_id=account.id, parse_options=_options(one_row)
+        )

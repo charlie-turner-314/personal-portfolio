@@ -285,12 +285,55 @@ from typing import Literal
 
 
 class BrokerConnectionCreate(BaseModel):
-    provider: Literal["ibkr_flex"]
-    flex_token: str
-    query_id_positions: str
-    query_id_trades: str
+    provider: Literal["ibkr_flex", "coinspot", "binance", "crypto_com_exchange"]
+    account_id: Optional[UUID] = None
+    flex_token: Optional[str] = None
+    query_id_positions: Optional[str] = None
+    query_id_trades: Optional[str] = None
+    api_key: Optional[str] = None
+    api_secret: Optional[str] = None
+    history_start_date: Optional[_date_date] = None
+    trade_symbols: list[str] = Field(default_factory=list)
+    read_only_confirmed: bool = False
     account_name: str
     base_currency: str = "EUR"
+
+    @field_validator(
+        "flex_token", "query_id_positions", "query_id_trades", "api_key", "api_secret",
+        "account_name", "base_currency",
+    )
+    @classmethod
+    def _trim_connection_values(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def _validate_provider_credentials(self):
+        required = (
+            ("flex_token", "query_id_positions", "query_id_trades")
+            if self.provider == "ibkr_flex"
+            else ("api_key", "api_secret")
+        )
+        missing = [name for name in required if not getattr(self, name)]
+        if missing:
+            raise ValueError(
+                f"{self.provider} requires {', '.join(name.replace('_', ' ') for name in missing)}"
+            )
+        if not self.account_name:
+            raise ValueError("account name is required")
+        if self.provider in {"coinspot", "binance", "crypto_com_exchange"} and self.base_currency.upper() != "AUD":
+            raise ValueError(f"{self.provider.title()} accounts must use AUD as their base currency")
+        if self.provider == "crypto_com_exchange" and not self.read_only_confirmed:
+            raise ValueError("Crypto.com Exchange requires confirmation that the API key is Can Read only")
+        normalized_symbols: list[str] = []
+        for value in self.trade_symbols:
+            symbol = value.strip().upper()
+            if not symbol or len(symbol) > 32 or not symbol.isalnum():
+                raise ValueError("Binance Spot pairs must contain only letters and numbers")
+            if symbol not in normalized_symbols:
+                normalized_symbols.append(symbol)
+        self.trade_symbols = normalized_symbols
+        self.base_currency = self.base_currency.upper()
+        return self
 
 
 class BrokerConnectionResponse(BaseModel):
@@ -300,6 +343,55 @@ class BrokerConnectionResponse(BaseModel):
     last_sync_at: Optional[datetime]
     last_sync_status: Optional[str]
     last_sync_error: Optional[str]
+    read_only_verified_at: Optional[datetime]
+    consecutive_failures: int = 0
+    next_retry_at: Optional[datetime]
+    health_details: dict[str, Any] = Field(default_factory=dict)
+
+
+class CoinSpotCredentialsUpdate(BaseModel):
+    api_key: str
+    api_secret: str
+    trade_symbols: Optional[list[str]] = None
+    read_only_confirmed: bool = False
+
+    @field_validator("api_key", "api_secret")
+    @classmethod
+    def _non_empty_credential(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("credential is required")
+        return value
+
+    @field_validator("trade_symbols")
+    @classmethod
+    def _normalize_trade_symbols(cls, values: Optional[list[str]]) -> Optional[list[str]]:
+        if values is None:
+            return None
+        result: list[str] = []
+        for value in values:
+            symbol = value.strip().upper()
+            if not symbol or len(symbol) > 32 or not symbol.isalnum():
+                raise ValueError("Binance Spot pairs must contain only letters and numbers")
+            if symbol not in result:
+                result.append(symbol)
+        return result
+
+
+class BinanceTradeSymbolsUpdate(BaseModel):
+    trade_symbols: list[str]
+
+    @field_validator("trade_symbols")
+    @classmethod
+    def _normalize_trade_symbols(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            symbol = value.strip().upper()
+            if not symbol or len(symbol) > 32 or not symbol.isalnum():
+                raise ValueError("Binance Spot pairs must contain only letters and numbers")
+            if symbol not in result:
+                result.append(symbol)
+        return result
 
 
 class ManualAccountCreate(BaseModel):
@@ -368,6 +460,12 @@ class HoldingTrade(BaseModel):
     currency: str
     fees: Decimal
     external_id: Optional[str] = None
+    economic_type: str = "trade"
+    taxable_disposal: bool = True
+    aud_value: Optional[Decimal] = None
+    valuation_source: Optional[str] = None
+    valuation_timestamp: Optional[datetime] = None
+    valuation_missing: bool = False
     cost_native: Optional[Decimal] = None
     proceeds_native: Optional[Decimal] = None
     running_quantity: Decimal
@@ -378,9 +476,13 @@ class HoldingLot(BaseModel):
     open_date: _date_date
     quantity_remaining: Decimal
     cost_per_share_native: Decimal
+    original_cost_per_share_native: Decimal = Decimal("0")
+    cost_base_adjustment_per_share_native: Decimal = Decimal("0")
+    adjustment_ids: list[str] = Field(default_factory=list)
     cost_per_share_user: Optional[Decimal] = None
     age_days: int
     currency: str
+    acquisition_trade_id: Optional[UUID] = None
 
 
 class CgtAllocationResponse(BaseModel):
@@ -388,6 +490,7 @@ class CgtAllocationResponse(BaseModel):
     acquisition_trade_id: UUID
     disposal_trade_id: UUID
     symbol: str
+    instrument_type: str
     acquisition_date: _date_date
     disposal_date: _date_date
     quantity: Decimal
@@ -395,9 +498,18 @@ class CgtAllocationResponse(BaseModel):
     cost_base_native: Decimal
     proceeds_native: Decimal
     gain_native: Decimal
+    cost_base_adjustment_native: Decimal
     cost_base_aud: Optional[Decimal] = None
     proceeds_aud: Optional[Decimal] = None
     gain_aud: Optional[Decimal] = None
+    cost_base_adjustment_aud: Optional[Decimal] = None
+    adjustment_ids: list[str]
+    acquisition_valuation_source: Optional[str] = None
+    disposal_valuation_source: Optional[str] = None
+    acquisition_valuation_timestamp: Optional[datetime] = None
+    disposal_valuation_timestamp: Optional[datetime] = None
+    acquisition_economic_type: str = "trade"
+    disposal_economic_type: str = "trade"
     fx_missing: bool
     discount_eligible: bool
     calculation_version: str
@@ -425,6 +537,7 @@ class AustralianTaxReportResponse(BaseModel):
     investment_income: dict[str, Any]
     cgt: dict[str, Any]
     transactions: dict[str, Any]
+    crypto_transfers: dict[str, Any] = Field(default_factory=dict)
     assumptions: list[str]
 
 
@@ -441,19 +554,25 @@ class InvestmentIncomeEventCreate(BaseModel):
     franking_credit: Optional[Decimal] = None
     foreign_income: Optional[Decimal] = None
     foreign_tax_paid: Optional[Decimal] = None
+    tfn_withholding: Optional[Decimal] = None
     amit_amma_components: Optional[dict] = None
     is_drp: bool = False
     drp_quantity: Optional[Decimal] = None
     drp_price: Optional[Decimal] = None
     source_id: Optional[str] = None
     notes: Optional[str] = None
+    asset_quantity: Optional[Decimal] = None
+    aud_market_value: Optional[Decimal] = None
+    valuation_source: Optional[str] = None
+    valuation_timestamp: Optional[datetime] = None
+    valuation_missing: bool = False
 
     @field_validator("event_type")
     @classmethod
     def _income_event_type(cls, value: str) -> str:
         value = value.lower().strip()
-        if value not in {"dividend", "distribution"}:
-            raise ValueError("must be dividend or distribution")
+        if value not in {"dividend", "distribution", "interest", "staking_reward", "airdrop"}:
+            raise ValueError("must be dividend, distribution, interest, staking_reward, or airdrop")
         return value
 
     @field_validator("currency")
@@ -464,7 +583,11 @@ class InvestmentIncomeEventCreate(BaseModel):
             raise ValueError("must be a 3-letter ISO code")
         return value
 
-    @field_validator("cash_received", "franked_amount", "unfranked_amount", "franking_credit", "foreign_income", "foreign_tax_paid")
+    @field_validator(
+        "cash_received", "franked_amount", "unfranked_amount", "franking_credit",
+        "foreign_income", "foreign_tax_paid", "tfn_withholding", "asset_quantity",
+        "aud_market_value",
+    )
     @classmethod
     def _income_amounts(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is not None and value < 0:
@@ -477,6 +600,16 @@ class InvestmentIncomeEventCreate(BaseModel):
             raise ValueError("DRP events require a positive quantity and non-negative price")
         if not self.is_drp and (self.drp_quantity is not None or self.drp_price is not None):
             raise ValueError("DRP quantity and price are only valid for DRP events")
+        if self.event_type in {"staking_reward", "airdrop"} and (
+            self.asset_quantity is None or self.asset_quantity <= 0
+        ):
+            raise ValueError("staking and airdrop events require a positive asset quantity")
+        if self.aud_market_value is not None and (
+            not self.valuation_source or self.valuation_timestamp is None
+        ):
+            raise ValueError("AUD market values require valuation source and timestamp")
+        if self.valuation_missing and self.aud_market_value is not None:
+            raise ValueError("a missing valuation cannot also have an AUD market value")
         return self
 
 
@@ -484,6 +617,11 @@ class InvestmentIncomeEventResponse(InvestmentIncomeEventCreate):
     id: UUID
     user_id: str
     reinvestment_trade_id: Optional[UUID] = None
+    reconciliation_status: str
+    user_confirmed_at: Optional[datetime] = None
+    matched_transaction_id: Optional[UUID] = None
+    component_sources: dict[str, Any] = Field(default_factory=dict)
+    annual_statement_reference: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -497,6 +635,18 @@ class InvestmentIncomeSummary(BaseModel):
     franking_credits: Decimal
     foreign_income: Decimal
     foreign_tax_paid: Decimal
+    tfn_withholding: Decimal
+
+
+class InvestmentReconciliationResolve(BaseModel):
+    action: str
+    income_event_id: Optional[UUID] = None
+    transaction_id: Optional[UUID] = None
+    activity_id: Optional[UUID] = None
+
+
+class InvestmentCryptoTransferResolve(BaseModel):
+    candidate_transfer_id: UUID
 
 
 class SymbolSearchResult(BaseModel):

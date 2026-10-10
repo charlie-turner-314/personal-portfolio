@@ -1,0 +1,47 @@
+{
+  "status": "ok",
+  "message": "ok",
+  "buyorders": [
+    {
+      "id": "buy-1",
+      "coin": "BTC",
+      "type": "market",
+      "market": "BTC/AUD",
+      "rate": "100000",
+      "amount": "1",
+      "total": "100000",
+      "solddate": "2025-01-01T10:00:00.000Z",
+      "audfeeExGst": "9.09",
+      "audGst": "0.91",
+      "audtotal": "100010"
+    },
+    {
+      "id": "swap-1",
+      "coin": "ETH",
+      "type": "market",
+      "market": "ETH/USDT",
+      "rate": "4000",
+      "amount": "0.25",
+      "total": "1000",
+      "solddate": "2025-01-02T10:00:00.000Z",
+      "audfeeExGst": "0",
+      "audGst": "0",
+      "audtotal": "1600"
+    }
+  ],
+  "sellorders": [
+    {
+      "id": "sell-1",
+      "coin": "BTC",
+      "type": "instant",
+      "market": "BTC/AUD",
+      "rate": "110000",
+      "amount": "0.1",
+      "total": "11000",
+      "solddate": "2025-01-03T10:00:00.000Z",
+      "audfeeExGst": "4.55",
+      "audGst": "0.45",
+      "audtotal": "10995"
+    }
+  ]
+}

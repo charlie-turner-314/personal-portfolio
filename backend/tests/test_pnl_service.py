@@ -1,10 +1,12 @@
 """Unit tests for the pure FIFO P&L engine."""
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
 
 from app.services.pnl_service import (
+    CostBaseAdjustment,
+    CostBaseAdjustmentError,
     cgt_aud_values_for_closed_lot,
     compute_fifo,
     is_cgt_discount_eligible,
@@ -129,6 +131,72 @@ def test_compute_fifo_multi_symbol_independent():
     assert {l.symbol for l in result.open_lots} == {"MSFT"}
 
 
+def test_amit_adjustment_is_allocated_per_open_unit_and_carried_into_disposal():
+    trades = [
+        _t("VAS", "2024-01-10", "buy", 6, 100, currency="AUD"),
+        _t("VAS", "2024-02-10", "buy", 4, 120, currency="AUD"),
+        _t("VAS", "2025-07-10", "sell", 8, 150, currency="AUD"),
+    ]
+    adjustment = CostBaseAdjustment(
+        symbol="VAS",
+        effective_date=date(2025, 6, 30),
+        amount=Decimal("100"),
+        currency="AUD",
+        adjustment_id="amma-1",
+    )
+
+    result = compute_fifo(trades, [adjustment])
+
+    assert [lot.cost_base_adjustment_native for lot in result.realized] == [
+        Decimal("60"), Decimal("20")
+    ]
+    assert result.realized[0].cost_native == Decimal("660")
+    assert result.realized[1].cost_native == Decimal("260")
+    assert result.open_lots[0].quantity_remaining == Decimal("2")
+    assert result.open_lots[0].cost_per_share_native == Decimal("130")
+    assert result.open_lots[0].cost_base_adjustment_per_share_native == Decimal("10")
+
+
+def test_amit_decrease_below_zero_is_not_silently_applied():
+    with pytest.raises(CostBaseAdjustmentError, match="CGT event E10"):
+        compute_fifo(
+            [_t("VAS", "2024-01-10", "buy", 1, 10, currency="AUD")],
+            [CostBaseAdjustment(
+                symbol="VAS",
+                effective_date=date(2025, 6, 30),
+                amount=Decimal("-11"),
+                currency="AUD",
+            )],
+        )
+
+
+def test_cgt_aud_conversion_values_amma_adjustment_on_its_effective_date():
+    lot = compute_fifo(
+        [
+            _t("VTI", "2024-01-10", "buy", 10, 100, currency="USD"),
+            _t("VTI", "2025-07-10", "sell", 10, 150, currency="USD"),
+        ],
+        [CostBaseAdjustment(
+            symbol="VTI",
+            effective_date=date(2025, 6, 30),
+            amount=Decimal("100"),
+            currency="USD",
+            adjustment_id="amma-usd",
+        )],
+    ).realized[0]
+
+    values = cgt_aud_values_for_closed_lot(lot, lambda _source, _target, on: {
+        date(2024, 1, 10): Decimal("0.70"),
+        date(2025, 6, 30): Decimal("0.75"),
+        date(2025, 7, 10): Decimal("0.80"),
+    }[on])
+
+    assert values.cost_base_aud == Decimal("775.00")
+    assert values.cost_base_adjustment_aud == Decimal("75.00")
+    assert values.proceeds_aud == Decimal("1200.00")
+    assert values.gain_aud == Decimal("425.00")
+
+
 from unittest.mock import MagicMock
 
 
@@ -229,6 +297,32 @@ def test_compute_fifo_retains_trade_identity_and_stable_same_day_ordering():
     assert result.realized[0].acquisition_trade_id == "buy-a"
     assert result.realized[0].disposal_trade_id == "sell-a"
     assert result.realized[0].cost_native == Decimal("90")
+
+
+def test_compute_fifo_uses_event_time_and_preserves_carried_acquisition_date():
+    sold_before_buy = [
+        Trade(
+            "BTC", date(2025, 1, 2), "sell", Decimal("1"), Decimal("120"), "AUD",
+            occurred_at=datetime(2025, 1, 2, 9, 0),
+        ),
+        Trade(
+            "BTC", date(2025, 1, 2), "buy", Decimal("1"), Decimal("100"), "AUD",
+            occurred_at=datetime(2025, 1, 2, 10, 0),
+        ),
+    ]
+    with pytest.raises(OverSellError):
+        compute_fifo(sold_before_buy)
+
+    carried = compute_fifo([
+        Trade(
+            "BTC", date(2025, 1, 2), "buy", Decimal("1"), Decimal("100"), "AUD",
+            trade_id="transfer-in",
+            occurred_at=datetime(2025, 1, 2, 10, 0),
+            acquisition_date=date(2023, 5, 1),
+        ),
+    ]).open_lots[0]
+    assert carried.open_date == date(2023, 5, 1)
+    assert carried.acquisition_trade_id == "transfer-in"
 
 
 def test_cgt_discount_uses_calendar_year_anniversary_including_leap_day():

@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, time
 from sqlalchemy import (
     Column,
+    CHAR,
     String,
     Boolean,
     Date,
@@ -604,14 +605,16 @@ class CsvImport(Base):
 
 class CsvImportProfile(Base):
     """
-    Saved CSV column mapping for an account.
-    At most one profile is stored per user/account pair.
+    Saved CSV column mapping for an account, workflow, and provider.
     """
     __tablename__ = "csv_import_profiles"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    import_kind = Column(String(24), nullable=False, default="transactions", server_default=text("'transactions'"))
+    provider = Column(String(64), nullable=False, default="generic", server_default=text("'generic'"))
+    profile_variant = Column(String(32), nullable=False, default="default", server_default=text("'default'"))
     name = Column(String(255), nullable=False, default="Default CSV mapping", server_default=text("'Default CSV mapping'"))
     column_mapping = Column(JSONB, nullable=False)
     header_signature = Column(JSONB, nullable=True)
@@ -626,7 +629,18 @@ class CsvImportProfile(Base):
     __table_args__ = (
         Index("idx_csv_import_profiles_user", "user_id"),
         Index("idx_csv_import_profiles_account", "account_id"),
-        UniqueConstraint("user_id", "account_id", name="csv_import_profiles_user_account_unique"),
+        CheckConstraint(
+            "import_kind IN ('transactions', 'investments')",
+            name="csv_import_profiles_import_kind_check",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "account_id",
+            "import_kind",
+            "provider",
+            "profile_variant",
+            name="csv_import_profiles_scope_unique",
+        ),
     )
 
 
@@ -1106,6 +1120,13 @@ class BrokerConnection(Base):
     last_sync_at = Column(DateTime, nullable=True)
     last_sync_status = Column(String(20), default="pending")
     last_sync_error = Column(Text, nullable=True)
+    sync_cursor = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
+    read_only_verified_at = Column(DateTime, nullable=True)
+    consecutive_failures = Column(Integer, nullable=False, default=0)
+    next_retry_at = Column(DateTime, nullable=True)
+    health_details = Column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
+    )
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1145,16 +1166,42 @@ class BrokerTrade(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     symbol = Column(String(64), nullable=False)
+    instrument_type = Column(String(20), nullable=False, default="equity", server_default=text("'equity'"))
     trade_date = Column(Date, nullable=False)
+    occurred_at = Column(DateTime, nullable=True)
+    acquisition_date = Column(Date, nullable=True)
     side = Column(String(10), nullable=False)
     quantity = Column(Numeric(28, 8), nullable=False)
     price = Column(Numeric(28, 8), nullable=False)
     currency = Column(String(3), nullable=False)
     fees = Column(Numeric(28, 8), nullable=False, default=0)
     external_id = Column(String(128), nullable=False)
+    economic_type = Column(String(32), nullable=False, default="trade", server_default=text("'trade'"))
+    taxable_disposal = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    aud_value = Column(Numeric(38, 18), nullable=True)
+    valuation_source = Column(String(64), nullable=True)
+    valuation_timestamp = Column(DateTime, nullable=True)
+    valuation_missing = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    assumptions = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    source_activity_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("investment_activities.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
+    event_group_id = Column(String(255), nullable=True)
+    source_acquisition_trade_id = Column(
+        UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="SET NULL"), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint("account_id", "external_id", name="broker_trades_account_external_uq"),
+        CheckConstraint(
+            "economic_type IN ('trade', 'swap_disposal', 'swap_acquisition', "
+            "'reward_acquisition', 'network_fee', 'transfer_out', 'transfer_in')",
+            name="broker_trades_economic_type_check",
+        ),
+        Index("idx_broker_trades_source_activity", "source_activity_id"),
+        Index("idx_broker_trades_event_group", "event_group_id"),
     )
 
 
@@ -1168,6 +1215,7 @@ class CgtAllocation(Base):
     acquisition_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
     disposal_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False)
     symbol = Column(String(64), nullable=False)
+    instrument_type = Column(String(20), nullable=False, default="equity", server_default=text("'equity'"))
     acquisition_date = Column(Date, nullable=False)
     disposal_date = Column(Date, nullable=False)
     quantity = Column(Numeric(28, 8), nullable=False)
@@ -1175,12 +1223,21 @@ class CgtAllocation(Base):
     cost_base_native = Column(Numeric(28, 8), nullable=False)
     proceeds_native = Column(Numeric(28, 8), nullable=False)
     gain_native = Column(Numeric(28, 8), nullable=False)
+    cost_base_adjustment_native = Column(Numeric(28, 8), nullable=False, default=0, server_default=text("0"))
     cost_base_aud = Column(Numeric(28, 8), nullable=True)
     proceeds_aud = Column(Numeric(28, 8), nullable=True)
     gain_aud = Column(Numeric(28, 8), nullable=True)
+    cost_base_adjustment_aud = Column(Numeric(28, 8), nullable=True)
+    adjustment_ids = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    acquisition_valuation_source = Column(String(64), nullable=True)
+    disposal_valuation_source = Column(String(64), nullable=True)
+    acquisition_valuation_timestamp = Column(DateTime, nullable=True)
+    disposal_valuation_timestamp = Column(DateTime, nullable=True)
+    acquisition_economic_type = Column(String(32), nullable=False, default="trade", server_default=text("'trade'"))
+    disposal_economic_type = Column(String(32), nullable=False, default="trade", server_default=text("'trade'"))
     fx_missing = Column(Boolean, nullable=False, default=False)
     discount_eligible = Column(Boolean, nullable=False, default=False)
-    calculation_version = Column(String(32), nullable=False, default="fifo-v1")
+    calculation_version = Column(String(32), nullable=False, default="fifo-v2", server_default=text("'fifo-v2'"))
     assumptions = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -1208,23 +1265,371 @@ class InvestmentIncomeEvent(Base):
     franking_credit = Column(Numeric(18, 2), nullable=True)
     foreign_income = Column(Numeric(18, 2), nullable=True)
     foreign_tax_paid = Column(Numeric(18, 2), nullable=True)
-    amit_amma_components = Column(JSON, nullable=True)
+    tfn_withholding = Column(Numeric(18, 2), nullable=True)
+    amit_amma_components = Column(JSONB, nullable=True)
     is_drp = Column(Boolean, nullable=False, default=False)
     drp_quantity = Column(Numeric(28, 8), nullable=True)
     drp_price = Column(Numeric(28, 8), nullable=True)
     reinvestment_trade_id = Column(UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="SET NULL"), nullable=True)
     source_id = Column(String(255), nullable=True)
+    reconciliation_status = Column(String(20), nullable=False, default="provisional", server_default=text("'provisional'"))
+    user_confirmed_at = Column(DateTime, nullable=True)
+    matched_transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True)
+    component_sources = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    annual_statement_reference = Column(String(255), nullable=True)
+    asset_quantity = Column(Numeric(38, 18), nullable=True)
+    aud_market_value = Column(Numeric(38, 18), nullable=True)
+    valuation_source = Column(String(64), nullable=True)
+    valuation_timestamp = Column(DateTime, nullable=True)
+    valuation_missing = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    created_by_activity_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("investment_activities.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
         UniqueConstraint("account_id", "source_id", name="investment_income_events_account_source_uq"),
-        CheckConstraint("event_type IN ('dividend', 'distribution')", name="investment_income_events_type_check"),
+        CheckConstraint(
+            "event_type IN ('dividend', 'distribution', 'interest', 'staking_reward', 'airdrop')",
+            name="investment_income_events_type_check",
+        ),
         CheckConstraint("cash_received >= 0", name="investment_income_events_cash_received_check"),
         CheckConstraint("is_drp = false OR (drp_quantity > 0 AND drp_price >= 0)", name="investment_income_events_drp_check"),
+        CheckConstraint("reconciliation_status IN ('provisional', 'confirmed', 'conflict')", name="investment_income_events_reconciliation_status_check"),
+        UniqueConstraint("matched_transaction_id", name="investment_income_events_matched_transaction_uq"),
         Index("idx_investment_income_events_user_pay_date", "user_id", "pay_date"),
         Index("idx_investment_income_events_holding_pay_date", "holding_id", "pay_date"),
+    )
+
+
+class InvestmentIncomeEnrichment(Base):
+    """Reversible annual-statement changes applied to a provisional cash event."""
+
+    __tablename__ = "investment_income_enrichments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    income_event_id = Column(UUID(as_uuid=True), ForeignKey("investment_income_events.id", ondelete="CASCADE"), nullable=False)
+    source_activity_id = Column(UUID(as_uuid=True), ForeignKey("investment_activities.id", ondelete="CASCADE"), nullable=False)
+    previous_values = Column(JSONB, nullable=False, default=dict)
+    applied_values = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_activity_id", name="investment_income_enrichments_activity_uq"),
+        Index("idx_investment_income_enrichments_event", "income_event_id"),
+    )
+
+
+class InvestmentCostBaseAdjustment(Base):
+    """A signed, statement-supplied AMIT/AMMA cost-base adjustment."""
+
+    __tablename__ = "investment_cost_base_adjustments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    holding_id = Column(UUID(as_uuid=True), ForeignKey("holdings.id", ondelete="CASCADE"), nullable=False)
+    income_event_id = Column(UUID(as_uuid=True), ForeignKey("investment_income_events.id", ondelete="SET NULL"), nullable=True)
+    source_activity_id = Column(UUID(as_uuid=True), ForeignKey("investment_activities.id", ondelete="CASCADE"), nullable=False)
+    effective_date = Column(Date, nullable=False)
+    currency = Column(String(3), nullable=False)
+    amount_native = Column(Numeric(28, 8), nullable=False)
+    amount_aud = Column(Numeric(28, 8), nullable=True)
+    valuation_source = Column(String(64), nullable=True)
+    valuation_timestamp = Column(DateTime, nullable=True)
+    calculation_version = Column(String(32), nullable=False, default="amit-v1")
+    assumptions = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_activity_id", name="investment_cost_base_adjustments_activity_uq"),
+        CheckConstraint("amount_native <> 0", name="investment_cost_base_adjustments_nonzero_check"),
+        Index("idx_investment_cost_base_adjustments_holding_date", "holding_id", "effective_date"),
+    )
+
+
+class InvestmentReconciliationItem(Base):
+    """An unmatched, ambiguous, or conflicting investment-income review item."""
+
+    __tablename__ = "investment_reconciliation_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    source_activity_id = Column(UUID(as_uuid=True), ForeignKey("investment_activities.id", ondelete="CASCADE"), nullable=False)
+    income_event_id = Column(UUID(as_uuid=True), ForeignKey("investment_income_events.id", ondelete="SET NULL"), nullable=True)
+    kind = Column(String(32), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    reason = Column(Text, nullable=False)
+    candidate_income_event_ids = Column(JSONB, nullable=False, default=list)
+    candidate_transaction_ids = Column(JSONB, nullable=False, default=list)
+    details = Column(JSONB, nullable=False, default=dict)
+    resolution = Column(JSONB, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_activity_id", "kind", name="investment_reconciliation_items_activity_kind_uq"),
+        CheckConstraint("kind IN ('cash_match', 'annual_statement', 'component_conflict')", name="investment_reconciliation_items_kind_check"),
+        CheckConstraint("status IN ('pending', 'resolved', 'ignored')", name="investment_reconciliation_items_status_check"),
+        Index("idx_investment_reconciliation_items_user_status", "user_id", "status"),
+    )
+
+
+class InvestmentCryptoTransfer(Base):
+    """One owned-wallet transfer observation awaiting or holding a matched counterpart."""
+
+    __tablename__ = "investment_crypto_transfers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    source_activity_id = Column(
+        UUID(as_uuid=True), ForeignKey("investment_activities.id", ondelete="CASCADE"), nullable=False
+    )
+    matched_transfer_id = Column(
+        UUID(as_uuid=True), ForeignKey("investment_crypto_transfers.id", ondelete="SET NULL"), nullable=True
+    )
+    direction = Column(String(8), nullable=False)
+    asset_symbol = Column(String(64), nullable=False)
+    quantity = Column(Numeric(38, 18), nullable=False)
+    occurred_at = Column(DateTime, nullable=False)
+    transaction_hash = Column(String(255), nullable=True)
+    status = Column(String(20), nullable=False, default="pending", server_default=text("'pending'"))
+    match_method = Column(String(32), nullable=True)
+    reason = Column(Text, nullable=True)
+    assumptions = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_activity_id", name="investment_crypto_transfers_activity_uq"),
+        CheckConstraint("direction IN ('in', 'out', 'internal')", name="investment_crypto_transfers_direction_check"),
+        CheckConstraint("status IN ('pending', 'matched', 'ambiguous', 'internal')", name="investment_crypto_transfers_status_check"),
+        CheckConstraint("quantity > 0", name="investment_crypto_transfers_quantity_check"),
+        Index("idx_investment_crypto_transfers_match", "user_id", "asset_symbol", "status"),
+        Index("idx_investment_crypto_transfers_account", "account_id", "occurred_at"),
+    )
+
+
+class InvestmentCryptoTransferLot(Base):
+    """Cost-basis lineage carried from a matched outgoing lot to its destination."""
+
+    __tablename__ = "investment_crypto_transfer_lots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    transfer_out_id = Column(
+        UUID(as_uuid=True), ForeignKey("investment_crypto_transfers.id", ondelete="CASCADE"), nullable=False
+    )
+    transfer_in_id = Column(
+        UUID(as_uuid=True), ForeignKey("investment_crypto_transfers.id", ondelete="CASCADE"), nullable=False
+    )
+    source_broker_trade_id = Column(
+        UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False
+    )
+    destination_broker_trade_id = Column(
+        UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="CASCADE"), nullable=False
+    )
+    original_acquisition_trade_id = Column(
+        UUID(as_uuid=True), ForeignKey("broker_trades.id", ondelete="SET NULL"), nullable=True
+    )
+    quantity = Column(Numeric(38, 18), nullable=False)
+    acquisition_date = Column(Date, nullable=False)
+    source_currency = Column(String(3), nullable=False)
+    unit_cost_native = Column(Numeric(38, 18), nullable=False)
+    cost_base_aud = Column(Numeric(38, 18), nullable=True)
+    valuation_source = Column(String(64), nullable=True)
+    provenance = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="investment_crypto_transfer_lots_quantity_check"),
+        Index("idx_investment_crypto_transfer_lots_pair", "transfer_out_id", "transfer_in_id"),
+    )
+
+
+class InvestmentIngestionRun(Base):
+    """Auditable envelope for one provider import or synchronization attempt."""
+
+    __tablename__ = "investment_ingestion_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(64), nullable=False)
+    ingestion_type = Column(String(24), nullable=False)
+    status = Column(String(24), nullable=False, default="pending")
+    source_name = Column(String(255), nullable=True)
+    source_hash = Column(CHAR(64), nullable=True)
+    normalization_version = Column(String(32), nullable=False)
+    cursor = Column(JSONB, nullable=True)
+    summary = Column(JSONB, nullable=False, default=dict)
+    warnings = Column(JSONB, nullable=False, default=list)
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    reverted_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    account = relationship("Account")
+    source_records = relationship("InvestmentSourceRecord", back_populates="run")
+    activities = relationship("InvestmentActivity", back_populates="run")
+
+    __table_args__ = (
+        CheckConstraint(
+            "ingestion_type IN ('csv_import', 'api_sync', 'manual')",
+            name="investment_ingestion_runs_type_check",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'applying', 'completed', 'partial', 'failed', 'reverted')",
+            name="investment_ingestion_runs_status_check",
+        ),
+        Index("idx_investment_ingestion_runs_account_started", "account_id", "started_at"),
+        Index("idx_investment_ingestion_runs_user_status", "user_id", "status"),
+    )
+
+
+class InvestmentSourceRecord(Base):
+    """Immutable sanitized provider row retained for provenance and deduplication."""
+
+    __tablename__ = "investment_source_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("investment_ingestion_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(64), nullable=False)
+    provider_record_id = Column(String(255), nullable=True)
+    idempotency_key = Column(CHAR(64), nullable=False)
+    payload_hash = Column(CHAR(64), nullable=False)
+    occurred_at = Column(DateTime, nullable=False)
+    source_payload = Column(JSONB, nullable=False)
+    source_metadata = Column(JSONB, nullable=False, default=dict)
+    normalization_version = Column(String(32), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    run = relationship("InvestmentIngestionRun", back_populates="source_records")
+    activities = relationship("InvestmentActivity", back_populates="source_record")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "provider",
+            "idempotency_key",
+            name="investment_source_records_account_provider_key_uq",
+        ),
+        Index("idx_investment_source_records_run", "run_id"),
+        Index("idx_investment_source_records_account_occurred", "account_id", "occurred_at"),
+    )
+
+
+class InvestmentActivity(Base):
+    """Validated provider-neutral investment event applied to domain ledgers."""
+
+    __tablename__ = "investment_activities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_record_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("investment_source_records.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("investment_ingestion_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    leg_index = Column(Integer, nullable=False, default=0)
+    activity_type = Column(String(32), nullable=False)
+    occurred_at = Column(DateTime, nullable=False)
+    asset_symbol = Column(String(64), nullable=False)
+    asset_name = Column(String(255), nullable=True)
+    asset_type = Column(String(24), nullable=False)
+    quantity = Column(Numeric(38, 18), nullable=True)
+    price = Column(Numeric(38, 18), nullable=True)
+    gross_amount = Column(Numeric(38, 18), nullable=True)
+    net_amount = Column(Numeric(38, 18), nullable=True)
+    currency = Column(String(16), nullable=True)
+    fee_amount = Column(Numeric(38, 18), nullable=True)
+    fee_currency = Column(String(16), nullable=True)
+    fee_aud_value = Column(Numeric(38, 18), nullable=True)
+    fee_valuation_source = Column(String(64), nullable=True)
+    fee_valuation_timestamp = Column(DateTime, nullable=True)
+    tax_amount = Column(Numeric(38, 18), nullable=True)
+    tax_currency = Column(String(16), nullable=True)
+    counter_asset_symbol = Column(String(64), nullable=True)
+    counter_quantity = Column(Numeric(38, 18), nullable=True)
+    direction = Column(String(16), nullable=True)
+    external_group_id = Column(String(255), nullable=True)
+    aud_value = Column(Numeric(38, 18), nullable=True)
+    valuation_source = Column(String(64), nullable=True)
+    valuation_timestamp = Column(DateTime, nullable=True)
+    canonical_hash = Column(CHAR(64), nullable=False)
+    assumptions = Column(JSONB, nullable=False, default=list)
+    warnings = Column(JSONB, nullable=False, default=list)
+    activity_metadata = Column(JSONB, nullable=False, default=dict)
+    broker_trade_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("broker_trades.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    income_event_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("investment_income_events.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    applied_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    source_record = relationship("InvestmentSourceRecord", back_populates="activities")
+    run = relationship("InvestmentIngestionRun", back_populates="activities")
+    broker_trade = relationship("BrokerTrade", foreign_keys=[broker_trade_id])
+    income_event = relationship("InvestmentIncomeEvent", foreign_keys=[income_event_id])
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_record_id",
+            "leg_index",
+            name="investment_activities_source_leg_uq",
+        ),
+        CheckConstraint(
+            "activity_type IN ('buy', 'sell', 'dividend', 'distribution', 'drp', "
+            "'deposit', 'withdrawal', 'transfer', 'fee', 'interest', "
+            "'staking_reward', 'airdrop', 'crypto_swap')",
+            name="investment_activities_type_check",
+        ),
+        CheckConstraint(
+            "direction IS NULL OR direction IN ('in', 'out', 'internal')",
+            name="investment_activities_direction_check",
+        ),
+        CheckConstraint("leg_index >= 0", name="investment_activities_leg_index_check"),
+        CheckConstraint(
+            "quantity IS NULL OR quantity > 0",
+            name="investment_activities_quantity_check",
+        ),
+        CheckConstraint(
+            "(gross_amount IS NULL OR gross_amount >= 0) AND "
+            "(fee_amount IS NULL OR fee_amount >= 0) AND "
+            "(tax_amount IS NULL OR tax_amount >= 0) AND "
+            "(aud_value IS NULL OR aud_value >= 0) AND "
+            "(fee_aud_value IS NULL OR fee_aud_value >= 0)",
+            name="investment_activities_amount_check",
+        ),
+        Index("idx_investment_activities_run", "run_id"),
+        Index("idx_investment_activities_account_occurred", "account_id", "occurred_at"),
+        Index("idx_investment_activities_external_group", "external_group_id"),
     )
 
 
