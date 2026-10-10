@@ -2,6 +2,9 @@
 
 `develop` is the staging integration branch. `main` contains production releases only.
 
+For the repeatable local rehearsal, test-account preparation, Pi discovery and
+deployment commands, follow [Agent workflow](../deploy/compose/AGENT-WORKFLOW.md).
+
 ## Required promotion path
 
 1. Land feature work in `develop` through a pull request.
@@ -23,7 +26,7 @@ Apply protection to `main` and `develop`:
 - require pull requests and resolved conversations;
 - require the checks listed above and an up-to-date branch;
 - block force pushes and branch deletion;
-- require a linear history;
+- allow merge commits for develop/main promotions and synchronization; squash feature PRs only when ancestry reconciliation is not involved;
 - restrict direct pushes to maintainers only;
 - require one approving review where a second maintainer is available;
 - enable GitHub secret scanning, push protection, and private vulnerability reporting.
