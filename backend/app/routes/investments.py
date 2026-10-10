@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import csv
+import os
 from io import StringIO
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -17,6 +18,28 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.db_helpers import get_user_id
 from app.integrations.price_provider import get_price_provider
+from app.integrations.coinspot_adapter import (
+    CoinSpotAdapter,
+    CoinSpotAuthError,
+    CoinSpotError,
+    CoinSpotReadOnlyClient,
+    CoinSpotTransientError,
+)
+from app.integrations.binance_adapter import (
+    BinanceAdapter,
+    BinanceAuthError,
+    BinanceError,
+    BinancePermissionError,
+    BinanceReadOnlyClient,
+    BinanceTransientError,
+)
+from app.integrations.crypto_com_exchange_adapter import (
+    CryptoComExchangeAdapter,
+    CryptoComExchangeAuthError,
+    CryptoComExchangeError,
+    CryptoComExchangeReadOnlyClient,
+    CryptoComExchangeTransientError,
+)
 from app.models import (
     Account,
     AccountBalance,
@@ -26,10 +49,23 @@ from app.models import (
     Holding,
     HoldingValuation,
     InvestmentIncomeEvent,
+    InvestmentCostBaseAdjustment,
+    InvestmentCryptoTransfer,
+    InvestmentIngestionRun,
+    InvestmentReconciliationItem,
+    InvestmentSourceRecord,
+    CsvImportProfile,
     User,
 )
+from app.investment_import_schemas import (
+    InvestmentImportApplyRequest,
+    InvestmentImportProfileSave,
+    InvestmentImportRequest,
+)
 from app.schemas import (
+    BinanceTradeSymbolsUpdate,
     BrokerConnectionCreate,
+    CoinSpotCredentialsUpdate,
     HoldingCreate,
     HoldingLot,
     CgtAllocationResponse,
@@ -40,16 +76,59 @@ from app.schemas import (
     InvestmentIncomeEventCreate,
     InvestmentIncomeEventResponse,
     InvestmentIncomeSummary,
+    InvestmentCryptoTransferResolve,
+    InvestmentReconciliationResolve,
     ManualAccountCreate,
     PortfolioSummary,
     SymbolSearchResult,
     ValuationPoint,
 )
-from app.services.pnl_service import Trade as _FifoTrade, compute_fifo
+from app.services.pnl_service import CostBaseAdjustment as _FifoAdjustment, Trade as _FifoTrade, compute_fifo
 from app.services.broker_trade_service import ImportError as BrokerTradeImportError, import_trades, remove_trade
 from app.services import credentials_crypto
+from app.services.investment_activity_service import ActivityApplicationError, revert_run, source_record_view
+from app.services.investment_csv_import_service import (
+    InvestmentCsvImportError,
+    apply_investment_csv,
+    normalize_provider,
+    preview_investment_csv,
+)
+from app.services.investment_income_reconciliation_service import (
+    INCOME_COMPONENT_FIELDS,
+    reconciliation_item_view,
+    resolve_reconciliation_item,
+)
+from app.services.crypto_accounting_service import (
+    confirm_owned_crypto_transfer,
+    transfer_view,
+)
 
 logger = __import__("logging").getLogger(__name__)
+
+
+def _ingestion_run_view(run: InvestmentIngestionRun) -> dict:
+    return {
+        "id": str(run.id),
+        "account_id": str(run.account_id),
+        "provider": run.provider,
+        "ingestion_type": run.ingestion_type,
+        "status": run.status,
+        "source_name": run.source_name,
+        "summary": run.summary or {},
+        "warnings": run.warnings or [],
+        "error": run.error,
+        "started_at": run.started_at.isoformat(),
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "reverted_at": run.reverted_at.isoformat() if run.reverted_at else None,
+    }
+
+
+def _investment_sync_hour_utc() -> int:
+    try:
+        value = int(os.getenv("PERSONAL_PORTFOLIO_INVESTMENT_SYNC_HOUR_UTC", "2"))
+    except ValueError:
+        value = 2
+    return max(0, min(23, value))
 
 # ---------------------------------------------------------------------------
 # Helper: in-process sync (FastAPI BackgroundTask, no Celery/Redis required)
@@ -96,6 +175,255 @@ def _run_sync_in_process(account_id: UUID) -> None:
 router = APIRouter()
 
 
+def _save_investment_import_profile(
+    db: Session,
+    *,
+    user_id: str,
+    payload: InvestmentImportProfileSave,
+) -> CsvImportProfile:
+    account = db.query(Account).filter(Account.id == payload.account_id, Account.user_id == user_id).one_or_none()
+    if account is None or account.account_type not in {"investment_manual", "investment_brokerage"}:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+    provider = normalize_provider(payload.provider)
+    profile = db.query(CsvImportProfile).filter(
+        CsvImportProfile.user_id == user_id,
+        CsvImportProfile.account_id == account.id,
+        CsvImportProfile.import_kind == "investments",
+        CsvImportProfile.provider == provider,
+        CsvImportProfile.profile_variant == payload.income_data_kind,
+    ).one_or_none()
+    if profile is None:
+        profile = CsvImportProfile(
+            user_id=user_id,
+            account_id=account.id,
+            import_kind="investments",
+            provider=provider,
+            profile_variant=payload.income_data_kind,
+            name=payload.name,
+            column_mapping=payload.stored_mapping(),
+            header_signature=payload.header_signature,
+            last_used_at=datetime.utcnow(),
+        )
+        db.add(profile)
+    else:
+        profile.name = payload.name
+        profile.profile_variant = payload.income_data_kind
+        profile.column_mapping = payload.stored_mapping()
+        profile.header_signature = payload.header_signature
+        profile.last_used_at = datetime.utcnow()
+        profile.updated_at = datetime.utcnow()
+    db.flush()
+    return profile
+
+
+def _import_profile_view(profile: CsvImportProfile) -> dict:
+    return {
+        "id": str(profile.id),
+        "account_id": str(profile.account_id),
+        "provider": profile.provider,
+        "profile_variant": profile.profile_variant,
+        "name": profile.name,
+        "mapping": profile.column_mapping,
+        "header_signature": profile.header_signature or [],
+        "last_used_at": profile.last_used_at.isoformat() if profile.last_used_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Generic investment file imports
+# ---------------------------------------------------------------------------
+
+
+@router.post("/imports/preview")
+def preview_investment_import(
+    payload: InvestmentImportRequest,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        _, response = preview_investment_csv(
+            db,
+            user_id=user_id,
+            account_id=payload.account_id,
+            parse_options=payload.parse_options(),
+        )
+        return response
+    except InvestmentCsvImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/imports")
+def apply_investment_import(
+    payload: InvestmentImportApplyRequest,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        result = apply_investment_csv(
+            db,
+            user_id=user_id,
+            account_id=payload.account_id,
+            parse_options=payload.parse_options(),
+            selected_row_numbers=payload.selected_row_numbers,
+        )
+        if payload.save_mapping:
+            profile_payload = InvestmentImportProfileSave(
+                account_id=payload.account_id,
+                provider=payload.provider,
+                name=payload.mapping_name,
+                mapping=payload.mapping,
+                date_format=payload.date_format,
+                amount_format=payload.amount_format,
+                default_asset_type=payload.default_asset_type,
+                default_currency=payload.default_currency,
+                default_activity_type=payload.default_activity_type,
+                activity_type_aliases=payload.activity_type_aliases,
+                income_data_kind=payload.income_data_kind,
+                header_signature=result["headers"],
+            )
+            profile = _save_investment_import_profile(db, user_id=user_id, payload=profile_payload)
+            db.commit()
+            result["profile_id"] = str(profile.id)
+        return result
+    except (InvestmentCsvImportError, ActivityApplicationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/imports")
+def list_investment_imports(
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.user_id == user_id,
+        InvestmentIngestionRun.ingestion_type == "csv_import",
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentIngestionRun.account_id == account_id)
+    return [
+        _ingestion_run_view(run)
+        for run in query.order_by(InvestmentIngestionRun.started_at.desc()).limit(100).all()
+    ]
+
+
+@router.get("/ingestion-runs")
+def list_investment_ingestion_runs(
+    account_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return CSV and API ingestion history through one operational view."""
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.user_id == user_id
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentIngestionRun.account_id == account_id)
+    return [
+        _ingestion_run_view(run)
+        for run in query.order_by(InvestmentIngestionRun.started_at.desc()).limit(100).all()
+    ]
+
+
+@router.get("/ingestion-runs/{run_id:uuid}/source-records")
+def list_investment_ingestion_source_records(
+    run_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    run = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.id == run_id,
+        InvestmentIngestionRun.user_id == user_id,
+    ).one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Investment ingestion run not found")
+    records = db.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.run_id == run.id,
+        InvestmentSourceRecord.user_id == user_id,
+    ).order_by(InvestmentSourceRecord.occurred_at, InvestmentSourceRecord.created_at).all()
+    return [source_record_view(record) for record in records]
+
+
+@router.get("/imports/{run_id:uuid}/source-records")
+def list_investment_import_source_records(
+    run_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    run = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.id == run_id,
+        InvestmentIngestionRun.user_id == user_id,
+        InvestmentIngestionRun.ingestion_type == "csv_import",
+    ).one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Investment import not found")
+    records = db.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.run_id == run.id,
+        InvestmentSourceRecord.user_id == user_id,
+    ).order_by(InvestmentSourceRecord.occurred_at, InvestmentSourceRecord.created_at).all()
+    return [source_record_view(record) for record in records]
+
+
+@router.post("/imports/{run_id:uuid}/revert")
+def revert_investment_import(
+    run_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        return revert_run(db, user_id=user_id, run_id=run_id)
+    except ActivityApplicationError as exc:
+        status_code = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.get("/import-profiles")
+def list_investment_import_profiles(
+    account_id: UUID,
+    provider: Optional[str] = None,
+    income_data_kind: Optional[str] = Query(default=None, pattern="^(cash_activity|annual_statement)$"),
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).one_or_none()
+    if account is None:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+    query = db.query(CsvImportProfile).filter(
+        CsvImportProfile.user_id == user_id,
+        CsvImportProfile.account_id == account.id,
+        CsvImportProfile.import_kind == "investments",
+    )
+    if provider:
+        query = query.filter(CsvImportProfile.provider == normalize_provider(provider))
+    if income_data_kind:
+        query = query.filter(CsvImportProfile.profile_variant == income_data_kind)
+    return [_import_profile_view(profile) for profile in query.order_by(CsvImportProfile.last_used_at.desc()).all()]
+
+
+@router.put("/import-profiles")
+def save_investment_import_profile(
+    payload: InvestmentImportProfileSave,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        profile = _save_investment_import_profile(db, user_id=user_id, payload=payload)
+        db.commit()
+        db.refresh(profile)
+        return _import_profile_view(profile)
+    except InvestmentCsvImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _owned_income_event_context(db: Session, user_id: str, payload: InvestmentIncomeEventCreate):
     account = db.query(Account).filter(Account.id == payload.account_id, Account.user_id == user_id).first()
     if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
@@ -116,6 +444,14 @@ def _save_income_event(
     payload: InvestmentIncomeEventCreate,
     event: InvestmentIncomeEvent | None = None,
 ) -> InvestmentIncomeEvent:
+    if payload.event_type in {"interest", "staking_reward", "airdrop"}:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Crypto income is managed through activity imports so its receipt-time value "
+                "and acquisition cost base stay linked."
+            ),
+        )
     account, holding = _owned_income_event_context(db, user_id, payload)
     if payload.source_id:
         existing = db.query(InvestmentIncomeEvent).filter(
@@ -130,12 +466,41 @@ def _save_income_event(
         remove_trade(db, user_id, str(event.account_id), str(event.reinvestment_trade_id), commit=False)
         event.reinvestment_trade_id = None
     values = payload.model_dump()
+    now = datetime.utcnow()
+    manual_source = {"kind": "manual", "confirmed_at": now.isoformat()}
+    component_sources = dict(event.component_sources or {}) if event is not None else {}
+    for field in ("cash_received", "asset_quantity", "aud_market_value", *INCOME_COMPONENT_FIELDS):
+        if values.get(field) is None:
+            continue
+        entries = component_sources.get(field, [])
+        if isinstance(entries, dict):
+            entries = [entries]
+        elif not isinstance(entries, list):
+            entries = []
+        component_sources[field] = [*entries, manual_source]
     if event is None:
-        event = InvestmentIncomeEvent(user_id=user_id, **values)
+        event = InvestmentIncomeEvent(
+            user_id=user_id,
+            **values,
+            reconciliation_status="confirmed",
+            user_confirmed_at=now,
+            component_sources=component_sources,
+        )
         db.add(event)
     else:
         for key, value in values.items():
             setattr(event, key, value)
+        event.reconciliation_status = "confirmed"
+        event.user_confirmed_at = now
+        event.component_sources = component_sources
+        pending_items = db.query(InvestmentReconciliationItem).filter(
+            InvestmentReconciliationItem.income_event_id == event.id,
+            InvestmentReconciliationItem.status == "pending",
+        ).all()
+        for item in pending_items:
+            item.status = "resolved"
+            item.resolution = {"action": "manual_edit"}
+            item.resolved_at = now
     db.flush()
     if payload.is_drp:
         try:
@@ -268,6 +633,7 @@ def investment_income_summary(
         func.coalesce(func.sum(InvestmentIncomeEvent.franking_credit), 0).label("franking_credits"),
         func.coalesce(func.sum(InvestmentIncomeEvent.foreign_income), 0).label("foreign_income"),
         func.coalesce(func.sum(InvestmentIncomeEvent.foreign_tax_paid), 0).label("foreign_tax_paid"),
+        func.coalesce(func.sum(InvestmentIncomeEvent.tfn_withholding), 0).label("tfn_withholding"),
     ).filter(
         InvestmentIncomeEvent.user_id == user_id,
         InvestmentIncomeEvent.pay_date >= start,
@@ -292,14 +658,224 @@ def investment_income_summary(
             franking_credits=Decimal(row.franking_credits),
             foreign_income=Decimal(row.foreign_income),
             foreign_tax_paid=Decimal(row.foreign_tax_paid),
+            tfn_withholding=Decimal(row.tfn_withholding),
         )
         for row in rows
     ]
 
 
+@router.get("/reconciliation-items")
+def list_investment_reconciliation_items(
+    account_id: Optional[UUID] = None,
+    status: Optional[str] = Query(default="pending", pattern="^(pending|resolved|ignored|all)$"),
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentReconciliationItem).filter(
+        InvestmentReconciliationItem.user_id == user_id
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentReconciliationItem.account_id == account_id)
+    if status and status != "all":
+        query = query.filter(InvestmentReconciliationItem.status == status)
+    return [
+        reconciliation_item_view(item)
+        for item in query.order_by(
+            InvestmentReconciliationItem.created_at.desc(),
+            InvestmentReconciliationItem.id,
+        ).limit(200).all()
+    ]
+
+
+@router.post("/reconciliation-items/{item_id:uuid}/resolve")
+def resolve_investment_reconciliation(
+    item_id: UUID,
+    payload: InvestmentReconciliationResolve,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        item = resolve_reconciliation_item(
+            db,
+            user_id=user_id,
+            item_id=item_id,
+            action=payload.action,
+            income_event_id=payload.income_event_id,
+            transaction_id=payload.transaction_id,
+            activity_id=payload.activity_id,
+        )
+        return reconciliation_item_view(item)
+    except ValueError as exc:
+        status_code = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.get("/cost-base-adjustments")
+def list_investment_cost_base_adjustments(
+    account_id: Optional[UUID] = None,
+    holding_id: Optional[UUID] = None,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentCostBaseAdjustment).filter(
+        InvestmentCostBaseAdjustment.user_id == user_id
+    )
+    if account_id is not None:
+        query = query.filter(InvestmentCostBaseAdjustment.account_id == account_id)
+    if holding_id is not None:
+        query = query.filter(InvestmentCostBaseAdjustment.holding_id == holding_id)
+    return [{
+        "id": str(item.id),
+        "account_id": str(item.account_id),
+        "holding_id": str(item.holding_id),
+        "income_event_id": str(item.income_event_id) if item.income_event_id else None,
+        "source_activity_id": str(item.source_activity_id),
+        "effective_date": item.effective_date.isoformat(),
+        "currency": item.currency,
+        "amount_native": str(item.amount_native),
+        "amount_aud": str(item.amount_aud) if item.amount_aud is not None else None,
+        "valuation_source": item.valuation_source,
+        "calculation_version": item.calculation_version,
+        "assumptions": item.assumptions or [],
+    } for item in query.order_by(
+        InvestmentCostBaseAdjustment.effective_date,
+        InvestmentCostBaseAdjustment.id,
+    ).all()]
+
+
+@router.get("/crypto-transfers")
+def list_investment_crypto_transfers(
+    account_id: Optional[UUID] = None,
+    status: Optional[str] = Query(default="all", pattern="^(pending|matched|ambiguous|internal|all)$"),
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    query = db.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.user_id == user_id
+    )
+    if account_id is not None:
+        account = db.query(Account.id).filter(
+            Account.id == account_id,
+            Account.user_id == user_id,
+        ).one_or_none()
+        if account is None:
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        query = query.filter(InvestmentCryptoTransfer.account_id == account_id)
+    if status and status != "all":
+        query = query.filter(InvestmentCryptoTransfer.status == status)
+    return [
+        transfer_view(item, db=db)
+        for item in query.order_by(
+            InvestmentCryptoTransfer.occurred_at.desc(),
+            InvestmentCryptoTransfer.id,
+        ).limit(500).all()
+    ]
+
+
+@router.post("/crypto-transfers/{transfer_id:uuid}/confirm")
+def confirm_investment_crypto_transfer(
+    transfer_id: UUID,
+    payload: InvestmentCryptoTransferResolve,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    try:
+        item = confirm_owned_crypto_transfer(
+            db,
+            user_id=user_id,
+            transfer_id=transfer_id,
+            candidate_transfer_id=payload.candidate_transfer_id,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return transfer_view(item, db=db)
+
+
 # ---------------------------------------------------------------------------
 # Broker connections
 # ---------------------------------------------------------------------------
+
+
+def _verify_coinspot_credentials(api_key: str, api_secret: str) -> None:
+    adapter = CoinSpotAdapter(CoinSpotReadOnlyClient(
+        api_key=api_key,
+        api_secret=api_secret,
+    ))
+    try:
+        adapter.verify_read_only()
+    except CoinSpotAuthError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="CoinSpot rejected the API key. Generate a Read Only API key and try again.",
+        ) from exc
+    except CoinSpotTransientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="CoinSpot is temporarily unavailable. Try connecting again shortly.",
+        ) from exc
+    except CoinSpotError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
+    finally:
+        adapter.close()
+
+
+def _verify_binance_credentials(api_key: str, api_secret: str) -> None:
+    adapter = BinanceAdapter(BinanceReadOnlyClient(api_key=api_key, api_secret=api_secret))
+    try:
+        adapter.verify_read_only()
+    except BinancePermissionError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Binance key is not least privilege. Enable reading only and disable "
+                "Spot/margin trading, withdrawals, futures, options, and transfers."
+            ),
+        ) from exc
+    except BinanceAuthError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Binance rejected the API key. Check the key, secret, and IP restrictions.",
+        ) from exc
+    except BinanceTransientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Binance is temporarily unavailable or rate limited. Try connecting again shortly.",
+        ) from exc
+    except BinanceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
+    finally:
+        adapter.close()
+
+
+def _verify_crypto_com_exchange_credentials(api_key: str, api_secret: str) -> None:
+    adapter = CryptoComExchangeAdapter(CryptoComExchangeReadOnlyClient(
+        api_key=api_key, api_secret=api_secret,
+    ))
+    try:
+        adapter.verify_read_only()
+    except CryptoComExchangeAuthError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Crypto.com Exchange rejected the key. Check the key, secret, IP allowlist, "
+                "and system clock, and confirm the key is Can Read only."
+            ),
+        ) from exc
+    except CryptoComExchangeTransientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Crypto.com Exchange is temporarily unavailable or rate limited. Try again shortly.",
+        ) from exc
+    except CryptoComExchangeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
+    finally:
+        adapter.close()
 
 
 @router.post("/broker-connections")
@@ -311,22 +887,73 @@ def create_broker_connection(
 ):
     user_id = get_user_id(user_id)
 
-    # Create the underlying brokerage account.
-    account = Account(
-        user_id=user_id,
-        name=payload.account_name,
-        account_type="investment_brokerage",
-        currency=payload.base_currency,
-        provider=payload.provider,
-    )
-    db.add(account)
-    db.flush()
+    if payload.provider == "coinspot":
+        # The client is deliberately incapable of leaving CoinSpot's V2
+        # read-only namespace. Validate credentials before persisting anything.
+        _verify_coinspot_credentials(payload.api_key or "", payload.api_secret or "")
+    elif payload.provider == "binance":
+        _verify_binance_credentials(payload.api_key or "", payload.api_secret or "")
+    elif payload.provider == "crypto_com_exchange":
+        _verify_crypto_com_exchange_credentials(
+            payload.api_key or "", payload.api_secret or ""
+        )
 
-    creds = {
-        "flex_token": payload.flex_token,
-        "query_id_positions": payload.query_id_positions,
-        "query_id_trades": payload.query_id_trades,
-    }
+    if payload.account_id is not None:
+        account = db.query(Account).filter(
+            Account.id == payload.account_id,
+            Account.user_id == user_id,
+            Account.account_type.in_(["investment_manual", "investment_brokerage"]),
+        ).one_or_none()
+        if account is None:
+            raise HTTPException(status_code=404, detail="Investment account not found")
+        if db.query(BrokerConnection.id).filter(
+            BrokerConnection.account_id == account.id
+        ).first():
+            raise HTTPException(
+                status_code=409,
+                detail="This investment account already has an automatic connection.",
+            )
+        if (account.currency or "").upper() != payload.base_currency.upper():
+            raise HTTPException(
+                status_code=400,
+                detail="The existing account currency must match the connector base currency.",
+            )
+        account.account_type = "investment_brokerage"
+        account.provider = payload.provider
+    else:
+        account = Account(
+            user_id=user_id,
+            name=payload.account_name,
+            account_type="investment_brokerage",
+            currency=payload.base_currency,
+            provider=payload.provider,
+        )
+        db.add(account)
+        db.flush()
+
+    if payload.provider in {"coinspot", "binance", "crypto_com_exchange"}:
+        creds = {
+            "api_key": payload.api_key,
+            "api_secret": payload.api_secret,
+            "history_start_date": (
+                payload.history_start_date
+                or (
+                    date(2013, 1, 1)
+                    if payload.provider == "coinspot"
+                    else date(2017, 7, 1)
+                    if payload.provider == "binance"
+                    else date(2019, 1, 1)
+                )
+            ).isoformat(),
+        }
+        if payload.provider == "binance":
+            creds["trade_symbols"] = payload.trade_symbols
+    else:
+        creds = {
+            "flex_token": payload.flex_token,
+            "query_id_positions": payload.query_id_positions,
+            "query_id_trades": payload.query_id_trades,
+        }
     encrypted = credentials_crypto.encrypt(creds)
 
     conn = BrokerConnection(
@@ -335,6 +962,29 @@ def create_broker_connection(
         provider=payload.provider,
         credentials_encrypted=encrypted,
         last_sync_status="pending",
+        read_only_verified_at=(
+            datetime.utcnow()
+            if payload.provider in {"coinspot", "binance", "crypto_com_exchange"}
+            else None
+        ),
+        consecutive_failures=0,
+        health_details=(
+            {
+                "read_only_namespace": (
+                    "https://www.coinspot.com.au/api/v2/ro"
+                    if payload.provider == "coinspot"
+                    else "Binance signed USER_DATA GET allowlist"
+                    if payload.provider == "binance"
+                    else "Crypto.com Exchange signed read-method allowlist"
+                ),
+                **(
+                    {"read_only_verification": "user_confirmed_and_read_access_verified"}
+                    if payload.provider == "crypto_com_exchange"
+                    else {}
+                ),
+            }
+            if payload.provider in {"coinspot", "binance", "crypto_com_exchange"} else {}
+        ),
     )
     db.add(conn)
     db.commit()
@@ -363,12 +1013,97 @@ def list_broker_connections(
             "id": str(c.id),
             "account_id": str(c.account_id),
             "provider": c.provider,
+            "account_name": c.account.name,
             "last_sync_at": c.last_sync_at.isoformat() if c.last_sync_at else None,
             "last_sync_status": c.last_sync_status,
             "last_sync_error": c.last_sync_error,
+            "read_only_verified_at": (
+                c.read_only_verified_at.isoformat() if c.read_only_verified_at else None
+            ),
+            "consecutive_failures": c.consecutive_failures or 0,
+            "next_retry_at": c.next_retry_at.isoformat() if c.next_retry_at else None,
+            "health_details": {
+                **(c.health_details or {}),
+                "scheduled_sync": "daily",
+                "scheduled_sync_hour_utc": _investment_sync_hour_utc(),
+            },
         }
         for c in conns
     ]
+
+
+@router.get("/broker-connections/{connection_id}/diagnostics")
+def export_broker_connection_diagnostics(
+    connection_id: UUID,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Export a credential-free support bundle for one investment connection."""
+    user_id = get_user_id(user_id)
+    conn = db.query(BrokerConnection).filter(
+        BrokerConnection.id == connection_id,
+        BrokerConnection.user_id == user_id,
+    ).one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    runs = db.query(InvestmentIngestionRun).filter(
+        InvestmentIngestionRun.account_id == conn.account_id,
+        InvestmentIngestionRun.user_id == user_id,
+    ).order_by(InvestmentIngestionRun.started_at.desc()).limit(100).all()
+    records = db.query(InvestmentSourceRecord).filter(
+        InvestmentSourceRecord.account_id == conn.account_id,
+        InvestmentSourceRecord.user_id == user_id,
+    ).order_by(InvestmentSourceRecord.occurred_at.desc()).limit(200).all()
+    transfers = db.query(InvestmentCryptoTransfer).filter(
+        InvestmentCryptoTransfer.account_id == conn.account_id,
+        InvestmentCryptoTransfer.user_id == user_id,
+    ).order_by(InvestmentCryptoTransfer.occurred_at.desc()).limit(200).all()
+    reconciliation_items = db.query(InvestmentReconciliationItem).filter(
+        InvestmentReconciliationItem.account_id == conn.account_id,
+        InvestmentReconciliationItem.user_id == user_id,
+    ).order_by(
+        InvestmentReconciliationItem.created_at.desc(),
+        InvestmentReconciliationItem.id,
+    ).limit(200).all()
+    return {
+        "format": "syllogic-investment-diagnostics-v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "account": {
+            "id": str(conn.account.id),
+            "name": conn.account.name,
+            "currency": conn.account.currency,
+            "provider": conn.provider,
+            "active": bool(conn.account.is_active),
+        },
+        "connection": {
+            "id": str(conn.id),
+            "last_sync_at": conn.last_sync_at.isoformat() if conn.last_sync_at else None,
+            "last_sync_status": conn.last_sync_status,
+            "last_sync_error": conn.last_sync_error,
+            "consecutive_failures": conn.consecutive_failures or 0,
+            "next_retry_at": conn.next_retry_at.isoformat() if conn.next_retry_at else None,
+            "read_only_verified_at": (
+                conn.read_only_verified_at.isoformat()
+                if conn.read_only_verified_at else None
+            ),
+            "health_details": conn.health_details or {},
+            "scheduled_sync": {
+                "frequency": "daily",
+                "hour_utc": _investment_sync_hour_utc(),
+            },
+            "credentials_included": False,
+        },
+        "runs": [_ingestion_run_view(run) for run in runs],
+        "source_records": [source_record_view(record) for record in records],
+        "transfers": [transfer_view(item, db=db) for item in transfers],
+        "reconciliation_items": [
+            reconciliation_item_view(item) for item in reconciliation_items
+        ],
+        "retention": (
+            "Disconnect removes encrypted credentials and stops future sync; imported "
+            "history and provenance remain until the account is deleted."
+        ),
+    }
 
 
 @router.post("/broker-connections/{connection_id}/sync")
@@ -386,6 +1121,108 @@ def trigger_sync(
     )
     if not conn:
         raise HTTPException(status_code=404, detail="Broker connection not found")
+    conn.last_sync_status = "pending"
+    conn.last_sync_error = None
+    conn.next_retry_at = None
+    db.commit()
+    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    return {"status": "queued", "account_id": str(conn.account_id)}
+
+
+@router.patch("/broker-connections/{connection_id}/credentials")
+def update_coinspot_credentials(
+    connection_id: UUID,
+    payload: CoinSpotCredentialsUpdate,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    conn = db.query(BrokerConnection).filter(
+        BrokerConnection.id == connection_id,
+        BrokerConnection.user_id == user_id,
+    ).one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    if conn.provider not in {"coinspot", "binance", "crypto_com_exchange"}:
+        raise HTTPException(status_code=400, detail="Credential replacement is only available for API connections")
+
+    if conn.provider == "coinspot":
+        _verify_coinspot_credentials(payload.api_key, payload.api_secret)
+    elif conn.provider == "binance":
+        _verify_binance_credentials(payload.api_key, payload.api_secret)
+    else:
+        if not payload.read_only_confirmed:
+            raise HTTPException(
+                status_code=400,
+                detail="Confirm the replacement Crypto.com Exchange key is Can Read only.",
+            )
+        _verify_crypto_com_exchange_credentials(payload.api_key, payload.api_secret)
+    existing = credentials_crypto.decrypt(conn.credentials_encrypted)
+    conn.credentials_encrypted = credentials_crypto.encrypt({
+        **existing,
+        "api_key": payload.api_key,
+        "api_secret": payload.api_secret,
+        **(
+            {"trade_symbols": payload.trade_symbols}
+            if conn.provider == "binance" and payload.trade_symbols is not None else {}
+        ),
+    })
+    conn.read_only_verified_at = datetime.utcnow()
+    conn.last_sync_status = "pending"
+    conn.last_sync_error = None
+    conn.consecutive_failures = 0
+    conn.next_retry_at = None
+    conn.health_details = {
+        **(conn.health_details or {}),
+        "failure_kind": None,
+        "read_only_namespace": (
+            "https://www.coinspot.com.au/api/v2/ro"
+            if conn.provider == "coinspot"
+            else "Binance signed USER_DATA GET allowlist"
+            if conn.provider == "binance"
+            else "Crypto.com Exchange signed read-method allowlist"
+        ),
+        **(
+            {"read_only_verification": "user_confirmed_and_read_access_verified"}
+            if conn.provider == "crypto_com_exchange"
+            else {}
+        ),
+    }
+    db.commit()
+    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    return {"status": "queued", "account_id": str(conn.account_id)}
+
+
+@router.patch("/broker-connections/{connection_id}/configuration")
+def update_binance_configuration(
+    connection_id: UUID,
+    payload: BinanceTradeSymbolsUpdate,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    conn = db.query(BrokerConnection).filter(
+        BrokerConnection.id == connection_id,
+        BrokerConnection.user_id == user_id,
+    ).one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    if conn.provider != "binance":
+        raise HTTPException(status_code=400, detail="Spot-pair configuration is only available for Binance")
+    existing = credentials_crypto.decrypt(conn.credentials_encrypted)
+    conn.credentials_encrypted = credentials_crypto.encrypt({
+        **existing, "trade_symbols": payload.trade_symbols,
+    })
+    conn.last_sync_status = "pending"
+    conn.last_sync_error = None
+    conn.next_retry_at = None
+    conn.health_details = {
+        **(conn.health_details or {}),
+        "configured_trade_symbols": payload.trade_symbols,
+    }
+    db.commit()
     background_tasks.add_task(_run_sync_in_process, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
@@ -428,6 +1265,11 @@ def delete_broker_connection(
     )
     if not conn:
         raise HTTPException(status_code=404, detail="Broker connection not found")
+    # Disconnect credentials without deleting the user's imported history.
+    # The account remains usable as a manual investment account.
+    account = conn.account
+    account.account_type = "investment_manual"
+    account.provider = "manual"
     db.delete(conn)
     db.commit()
     return None
@@ -879,10 +1721,19 @@ def holding_trades(
         .filter(
             BrokerTrade.account_id == holding.account_id,
             BrokerTrade.symbol == holding.symbol,
+            BrokerTrade.instrument_type == holding.instrument_type,
         )
-        .order_by(BrokerTrade.trade_date.asc(), BrokerTrade.id.asc())
+        .order_by(BrokerTrade.trade_date.asc(), BrokerTrade.occurred_at.asc(), BrokerTrade.id.asc())
         .all()
     )
+    trades.sort(key=lambda trade: (
+        trade.occurred_at or datetime.combine(
+            trade.trade_date,
+            time.min if trade.side == "buy" else time.max,
+        ),
+        0 if trade.side == "buy" else 1,
+        str(trade.id),
+    ))
 
     out: list[HoldingTrade] = []
     running = Decimal("0")
@@ -909,6 +1760,12 @@ def holding_trades(
                 currency=t.currency,
                 fees=fees,
                 external_id=t.external_id,
+                economic_type=t.economic_type,
+                taxable_disposal=t.taxable_disposal,
+                aud_value=t.aud_value,
+                valuation_source=t.valuation_source,
+                valuation_timestamp=t.valuation_timestamp,
+                valuation_missing=t.valuation_missing,
                 cost_native=cost_native,
                 proceeds_native=proceeds_native,
                 running_quantity=running,
@@ -938,6 +1795,7 @@ def holding_lots(
         .filter(
             BrokerTrade.account_id == holding.account_id,
             BrokerTrade.symbol == holding.symbol,
+            BrokerTrade.instrument_type == holding.instrument_type,
         )
         .order_by(BrokerTrade.trade_date.asc(), BrokerTrade.id.asc())
         .all()
@@ -954,10 +1812,27 @@ def holding_lots(
             price=Decimal(t.price),
             currency=t.currency,
             fees=Decimal(t.fees or 0),
+            trade_id=str(t.id),
+            sort_key=str(t.id),
+            occurred_at=t.occurred_at,
+            acquisition_date=t.acquisition_date,
         )
         for t in trades
     ]
-    fifo = compute_fifo(fifo_trades)
+    adjustment_rows = db.query(InvestmentCostBaseAdjustment).filter(
+        InvestmentCostBaseAdjustment.holding_id == holding.id,
+    ).all()
+    fifo = compute_fifo(fifo_trades, [
+        _FifoAdjustment(
+            symbol=holding.symbol,
+            effective_date=item.effective_date,
+            amount=Decimal(item.amount_native),
+            currency=item.currency,
+            adjustment_id=str(item.id),
+            sort_key=str(item.id),
+        )
+        for item in adjustment_rows
+    ])
 
     user = db.query(User).filter(User.id == user_id).first()
     user_currency = (
@@ -989,9 +1864,15 @@ def holding_lots(
                 open_date=lot.open_date,
                 quantity_remaining=lot.quantity_remaining,
                 cost_per_share_native=lot.cost_per_share_native,
+                original_cost_per_share_native=lot.original_cost_per_share_native,
+                cost_base_adjustment_per_share_native=lot.cost_base_adjustment_per_share_native,
+                adjustment_ids=[
+                    item.adjustment_id for item in lot.adjustments if item.adjustment_id
+                ],
                 cost_per_share_user=cost_per_share_user,
                 age_days=(today - lot.open_date).days,
                 currency=lot.currency,
+                acquisition_trade_id=lot.acquisition_trade_id,
             )
         )
     return out
@@ -1011,6 +1892,7 @@ def holding_cgt_allocations(
     return db.query(CgtAllocation).filter(
         CgtAllocation.account_id == holding.account_id,
         CgtAllocation.symbol == holding.symbol,
+        CgtAllocation.instrument_type == holding.instrument_type,
     ).order_by(CgtAllocation.disposal_date.desc(), CgtAllocation.id.asc()).all()
 
 
@@ -1040,9 +1922,10 @@ def _cgt_allocations_query(
 def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
     """Serialize persisted allocations without deriving or hiding tax-relevant values."""
     fields = [
-        "allocation_id", "account_id", "acquisition_trade_id", "disposal_trade_id", "symbol",
+        "allocation_id", "account_id", "acquisition_trade_id", "disposal_trade_id", "symbol", "instrument_type",
         "acquisition_date", "disposal_date", "quantity", "currency", "cost_base_native",
-        "proceeds_native", "gain_native", "cost_base_aud", "proceeds_aud", "gain_aud",
+        "proceeds_native", "gain_native", "cost_base_adjustment_native", "cost_base_aud", "proceeds_aud", "gain_aud",
+        "cost_base_adjustment_aud", "adjustment_ids",
         "fx_missing", "discount_eligible", "calculation_version", "assumptions",
     ]
     output = StringIO(newline="")
@@ -1055,6 +1938,7 @@ def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
             "acquisition_trade_id": row.acquisition_trade_id,
             "disposal_trade_id": row.disposal_trade_id,
             "symbol": row.symbol,
+            "instrument_type": row.instrument_type,
             "acquisition_date": row.acquisition_date.isoformat(),
             "disposal_date": row.disposal_date.isoformat(),
             "quantity": row.quantity,
@@ -1062,9 +1946,12 @@ def _cgt_export_csv(rows: list[CgtAllocation]) -> str:
             "cost_base_native": row.cost_base_native,
             "proceeds_native": row.proceeds_native,
             "gain_native": row.gain_native,
+            "cost_base_adjustment_native": row.cost_base_adjustment_native,
             "cost_base_aud": row.cost_base_aud if row.cost_base_aud is not None else "",
             "proceeds_aud": row.proceeds_aud if row.proceeds_aud is not None else "",
             "gain_aud": row.gain_aud if row.gain_aud is not None else "",
+            "cost_base_adjustment_aud": row.cost_base_adjustment_aud if row.cost_base_adjustment_aud is not None else "",
+            "adjustment_ids": " | ".join(row.adjustment_ids or []),
             "fx_missing": str(bool(row.fx_missing)).lower(),
             "discount_eligible": str(bool(row.discount_eligible)).lower(),
             "calculation_version": row.calculation_version,
@@ -1127,7 +2014,8 @@ def cgt_financial_year_summary(
     ), Decimal("0"))
     assumptions = [
         "FIFO matching is calculated from recorded broker trades and their recorded fees.",
-        "Corporate actions, managed-fund cost-base adjustments, and other tax elections are not calculated.",
+        "Statement-supplied AMIT/AMMA net amounts are included on their recorded effective dates.",
+        "Corporate actions and tax elections other than recorded AMIT/AMMA adjustments are not calculated.",
     ]
     missing = len(rows) - len(known)
     if missing:

@@ -71,6 +71,9 @@ export function PeopleList(props: { initialPeople: Person[] }) {
             {p.kind === "self" && (
               <span className="text-xs text-muted-foreground">you</span>
             )}
+            {p.kind !== "self" && (
+              <span className="text-xs text-muted-foreground">household placeholder</span>
+            )}
             <Button variant="ghost" size="sm" onClick={() => setEditingId(p.id)}>
               Edit
             </Button>
@@ -103,7 +106,10 @@ export function PeopleList(props: { initialPeople: Person[] }) {
 
       {adding ? (
         <div className="rounded-md border p-4">
-          <h2 className="mb-3 font-medium">Add person</h2>
+          <h2 className="mb-1 font-medium">Add household person</h2>
+          <p className="mb-3 text-sm text-muted-foreground">
+            A household person is a placeholder for ownership and reports; they do not need an application login.
+          </p>
           <PersonForm
             submitLabel="Add person"
             onSubmit={create}
@@ -112,7 +118,7 @@ export function PeopleList(props: { initialPeople: Person[] }) {
         </div>
       ) : (
         <Button variant="outline" onClick={() => setAdding(true)}>
-          Add person
+          Add household person
         </Button>
       )}
     </div>

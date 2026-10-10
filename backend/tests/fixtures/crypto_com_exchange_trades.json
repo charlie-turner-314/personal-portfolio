@@ -1,0 +1,11 @@
+{
+  "id": 1,
+  "method": "private/get-trades",
+  "code": 0,
+  "result": {
+    "data": [
+      {"journal_type": "TRADING", "traded_quantity": "0.10000000", "traded_price": "50000.00", "fees": "-5.00", "order_id": "7001", "trade_id": "8001", "trade_match_id": "9001", "side": "BUY", "instrument_name": "BTC_USDT", "fee_instrument_name": "USDT", "create_time": 1767261600000, "create_time_ns": "1767261600000000000"},
+      {"journal_type": "TRADING", "traded_quantity": "0.05000000", "traded_price": "50100.00", "fees": "-0.25", "order_id": "7001", "trade_id": "8002", "trade_match_id": "9002", "side": "BUY", "instrument_name": "BTC_USDT", "fee_instrument_name": "CRO", "create_time": 1767261601000, "create_time_ns": "1767261601000000000"}
+    ]
+  }
+}

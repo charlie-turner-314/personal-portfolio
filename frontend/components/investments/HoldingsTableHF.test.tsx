@@ -125,7 +125,8 @@ describe("HoldingsTableHF row navigation", () => {
         onDelete={onDelete}
       />,
     );
-    // MSFT (id "2") sorts first by value (2000 > 1000)
+    // Holdings are grouped by type, so the ETF row (VUAA, id "1") appears
+    // before the equity row regardless of its lower value.
     const triggers = screen.getAllByRole("button", { name: "Row actions" });
     fireEvent.click(triggers[0]);
     const deleteItem = await screen.findByText("Delete");
@@ -133,7 +134,7 @@ describe("HoldingsTableHF row navigation", () => {
     // AlertDialog "Delete" button confirms
     const confirmBtn = await screen.findByRole("button", { name: "Delete" });
     fireEvent.click(confirmBtn);
-    expect(onDelete).toHaveBeenCalledWith("2");
+    expect(onDelete).toHaveBeenCalledWith("1");
     expect(mockPush).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,6 @@
 import re
 from decimal import Decimal
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
@@ -11,7 +12,14 @@ from uuid import UUID
 from app.database import get_db
 from app.models import Account, Transaction
 from app.db_helpers import get_user_id
-from app.schemas import AccountCreate, AccountResponse, AccountUpdate
+from app.schemas import (
+    AccountCreate,
+    AccountOwnershipAllocationResponse,
+    AccountOwnershipAllocationSetResponse,
+    AccountOwnershipAllocationSetUpsert,
+    AccountResponse,
+    AccountUpdate,
+)
 from app.security.data_encryption import (
     blind_index,
     blind_index_candidates,
@@ -19,6 +27,10 @@ from app.security.data_encryption import (
     encrypt_value,
 )
 from app.services.internal_transfer_service import InternalTransferService
+from app.services.account_ownership_allocation_service import (
+    AccountOwnershipAllocationError,
+    AccountOwnershipAllocationService,
+)
 
 router = APIRouter()
 
@@ -249,6 +261,87 @@ def get_account(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     return _serialize_account(account)
+
+
+def _allocation_set_response(rows) -> AccountOwnershipAllocationSetResponse:
+    # All rows come from one effective date (enforced by service callers).
+    return AccountOwnershipAllocationSetResponse(
+        effective_from=rows[0].effective_from,
+        allocations=[
+            AccountOwnershipAllocationResponse(
+                person_id=row.person_id,
+                share=row.share,
+                effective_from=row.effective_from,
+            )
+            for row in rows
+        ],
+    )
+
+
+@router.get(
+    "/{account_id}/ownership-allocations",
+    response_model=AccountOwnershipAllocationSetResponse | list[AccountOwnershipAllocationResponse],
+)
+def get_account_ownership_allocations(
+    account_id: UUID,
+    as_of: Optional[date] = Query(None, description="Return the allocation set in force on this date"),
+    history: bool = Query(False, description="Return all dated allocation rows instead of one effective set"),
+    user_id: str = Depends(get_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get effective ownership or complete history for one owned account.
+
+    Supplying ``as_of`` (or omitting it) returns one complete allocation set.
+    ``?history=true`` returns the raw chronological allocation rows instead;
+    history is deliberately explicit so reporting callers cannot accidentally
+    combine rows from different ownership periods.
+    """
+    service = AccountOwnershipAllocationService(db, user_id)
+    try:
+        rows = service.history(account_id) if history else service.effective_set(account_id, as_of)
+    except AccountOwnershipAllocationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not rows:
+        raise HTTPException(status_code=404, detail="no ownership allocation applies on this date")
+    if history:
+        return [
+            AccountOwnershipAllocationResponse(
+                person_id=row.person_id,
+                share=row.share,
+                effective_from=row.effective_from,
+            )
+            for row in rows
+        ]
+    return _allocation_set_response(rows)
+
+
+@router.put(
+    "/{account_id}/ownership-allocations",
+    response_model=AccountOwnershipAllocationSetResponse,
+)
+def replace_account_ownership_allocations(
+    account_id: UUID,
+    payload: AccountOwnershipAllocationSetUpsert,
+    user_id: str = Depends(get_user_id),
+    db: Session = Depends(get_db),
+):
+    """Replace one complete effective-dated ownership allocation set."""
+    service = AccountOwnershipAllocationService(db, user_id)
+    try:
+        rows = service.replace_set(
+            account_id,
+            payload.effective_from,
+            [(row.person_id, row.share) for row in payload.allocations],
+        )
+        db.commit()
+    except AccountOwnershipAllocationError as exc:
+        db.rollback()
+        status_code = 404 if str(exc) == "account not found" else 422
+        raise HTTPException(status_code=status_code, detail=str(exc))
+    except Exception:
+        db.rollback()
+        raise
+    return _allocation_set_response(rows)
 
 
 @router.post("/", response_model=AccountResponse, status_code=201)

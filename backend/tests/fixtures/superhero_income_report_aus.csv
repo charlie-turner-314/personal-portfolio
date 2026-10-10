@@ -1,0 +1,13 @@
+Entity Name,Synthetic Investor
+Account Name,Synthetic Superhero Account
+Account Number,TEST-0001
+Report Start Date,01/07/2025
+Report End Date,30/06/2026
+Report Creation Date,10/10/2026 18:27:28
+
+
+0
+Income Type,Security,Ex Date,Payment Date,"Dividend Rate Per Unit ","Participating Shares ","Unfranked Amount ","Franked Amount ","Total Payment  ","Withholding Tax ","Net Amount ","Franking Credit "
+Dividend,EXM,01/08/2025,15/08/2025,$0.850000,100,$15.00,$70.00,$85.00,$0.00,$85.00,$30.00
+Dividend,FND,01/03/2026,18/03/2026,$0.420000,50,$21.00,$0.00,$21.00,$2.00,$19.00,$0.00
+TOTAL,,,,,150,$36.00,$70.00,$106.00,$2.00,$104.00,$30.00

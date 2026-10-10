@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.routes import accounts, categories, transactions, analytics, sync, transaction_import, subscriptions, events, csv_import, health, enable_banking, investments, reports, tax_reports
+from app.routes import accounts, categories, transactions, analytics, sync, transaction_import, subscriptions, events, csv_import, health, enable_banking, investments, reports, tax_reports, up
 
 api_router = APIRouter()
 
@@ -14,6 +14,7 @@ api_router.include_router(subscriptions.router, prefix="/subscriptions", tags=["
 api_router.include_router(events.router, prefix="/events", tags=["events"])
 api_router.include_router(csv_import.router, prefix="/csv-import", tags=["csv-import"])
 api_router.include_router(enable_banking.router, prefix="/enable-banking", tags=["enable-banking"])
+api_router.include_router(up.router, prefix="/up", tags=["up"])
 api_router.include_router(investments.router, prefix="/investments", tags=["investments"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(tax_reports.router, prefix="/tax-reports", tags=["tax-reports"])
