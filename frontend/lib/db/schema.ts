@@ -360,6 +360,9 @@ export const bankConnections = pgTable(
     lastSyncError: text("last_sync_error"),
     syncCursor: jsonb("sync_cursor"),
     rawSessionData: jsonb("raw_session_data"),
+    // Provider credentials are server-side encrypted and must never be
+    // selected into browser-facing connection responses.
+    credentialsEncrypted: text("credentials_encrypted"),
     initialSyncDays: integer("initial_sync_days").notNull().default(90),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
