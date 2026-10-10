@@ -16,10 +16,13 @@ From a durable checkout of the candidate revision:
 python3 scripts/release-lab.py prepare --source-db syllogic-postgres --source-app syllogic-app
 python3 scripts/release-lab.py up
 python3 scripts/release-lab.py accounts
+python3 scripts/release-lab.py smoke
 python3 scripts/release-lab.py status
 ```
 
 The lab uses its own project, volumes, images, and localhost port 8088. It copies the source DB and encryption keys, builds current source, restores into a new DB, runs the migration runner twice, checks old column values and counts in six core tables, and starts the app/backend. Workers and beat are omitted to avoid automatic external sync from restored credentials. Do not manually sync restored bank connections in UAT.
+
+Preserve the source `BETTER_AUTH_SECRET` with the database: stored JWKS private keys are encrypted with it. Generating a new auth secret for a copied DB causes authenticated server rendering to fail even when the sign-in API succeeds. The lab now retains that secret. Keep the lab private because it contains copied authentication keys and sessions. `accounts` also runs cookie-authenticated page checks; `smoke` can repeat those independently.
 
 `.release-lab/manifest.json` records the revision and source; `verification.json` records the data checks. Backups, environment values and randomly generated test passwords remain local in that ignored directory. Use `test-accounts.json` for the populated `demo-uat@example.test` and empty `fresh-uat@example.test` accounts. The supplied demo is EUR/USD-oriented, not an Australian acceptance fixture. It is seeded explicitly, not on registration or deployment.
 
@@ -77,3 +80,5 @@ Candidate migration SQL and runner from `e586ede` applied twice successfully to 
 The candidate application build is blocked by Docker's 24 GB disk capacity. Unused build cache and six unreferenced, untagged old Syllogic images were removed; data volumes and running images were retained. The isolated cached-runtime site is at http://localhost:8088 for account preparation, not release acceptance. Increase Docker's disk allocation before completing the source build. Pi access still needs a reachable address/network.
 
 Account preparation completed on the isolated DB: `demo-uat@example.test` has 3,159 generated transactions and 8 holdings; `fresh-uat@example.test` is unseeded. Both logins were verified. Credentials are in `.release-lab/test-accounts.json`; seed results are in `.release-lab/seed.log`. The original two users and their 29 transactions remain in the source DB. The cached backend seeder was used, so this does not certify new investment-ingestion user journeys.
+
+Follow-up repair: digest `3230111203` was traced to a newly generated auth secret that could not decrypt the copied JWKS. `python3 scripts/release-lab.py repair-auth` restored the matching source secret in the lab configurations and recreated only the lab app. No keys or financial records were deleted. Authenticated dashboard, transactions and investments returned HTTP 200; the fresh account reached `/step-1`. Existing browser cookies signed with the discarded secret may require signing in again.

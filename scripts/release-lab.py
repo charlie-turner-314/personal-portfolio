@@ -63,9 +63,11 @@ def prepare(args):
         raise SystemExit('Lab already prepared; use up/verify. Use a separate checkout for a new rehearsal.')
     STATE.mkdir(mode=0o700, exist_ok=True)
     source = env_of(args.source_app)
+    if not source.get('BETTER_AUTH_SECRET'):
+        raise SystemExit('Source BETTER_AUTH_SECRET is required to decrypt restored JWKS signing keys.')
     password = secrets.token_urlsafe(24)
     env = {'POSTGRES_PASSWORD': password, 'DATABASE_URL': f'postgresql://financeuser:{password}@postgres:5432/finance_db',
-           'BETTER_AUTH_SECRET': secrets.token_urlsafe(32), 'INTERNAL_AUTH_SECRET': secrets.token_urlsafe(32),
+           'BETTER_AUTH_SECRET': source['BETTER_AUTH_SECRET'], 'INTERNAL_AUTH_SECRET': secrets.token_urlsafe(32),
            'APP_URL': f'http://localhost:{args.port}', 'HTTP_PORT': str(args.port)}
     for key in ['DATA_ENCRYPTION_KEY_CURRENT', 'DATA_ENCRYPTION_KEY_PREVIOUS', 'DATA_ENCRYPTION_KEY_ID']:
         env[key] = source.get(key, '')
@@ -187,6 +189,7 @@ def accounts():
         logged('seed.log', compose('exec', '-T', 'backend', 'python', 'postgres_migration/seed_demo_data.py',
                     '--user-email', accounts[0]['email'], '--mode', 'seed'))
         save('demo-seeded', 'yes\n')
+    smoke()
     print('Prepared populated and fresh accounts. Credentials: .release-lab/test-accounts.json')
 
 
@@ -208,9 +211,55 @@ def cached_bootstrap():
     print('Cached runtime started for account preparation only. Candidate UI has NOT been built.')
 
 
+def repair_auth():
+    """Preserve encrypted JWKS when repairing labs created with a new auth secret."""
+    manifest = json.loads((STATE / 'manifest.json').read_text())
+    secret = env_of(manifest['source_app']).get('BETTER_AUTH_SECRET')
+    if not secret:
+        raise SystemExit('Source auth secret unavailable; restore it from the matching backup.')
+    for filename in ['compose.json', 'bootstrap.json', 'migration-only.json']:
+        path = STATE / filename
+        if path.exists():
+            config = json.loads(path.read_text())
+            config['services']['app']['environment']['BETTER_AUTH_SECRET'] = secret
+            save(filename, json.dumps(config, indent=2))
+    lines = (STATE / '.env').read_text().splitlines()
+    save('.env', '\n'.join('BETTER_AUTH_SECRET=' + secret if line.startswith('BETTER_AUTH_SECRET=') else line for line in lines) + '\n')
+    mode = json.loads((STATE / 'runtime.json').read_text())['mode']
+    filename = 'bootstrap.json' if mode == 'cached-bootstrap' else 'compose.json'
+    run(['docker', 'compose', '-p', 'syllogic-release-lab', '-f', str(STATE / filename),
+         'up', '-d', '--no-deps', '--no-build', '--wait', 'app'])
+    print('Matching auth secret restored. Sign in again if your browser has an old session cookie.')
+
+
+def smoke():
+    """Exercise cookie-authenticated rendering, not merely the sign-in API."""
+    accounts = json.loads((STATE / 'test-accounts.json').read_text())
+    js = """let input='';for await(const c of process.stdin)input+=c;
+    const accounts=JSON.parse(input);
+    for(const account of accounts){
+      const login=await fetch('http://localhost:3000/api/auth/sign-in/email',{
+        method:'POST',headers:{'Content-Type':'application/json',Origin:process.env.APP_URL},body:JSON.stringify(account)});
+      if(!login.ok)throw Error('Sign-in failed: '+login.status);
+      const cookie=login.headers.getSetCookie().map(x=>x.split(';')[0]).join('; ');
+      if(!cookie)throw Error('Missing session cookie');
+      const session=await fetch('http://localhost:3000/api/auth/get-session',{headers:{cookie}});
+      const data=await session.json();
+      if(!session.ok || data?.user?.email!==account.email)throw Error('Session verification failed');
+      for(const path of account.email.startsWith('demo-')?['/','/transactions','/investments']:['/']){
+        const r=await fetch('http://localhost:3000'+path,{headers:{cookie}});
+        const html=await r.text();
+        if(!r.ok || html.includes('3230111203') || html.includes('a server-side exception') || html.includes('NEXT_HTTP_ERROR_FALLBACK;500') || /\\"digest\\":\\"[0-9]+\\"/.test(html))throw Error('Authenticated render failed: '+path+' '+r.status);
+        if(new URL(r.url).pathname==='/login')throw Error('Unexpected login redirect');
+        console.log(account.email,path,r.status,new URL(r.url).pathname);
+      }
+    }"""
+    run(compose('exec', '-T', 'app', 'node', '--input-type=module', '-e', js), input=json.dumps(accounts), text=True)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['prepare', 'up', 'rehearse', 'cached-bootstrap', 'verify', 'accounts', 'status', 'stop'])
+    parser.add_argument('action', choices=['prepare', 'up', 'rehearse', 'cached-bootstrap', 'repair-auth', 'smoke', 'verify', 'accounts', 'status', 'stop'])
     parser.add_argument('--cached-image', default='syllogic-frontend:local')
     parser.add_argument('--source-db', default='syllogic-postgres')
     parser.add_argument('--source-app', default='syllogic-app')
@@ -220,6 +269,8 @@ if __name__ == '__main__':
     elif args.action == 'up': up()
     elif args.action == 'rehearse': rehearse(args.cached_image)
     elif args.action == 'cached-bootstrap': cached_bootstrap()
+    elif args.action == 'repair-auth': repair_auth()
+    elif args.action == 'smoke': smoke()
     elif args.action == 'verify': verify()
     elif args.action == 'accounts': accounts()
     elif args.action == 'status': run(compose('ps', '-a'))
