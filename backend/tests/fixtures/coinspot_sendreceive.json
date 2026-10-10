@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "message": "ok",
+  "sendtransactions": [
+    {
+      "timestamp": "2025-01-04T10:00:00.000Z",
+      "amount": "0.2",
+      "coin": "BTC",
+      "address": "sanitized-destination",
+      "txid": "chain-send-1",
+      "aud": "22000",
+      "sendfee": "0.0001"
+    }
+  ],
+  "receivetransactions": [
+    {
+      "timestamp": "2025-01-05T10:00:00.000Z",
+      "amount": "0.05",
+      "coin": "BTC",
+      "address": "sanitized-wallet",
+      "from": "sanitized-origin",
+      "txid": "chain-receive-1",
+      "aud": "5500"
+    }
+  ]
+}

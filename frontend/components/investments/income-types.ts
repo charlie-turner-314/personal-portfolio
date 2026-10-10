@@ -11,6 +11,7 @@ export type InvestmentIncomeTotals = {
   franking_credits: string;
   foreign_income: string;
   foreign_tax_paid: string;
+  tfn_withholding?: string;
   currency: string;
 };
 
