@@ -46,6 +46,7 @@ async function DashboardContent({
   parsedParams: ReturnType<typeof parseDashboardSearchParams>;
 }) {
   const accountIds = parsedParams.accountIds;
+  const personId = parsedParams.personId;
   const dateFromParam = parsedParams.dateFrom;
   const dateToParam = parsedParams.dateTo;
   const horizonValue = parsedParams.horizon;
@@ -56,6 +57,9 @@ async function DashboardContent({
 
   if (accountIds?.length) {
     filters.accountIds = accountIds;
+  }
+  if (personId) {
+    filters.personId = personId;
   }
 
   if (dateFromParam) {

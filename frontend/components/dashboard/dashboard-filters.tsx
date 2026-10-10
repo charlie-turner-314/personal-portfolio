@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { RiArrowDownSLine, RiWalletLine } from "@remixicon/react";
 import { useFilterPersistence } from "@/lib/hooks/use-filter-persistence";
 import { parseGlobalFiltersFromSearchParams } from "@/lib/filters/global-filters";
+import { PersonFilter } from "./person-filter";
 
 interface Account {
   id: string;
@@ -48,6 +49,7 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
   );
 
   const selectedAccountIds = globalFilters.accountIds;
+  const selectedPersonId = searchParams.get("person") ?? "";
 
   const selectedAccountSet = React.useMemo(
     () => new Set(selectedAccountIds),
@@ -99,6 +101,13 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
     [pushParams, searchParams]
   );
 
+  const updateSelectedPeople = React.useCallback((personIds: string[]) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (personIds[0]) params.set("person", personIds[0]);
+    else params.delete("person");
+    pushParams(params);
+  }, [pushParams, searchParams]);
+
   const toggleAccount = React.useCallback(
     (accountId: string) => {
       if (selectedAccountSet.has(accountId)) {
@@ -147,6 +156,11 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
 
   return (
     <div className="flex items-center gap-2">
+      <PersonFilter
+        value={selectedPersonId ? [selectedPersonId] : []}
+        onChange={updateSelectedPeople}
+        single
+      />
       <Popover open={accountsOpen} onOpenChange={setAccountsOpen}>
         <PopoverTrigger
           className={cn(

@@ -5,6 +5,7 @@ const SUPPORTED_HORIZONS = new Set<number>([7, 30, 365]);
 
 export interface ParsedDashboardQueryParams {
   accountIds?: string[];
+  personId?: string;
   dateFrom?: string;
   dateTo?: string;
   horizon: SupportedHorizon;
@@ -63,6 +64,7 @@ export function parseDashboardSearchParams(
 ): ParsedDashboardQueryParams {
   const urlSearchParams = toURLSearchParams(params);
   const accountIds = parseAccountParams(urlSearchParams);
+  const personId = urlSearchParams.get("person")?.trim() || undefined;
 
   const dateFrom = parseIsoDateParam(urlSearchParams.get("from"));
   const parsedDateTo = parseIsoDateParam(urlSearchParams.get("to"));
@@ -73,6 +75,7 @@ export function parseDashboardSearchParams(
 
   return {
     accountIds: accountIds.length > 0 ? accountIds : undefined,
+    personId,
     dateFrom,
     dateTo,
     horizon,

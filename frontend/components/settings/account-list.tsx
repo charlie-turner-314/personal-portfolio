@@ -61,7 +61,10 @@ import {
 import { updateAccount, deleteAccount, recalculateAccountTimeseries } from "@/lib/actions/accounts";
 import { UpdateBalanceDialog } from "@/components/accounts/update-balance-dialog";
 import { AccountLogo } from "@/components/ui/account-logo";
-import { OwnersField, type OwnerValue } from "@/components/household/owners-field";
+import {
+  AccountOwnershipAllocationField,
+  type AccountOwnershipAllocation,
+} from "@/components/household/account-ownership-allocation-field";
 import { OwnerBadges } from "@/components/household/owner-badges";
 import type { Account } from "@/lib/db/schema";
 
@@ -74,6 +77,8 @@ type AccountWithLogo = Account & {
     updatedAt?: Date | null;
   } | null;
 };
+
+type AllocationHistoryRow = { personId: string; effectiveFrom: string; share: number | string };
 
 interface AccountListProps {
   accounts: AccountWithLogo[];
@@ -100,7 +105,9 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
 
   // Ownership state
   const [people, setPeople] = useState<Person[]>([]);
-  const [editOwners, setEditOwners] = useState<OwnerValue[]>([]);
+  const [editOwners, setEditOwners] = useState<AccountOwnershipAllocation[]>([]);
+  const [ownershipEffectiveFrom, setOwnershipEffectiveFrom] = useState(() => new Date().toISOString().slice(0, 10));
+  const [ownershipHistory, setOwnershipHistory] = useState<AllocationHistoryRow[]>([]);
 
   useEffect(() => {
     fetch("/api/people")
@@ -127,16 +134,34 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
           ? "secured"
           : "unsecured"
     );
-    // Reset owners immediately to prevent stale state during fetch
+    // Reset ownership immediately to prevent stale state during fetch.
     setEditOwners([]);
-    // Fetch current owners for this account
-    fetch(`/api/owners/account/${account.id}`)
+    setOwnershipHistory([]);
+    setOwnershipEffectiveFrom(new Date().toISOString().slice(0, 10));
+    // The account endpoint resolves the allocation active today.
+    fetch(`/api/accounts/${account.id}/ownership-allocations`)
       .then((r) => r.json())
-      .then((data: { owners: OwnerValue[] }) => setEditOwners(data.owners ?? []))
+      .then((data: {
+        effective_from?: string;
+        effectiveFrom?: string;
+        allocations?: Array<{ person_id?: string; personId?: string; share: number | string }>;
+      }) => {
+        setEditOwners((data.allocations ?? []).map((allocation) => ({
+          personId: allocation.person_id ?? allocation.personId ?? "",
+          share: Number(allocation.share),
+        })).filter((allocation) => allocation.personId));
+        if (data.effective_from ?? data.effectiveFrom) {
+          setOwnershipEffectiveFrom(data.effective_from ?? data.effectiveFrom!);
+        }
+      })
       .catch(() => {
         const self = people.find((p) => p.kind === "self");
-        setEditOwners(self ? [{ personId: self.id, share: null }] : []);
+        setEditOwners(self ? [{ personId: self.id, share: 1 }] : []);
       });
+    fetch(`/api/accounts/${account.id}/ownership-allocations?history=true`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((rows: AllocationHistoryRow[]) => setOwnershipHistory(Array.isArray(rows) ? rows : []))
+      .catch(() => setOwnershipHistory([]));
   };
 
   const handleEdit = async (e: React.FormEvent) => {
@@ -188,24 +213,31 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
       });
 
       if (result.success) {
-        // Update owners — require at least one owner WHEN the picker was visible
-        if (people.length >= 2 && editOwners.length === 0) {
+        // Every account has a complete allocation set, even in a one-person household.
+        if (editOwners.length === 0) {
           toast.error("Select at least one owner.");
           setIsLoading(false);
           return;
         }
         try {
-          const ownersResp = await fetch(`/api/owners/account/${editingAccount.id}`, {
+          const shareTotal = editOwners.reduce((sum, allocation) => sum + allocation.share, 0);
+          if (Math.abs(shareTotal - 1) > 0.0001) {
+            throw new Error(`Shares must sum to 100% (currently ${Math.round(shareTotal * 100)}%).`);
+          }
+          const ownersResp = await fetch(`/api/accounts/${editingAccount.id}/ownership-allocations`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ owners: editOwners }),
+            body: JSON.stringify({
+              effective_from: ownershipEffectiveFrom,
+              allocations: editOwners.map((owner) => ({ person_id: owner.personId, share: owner.share })),
+            }),
           });
           if (!ownersResp.ok) {
             const text = await ownersResp.text().catch(() => "request failed");
-            throw new Error(`Failed to save owners: ${text.slice(0, 200)}`);
+            throw new Error(`Failed to save ownership allocation: ${text.slice(0, 200)}`);
           }
         } catch (ownersErr) {
-          toast.error((ownersErr as Error).message || "Account updated, but failed to save ownership.");
+          toast.error((ownersErr as Error).message || "Account updated, but failed to save ownership allocation.");
           setIsLoading(false);
           return;
         }
@@ -526,13 +558,41 @@ export function AccountList({ accounts, onAccountUpdated }: AccountListProps) {
                   </div>
                 </div>
               )}
-              {people.length > 1 && (
-                <OwnersField
-                  people={people}
-                  value={editOwners}
-                  onChange={setEditOwners}
-                  disabled={isLoading}
-                />
+              {people.length > 0 && (
+                <>
+                  {Array.from(new Set(ownershipHistory.map((row) => row.effectiveFrom))).length > 0 && (
+                    <div className="space-y-1">
+                      <Label htmlFor="ownership-history">Allocation history</Label>
+                      <Select
+                        value={ownershipEffectiveFrom}
+                        onValueChange={(effectiveFrom) => {
+                          if (!effectiveFrom) return;
+                          const rows = ownershipHistory.filter((row) => row.effectiveFrom === effectiveFrom);
+                          if (rows.length) {
+                            setOwnershipEffectiveFrom(effectiveFrom);
+                            setEditOwners(rows.map((row) => ({ personId: row.personId, share: Number(row.share) })));
+                          }
+                        }}
+                      >
+                        <SelectTrigger id="ownership-history"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Array.from(new Set(ownershipHistory.map((row) => row.effectiveFrom))).map((date) => (
+                            <SelectItem key={date} value={date}>Effective {date}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">Choose a past allocation to review or correct it, or choose a new effective date below.</p>
+                    </div>
+                  )}
+                  <AccountOwnershipAllocationField
+                    people={people}
+                    value={editOwners}
+                    onChange={setEditOwners}
+                    effectiveFrom={ownershipEffectiveFrom}
+                    onEffectiveFromChange={setOwnershipEffectiveFrom}
+                    disabled={isLoading}
+                  />
+                </>
               )}
             </div>
             <DialogFooter>

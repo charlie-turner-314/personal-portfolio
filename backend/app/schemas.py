@@ -1,6 +1,6 @@
 import re
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from datetime import datetime
+from datetime import date, datetime
 from datetime import time as _time_type
 from decimal import Decimal
 from typing import Any, Optional, List
@@ -80,6 +80,42 @@ class AccountResponse(AccountBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AccountOwnershipAllocationInput(BaseModel):
+    person_id: UUID = Field(validation_alias="personId", serialization_alias="personId")
+    share: Decimal = Field(gt=0, le=1, max_digits=5, decimal_places=4)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AccountOwnershipAllocationSetUpsert(BaseModel):
+    """Replacement set for one account ownership effective date."""
+
+    effective_from: date = Field(validation_alias="effectiveFrom", serialization_alias="effectiveFrom")
+    allocations: list[AccountOwnershipAllocationInput] = Field(min_length=1)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="after")
+    def _is_a_complete_split(self):
+        ids = [row.person_id for row in self.allocations]
+        if len(ids) != len(set(ids)):
+            raise ValueError("each person may appear only once in an allocation set")
+        if sum((row.share for row in self.allocations), Decimal("0")) != Decimal("1"):
+            raise ValueError("allocation shares must sum exactly to 1")
+        return self
+
+
+class AccountOwnershipAllocationResponse(AccountOwnershipAllocationInput):
+    effective_from: date = Field(serialization_alias="effectiveFrom")
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class AccountOwnershipAllocationSetResponse(BaseModel):
+    effective_from: date = Field(serialization_alias="effectiveFrom")
+    allocations: list[AccountOwnershipAllocationResponse]
 
 
 # Category Schemas
