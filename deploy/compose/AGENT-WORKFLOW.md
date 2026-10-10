@@ -58,10 +58,19 @@ If migration fails, inspect the saved log while writers remain stopped. Manual S
 
 - Local existing project: `syllogic-develop-uat`; database volume: `syllogic-develop-uat_postgres_data`; two existing users.
 - Existing local images: `syllogic-frontend:local` / `syllogic-backend:local`, without a verified source revision; Compose labels reference `/private/tmp/syllogic-develop`, whose source checkout is no longer available. Caddy exited; app/backend healthy after Docker startup.
-- Saved SSH alias `pi` resolves to `192.168.0.2`; connection timed out. Pi runtime version, Compose directory, volume identity, database isolation and backup state remain unverified.
+- SSH alias `pi` now uses `charlieturner@192.168.1.107`; host-key verification and public-key authentication succeed. The old address and username were incorrect.
+- Pi: `raspberrypi`, arm64; deployment checkout `/home/charlieturner/personal-portfolio`, Compose project `personal-portfolio`, config `deploy/compose/docker-compose.yml`, persistent environment `deploy/compose/.env`. Checkout is clean at `550f69d78ded3f1d1419a8842bd4a3efceddd99c`; running frontend image revision matches it, using the moving `edge` tag.
+- Pi URL: `http://192.168.1.107:8080` (responds with login redirect). Port 80 belongs to the separate Strava deployment; do not alter that stack. Portfolio HTTPS host port is 442.
+- Pi database is internal `postgres/finance_db`, stored in `personal-portfolio_postgres_data`; uploads use `personal-portfolio_uploads_data`. Auth, internal-auth and data-encryption keys are present. These are separate from local lab volumes. Pi had 27 GB free during discovery. No Pi backup or migration has yet been performed.
 - Candidate for this rehearsal: develop `e586ede` (investment ingestion and SYL-42 merged).
 
 Pi deployment helper must be reviewed against the discovered Pi layout before first use; it has not yet been exercised on that host.
+
+### Promotion attempt on 2026-10-11
+
+User explicitly accepted develop `e586ede` for promotion. PR #24 (`develop` to `main`) records that acceptance and local rehearsal evidence. Draft workflow PR #23 remains separate and is not included in the accepted application revision.
+
+Promotion is blocked: GitHub reports merge conflicts and a failing CodeQL gate. Main's unique commits are earlier release promotions (#1 and #15); reconcile their history without discarding changes, and use merge commits for long-lived develop-to-main promotions to preserve ancestry. CodeQL reports seven blocking annotations: three request-forgery findings and four filesystem-path findings. In particular, `importRevolutCsv` reads a caller-supplied path and local storage joins paths without a root-containment check. Review/remediate and test before promotion; do not bypass or dismiss the security gate merely to deploy. Main and the Pi remain unchanged. Do not create a release tag until the promotion is clean and checks pass.
 
 ### Local troubleshooting
 
