@@ -234,9 +234,12 @@ class CryptoComExchangeReadOnlyClient:
             nonce = self._clock_ms()
             request_params = dict(params or {})
             signature_payload = f"{method}{request_id}{self._api_key}{_params_string(request_params)}{nonce}"
-            signature = hmac.new(
-                self._api_secret.encode(), signature_payload.encode(), hashlib.sha256
-            ).hexdigest()
+            # The exchange protocol requires HMAC-SHA256. Use the dedicated
+            # HMAC digest API so security analysis does not mistake the API
+            # secret for a password being hashed with raw SHA-256.
+            signature = hmac.digest(
+                self._api_secret.encode(), signature_payload.encode(), "sha256"
+            ).hex()
             body = {
                 "id": request_id,
                 "method": method,
