@@ -83,6 +83,12 @@ class Account(Base):
     planned_expenses = relationship("PlannedExpense", back_populates="account")
     cashflow_overrides = relationship("CashflowOverride", back_populates="account")
     super_account = relationship("SuperAccount", back_populates="account", uselist=False, cascade="all, delete-orphan")
+    ownership_allocations = relationship(
+        "AccountOwnershipAllocation",
+        back_populates="account",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     # Indexes and constraints
     __table_args__ = (
@@ -1284,6 +1290,39 @@ class AccountOwner(Base):
     person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="CASCADE"), primary_key=True)
     share = Column(Numeric(5, 4), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AccountOwnershipAllocation(Base):
+    """A person's share of an account, starting on ``effective_from``.
+
+    A complete allocation set is stored for each effective date.  This avoids
+    changing historical personal reports when an account's split changes.
+    ``account_owners`` remains the legacy timeless association used by the
+    property/vehicle ownership feature and is deliberately not repurposed.
+    """
+
+    __tablename__ = "account_ownership_allocations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="CASCADE"), nullable=False)
+    effective_from = Column(Date, nullable=False)
+    share = Column(Numeric(5, 4), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    account = relationship("Account", back_populates="ownership_allocations")
+    person = relationship("Person", backref="account_ownership_allocations")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "person_id", "effective_from",
+            name="account_ownership_allocations_account_person_effective_uq",
+        ),
+        CheckConstraint("share > 0 AND share <= 1", name="account_ownership_allocations_share_range"),
+        Index("idx_account_ownership_allocations_account_effective", "account_id", "effective_from"),
+        Index("idx_account_ownership_allocations_person", "person_id"),
+    )
 
 
 class PropertyOwner(Base):

@@ -87,6 +87,8 @@ interface BudgetAccount {
   accountType: string;
 }
 
+type HouseholdPerson = { id: string; name: string };
+
 type EditableLine = BudgetData["lines"][number] & {
   plannedInput: string;
   notesInput: string;
@@ -370,6 +372,7 @@ export function BudgetClient({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [accountsOpen, setAccountsOpen] = useState(false);
+  const [people, setPeople] = useState<HouseholdPerson[]>([]);
   const [lines, setLines] = useState<EditableLine[]>(() => toEditableLines(data));
   const [futureMonthCount, setFutureMonthCount] = useState("3");
   const [futurePlanDialogOpen, setFuturePlanDialogOpen] = useState(false);
@@ -393,6 +396,13 @@ export function BudgetClient({
       current.id ? current : defaultPlannedExpenseForm(plannedExpenseOptions)
     );
   }, [plannedExpenseOptions]);
+
+  useEffect(() => {
+    fetch("/api/people")
+      .then((response) => response.ok ? response.json() : { people: [] })
+      .then((body) => setPeople(body.people ?? []))
+      .catch(() => setPeople([]));
+  }, []);
 
   const totals = useMemo(() => {
     const plannedAmount = lines.reduce(
@@ -426,10 +436,15 @@ export function BudgetClient({
     ? "Actuals include all accounts."
     : `Actuals filtered to ${data.accountIds.length} account${data.accountIds.length === 1 ? "" : "s"}.`;
 
+  const attributionScopeText = data.personId
+    ? " Actuals are attributed to the selected household person; plans remain household-wide."
+    : "";
+
   const buildBudgetPath = (monthKey: string, accountIds: string[]) => {
     const params = new URLSearchParams();
     params.set("month", monthKey);
     accountIds.forEach((accountId) => params.append("account", accountId));
+    if (data.personId) params.set("person", data.personId);
     return `/budget?${params.toString()}`;
   };
 
@@ -439,6 +454,14 @@ export function BudgetClient({
 
   const updateSelectedAccounts = (accountIds: string[]) => {
     router.push(buildBudgetPath(data.monthKey, accountIds), { scroll: false });
+  };
+
+  const updatePerson = (personId: string) => {
+    const params = new URLSearchParams();
+    params.set("month", data.monthKey);
+    data.accountIds.forEach((accountId) => params.append("account", accountId));
+    if (personId) params.set("person", personId);
+    router.push(`/budget?${params.toString()}`, { scroll: false });
   };
 
   const toggleAccount = (accountId: string) => {
@@ -634,7 +657,7 @@ export function BudgetClient({
         <div>
           <h1 className="text-base font-medium">{formatMonth(data.monthKey)}</h1>
           <p className="text-muted-foreground text-xs">
-            Planned spending compared with categorized transactions. {actualScopeText}
+            Planned spending compared with categorized transactions. {actualScopeText}{attributionScopeText}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2" data-testid="budget-actions">
@@ -690,6 +713,19 @@ export function BudgetClient({
                 </div>
               </PopoverContent>
             </Popover>
+          )}
+          {people.length > 1 && (
+            <Select value={data.personId ?? "all"} onValueChange={(value) => updatePerson(!value || value === "all" ? "" : value)}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="Household" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Whole household</SelectItem>
+                {people.map((person) => (
+                  <SelectItem key={person.id} value={person.id}>{person.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
           <Button
             variant="outline"

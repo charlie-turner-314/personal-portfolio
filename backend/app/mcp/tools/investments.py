@@ -100,20 +100,20 @@ def list_holdings_impl(
 
     valuations = _latest_valuations_for_user(db, user_id)
 
-    # Cache owners per account for share-weighting
-    owners_cache: dict = {}
-    if single_person:
-        for h in holdings:
-            acc_id = str(h.account_id)
-            if acc_id not in owners_cache:
-                owners_cache[acc_id] = get_owners(db, "account", h.account_id)
+    # Ownership is attached to the valuation date, not to the current account
+    # state.  A stale price still deliberately uses the date of that stale
+    # valuation because that is the amount being reported.
+    owners_cache: dict[tuple[str, date], list[dict]] = {}
 
     out = []
     for h in holdings:
         v = valuations.get(h.id)
         value_str = str(v.value_user_currency) if v else None
         if single_person and v is not None and v.value_user_currency is not None:
-            owners = owners_cache[str(h.account_id)]
+            cache_key = (str(h.account_id), v.date)
+            owners = owners_cache.setdefault(
+                cache_key, get_owners(db, "account", h.account_id, as_of=v.date)
+            )
             weighted_value = attribute_amount(
                 float(v.value_user_currency), owners, person_ids[0]
             )
@@ -196,11 +196,7 @@ def get_portfolio_summary_impl(
 
     valuations = _latest_valuations_for_user(db, user_id)
 
-    # Cache owners per account for share-weighting
-    owners_cache: dict = {}
-    if single_person:
-        for a in accounts:
-            owners_cache[str(a.id)] = get_owners(db, "account", a.id)
+    owners_cache: dict[tuple[str, date], list[dict]] = {}
 
     # Sum value per account from latest valuations of holdings in those accounts.
     holdings = (
@@ -218,7 +214,10 @@ def get_portfolio_summary_impl(
             continue
         val = Decimal(v.value_user_currency or 0)
         if single_person:
-            owners = owners_cache[str(h.account_id)]
+            cache_key = (str(h.account_id), v.date)
+            owners = owners_cache.setdefault(
+                cache_key, get_owners(db, "account", h.account_id, as_of=v.date)
+            )
             val = Decimal(str(attribute_amount(float(val), owners, person_ids[0])))
         total += val
         if v.is_stale:
@@ -298,11 +297,9 @@ def get_portfolio_history_impl(
     if not account_ids:
         return []
 
-    # Cache owners per account for share-weighting
-    owners_cache: dict = {}
-    if single_person:
-        for a in account_objs:
-            owners_cache[str(a.id)] = get_owners(db, "account", a.id)
+    # Account-balance rows are historical observations, so their attribution
+    # must be resolved at each snapshot's date (not at request time).
+    owners_cache: dict[tuple[str, date], list[dict]] = {}
 
     query = db.query(AccountBalance).filter(AccountBalance.account_id.in_(account_ids))
     if from_dt:
@@ -317,7 +314,11 @@ def get_portfolio_history_impl(
         key = r.date.isoformat() if hasattr(r.date, "isoformat") else str(r.date)
         val = Decimal(r.balance_in_functional_currency or 0)
         if single_person:
-            owners = owners_cache.get(str(r.account_id), [])
+            balance_date = r.date.date() if isinstance(r.date, datetime) else r.date
+            cache_key = (str(r.account_id), balance_date)
+            owners = owners_cache.setdefault(
+                cache_key, get_owners(db, "account", r.account_id, as_of=balance_date)
+            )
             val = Decimal(str(attribute_amount(float(val), owners, person_ids[0])))
         by_date.setdefault(key, Decimal("0"))
         by_date[key] += val

@@ -1147,6 +1147,37 @@ export const accountOwners = pgTable(
   ]
 );
 
+// Complete, effective-dated ownership snapshots for accounts. The legacy
+// accountOwners table remains in place for existing property/vehicle-style
+// ownership displays, but account reporting must resolve this table as-of a
+// transaction or balance date.
+export const accountOwnershipAllocations = pgTable(
+  "account_ownership_allocations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    accountId: uuid("account_id")
+      .references(() => accounts.id, { onDelete: "cascade" })
+      .notNull(),
+    personId: uuid("person_id")
+      .references(() => people.id, { onDelete: "cascade" })
+      .notNull(),
+    effectiveFrom: date("effective_from").notNull(),
+    share: decimal("share", { precision: 5, scale: 4 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    unique("account_ownership_allocations_account_person_effective_uq").on(
+      t.accountId,
+      t.personId,
+      t.effectiveFrom,
+    ),
+    index("idx_account_ownership_allocations_account_effective").on(t.accountId, t.effectiveFrom),
+    index("idx_account_ownership_allocations_person").on(t.personId),
+    check("account_ownership_allocations_share_range", sql`${t.share} > 0 AND ${t.share} <= 1`),
+  ],
+);
+
 export const propertyOwners = pgTable(
   "property_owners",
   {

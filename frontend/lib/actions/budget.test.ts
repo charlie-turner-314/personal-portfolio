@@ -265,6 +265,7 @@ describe("budget actions", () => {
       monthKey: "2026-04",
       currency: "AUD",
       accountIds: [],
+      personId: undefined,
       totals: {
         plannedAmount: 0,
         actualAmount: 0,
@@ -324,12 +325,14 @@ describe("budget actions", () => {
       startDate: new Date(2026, 3, 1),
       endDate: new Date(2026, 3, 30, 23, 59, 59, 999),
       accountIds: ["account-1", "account-2"],
+      personId: undefined,
       includeUncategorized: false,
     });
     expect(mocks.fetchCategoryActualAmounts).toHaveBeenCalledWith("user-1", {
       startDate: new Date(2026, 2, 1),
       endDate: new Date(2026, 2, 31, 23, 59, 59, 999),
       accountIds: ["account-1", "account-2"],
+      personId: undefined,
       includeUncategorized: false,
     });
     expect(mocks.fetchBudgetInsights).toHaveBeenCalledWith("user-1", {
@@ -351,6 +354,7 @@ describe("budget actions", () => {
       monthKey: "2026-04",
       currency: "USD",
       accountIds: ["account-1", "account-2"],
+      personId: undefined,
       totals: {
         plannedAmount: 1200,
         actualAmount: 1000.35,
@@ -417,6 +421,21 @@ describe("budget actions", () => {
         },
       ],
     });
+  });
+
+  it("passes the selected household person to actuals while keeping plans household-wide", async () => {
+    mocks.requireAuth.mockResolvedValue("user-1");
+    mocks.queryResults.currencyRows = [{ functionalCurrency: "USD" }];
+    mocks.fetchCategoryActualAmounts.mockResolvedValue([]);
+    mocks.fetchBudgetInsights.mockResolvedValue([]);
+
+    const data = await getBudgetData("2026-04", { personId: "person-half" });
+
+    expect(data.personId).toBe("person-half");
+    expect(mocks.fetchCategoryActualAmounts).toHaveBeenCalledWith("user-1", expect.objectContaining({
+      personId: "person-half",
+      includeUncategorized: false,
+    }));
   });
 
   describe("future budget plans", () => {

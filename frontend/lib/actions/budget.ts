@@ -36,6 +36,7 @@ export interface BudgetData {
   monthKey: string;
   currency: string;
   accountIds: string[];
+  personId?: string;
   totals: {
     plannedAmount: number;
     actualAmount: number;
@@ -49,6 +50,7 @@ export interface BudgetData {
 
 interface BudgetDataOptions {
   accountIds?: string[];
+  personId?: string;
 }
 
 export interface BudgetActionResult {
@@ -169,12 +171,14 @@ export async function getBudgetData(
   const userId = await requireAuth();
   const monthKey = normalizeBudgetMonthKey(monthKeyInput);
   const accountIds = normalizeAccountIds(options.accountIds);
+  const personId = options.personId?.trim() || undefined;
 
   if (!userId) {
     return {
       monthKey,
       currency: "EUR",
       accountIds,
+      personId,
       totals: {
         plannedAmount: 0,
         actualAmount: 0,
@@ -221,12 +225,14 @@ export async function getBudgetData(
       startDate: start,
       endDate: end,
       accountIds,
+      personId,
       includeUncategorized: false,
     }),
     fetchCategoryActualAmounts(userId, {
       startDate: previousStart,
       endDate: previousEnd,
       accountIds,
+      personId,
       includeUncategorized: false,
     }),
     getUserCurrency(userId),
@@ -324,6 +330,7 @@ export async function getBudgetData(
     monthKey,
     currency,
     accountIds,
+    personId,
     totals,
     lines: lines.map((line) => ({
       ...line,
