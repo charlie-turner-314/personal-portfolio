@@ -97,23 +97,6 @@ jobs:
           sed -i "s|^APP_VERSION=.*|APP_VERSION=${TAG}|g" deploy/compose/.env.example
           sed -i "s|^APP_VERSION=.*|APP_VERSION=${TAG}|g" deploy/casaos/.env.example
 
-      - name: Commit pin bump back to repo
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if ! git diff --quiet deploy/railway/docker-compose.yml deploy/compose/.env.example deploy/casaos/.env.example; then
-            git config user.name "personal-portfolio-bot"
-            git config user.email "personal-portfolio-bot@users.noreply.github.com"
-            git checkout main
-            git pull --ff-only origin main
-            git checkout "${{ github.ref_name }}" -- deploy/railway/docker-compose.yml deploy/compose/.env.example deploy/casaos/.env.example
-            git add deploy/railway/docker-compose.yml deploy/compose/.env.example deploy/casaos/.env.example
-            git commit -m "chore: bump Railway template pins to ${{ github.ref_name }} [skip ci]"
-            git push origin main
-          else
-            echo "No pin changes to commit."
-          fi
 
       - name: Create compose bundle
         run: |
