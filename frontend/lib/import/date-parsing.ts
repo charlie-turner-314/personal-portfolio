@@ -1,4 +1,6 @@
-export type ImportedDateFormat = "DD-MM-YYYY" | "MM-DD-YYYY";
+import { isValid, parse } from "date-fns";
+
+export type ImportedDateFormat = "DD-MM-YYYY" | "MM-DD-YYYY" | "CUSTOM";
 
 /**
  * Parses the date portion of a transaction export without relying on the
@@ -8,9 +10,14 @@ export type ImportedDateFormat = "DD-MM-YYYY" | "MM-DD-YYYY";
 export function parseImportedDate(
   raw: string | null | undefined,
   dateFormat: ImportedDateFormat = "DD-MM-YYYY",
+  customDateFormat?: string,
 ): Date | null {
   const value = raw?.replace(/["']/g, "").trim();
   if (!value) return null;
+
+  if (dateFormat === "CUSTOM") {
+    return parseWithCustomFormat(value, customDateFormat);
+  }
 
   const compact = value.match(/^\d{8}$/);
   if (compact) {
@@ -48,6 +55,23 @@ export function parseImportedDate(
   }
 
   return null;
+}
+
+/**
+ * Parses a user-provided date-fns pattern. The pattern deliberately applies to
+ * the whole source value, so it can include time fields too (for example,
+ * `HH:mm dd-MM-yy`). Only its calendar date is retained.
+ */
+function parseWithCustomFormat(value: string, pattern?: string): Date | null {
+  if (!pattern?.trim()) return null;
+  try {
+    const parsed = parse(value, pattern.trim(), new Date(2000, 0, 1));
+    if (!isValid(parsed)) return null;
+    return createValidatedUtcDate(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
+  } catch {
+    // date-fns rejects malformed or contradictory format patterns.
+    return null;
+  }
 }
 
 function normalizeYear(year: number, digits: number): number | null {
