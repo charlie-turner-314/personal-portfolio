@@ -119,7 +119,7 @@ export function TransactionsClient({
     }
 
     try {
-      const response = await fetch(`/api/csv-import/status/${pendingImport.importId}`);
+      const response = await fetch(`/api/csv-import/status/${encodeURIComponent(pendingImport.importId)}`);
       if (response.status === 404 || response.status === 403) {
         clearPendingImport();
         setPendingImportState(null);
