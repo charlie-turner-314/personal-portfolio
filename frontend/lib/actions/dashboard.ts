@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { accounts, transactions, categories, users, properties, vehicles, accountBalances, accountOwnershipAllocations, transactionLinks, propertyLiabilityLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getCachedUserAccounts } from "@/lib/data/cached";
-import { eq, sql, gte, lte, and, desc, inArray, isNull, type SQL } from "drizzle-orm";
+import { eq, sql, gte, lte, and, desc, inArray, isNull, type SQL, type SQLWrapper } from "drizzle-orm";
 import { buildConservativeSankey } from "@/lib/dashboard/sankey";
 import {
   buildIncomeExpenseBuckets,
@@ -44,8 +44,8 @@ function normalizeAccountIds(accountIds?: string[]): string[] | undefined {
 
 function ownershipShareSql(
   personId: string | undefined,
-  accountId: SQL<unknown>,
-  bookedAt: SQL<unknown>,
+  accountId: SQLWrapper,
+  bookedAt: SQLWrapper,
 ): SQL<unknown> {
   if (!personId) return sql`1`;
 
