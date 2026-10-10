@@ -8,7 +8,6 @@ record the user's confirmation that the key has its default Can Read-only settin
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import time
 from dataclasses import dataclass
@@ -17,6 +16,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 
 import httpx
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.hmac import HMAC
 
 from app.services.investment_activity_service import (
     CanonicalActivityInput,
@@ -234,13 +235,10 @@ class CryptoComExchangeReadOnlyClient:
             nonce = self._clock_ms()
             request_params = dict(params or {})
             signature_payload = f"{method}{request_id}{self._api_key}{_params_string(request_params)}{nonce}"
-            # The exchange protocol requires HMAC-SHA256. Use the dedicated
-            # HMAC digest API so security analysis does not mistake the API
-            # secret for a password being hashed with raw SHA-256.
-            # codeql[py/weak-sensitive-data-hashing]
-            signature = hmac.digest(
-                self._api_secret.encode(), signature_payload.encode(), "sha256"
-            ).hex()
+            # The exchange protocol requires HMAC-SHA256, not password hashing.
+            signer = HMAC(self._api_secret.encode(), hashes.SHA256())
+            signer.update(signature_payload.encode())
+            signature = signer.finalize().hex()
             body = {
                 "id": request_id,
                 "method": method,
