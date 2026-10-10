@@ -174,7 +174,8 @@ export interface ColumnMapping {
     debitValue?: string;
     isAmountSigned?: boolean; // If true, positive = credit, negative = debit
     amountFormat?: AmountFormat; // Decimal separator handling for imported amounts/balances
-    dateFormat?: "DD-MM-YYYY" | "MM-DD-YYYY"; // Date format for ambiguous dates
+    dateFormat?: "DD-MM-YYYY" | "MM-DD-YYYY" | "CUSTOM"; // Date format for ambiguous dates
+    customDateFormat?: string; // date-fns pattern when dateFormat is CUSTOM
     completedStateValue?: string; // Value that indicates a completed transaction (e.g., "COMPLETED")
   };
 }
@@ -815,7 +816,11 @@ export async function previewImportedTransactions(
         continue;
       }
 
-      const parsedDate = parseImportedDate(dateStr, mapping.typeConfig?.dateFormat);
+      const parsedDate = parseImportedDate(
+        dateStr,
+        mapping.typeConfig?.dateFormat,
+        mapping.typeConfig?.customDateFormat,
+      );
       if (!parsedDate) {
         rowsNeedingAttention += 1;
         continue; // Skip invalid rows
@@ -998,7 +1003,11 @@ export async function previewImportedTransactions(
           const dateStr = row[dateIndex];
           if (!dateStr) continue;
 
-          const parsedDate = parseImportedDate(dateStr, mapping.typeConfig?.dateFormat);
+          const parsedDate = parseImportedDate(
+            dateStr,
+            mapping.typeConfig?.dateFormat,
+            mapping.typeConfig?.customDateFormat,
+          );
           if (!parsedDate) continue;
 
           // Format as YYYY-MM-DD
