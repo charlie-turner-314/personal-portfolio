@@ -16,6 +16,7 @@ def acquire_user_ingestion_lock(db: Session, *, user_id: str) -> None:
         return
     # A keyed digest gives every user a stable, well-distributed advisory-lock
     # key without treating the user identifier as password material.
+    # codeql[py/weak-sensitive-data-hashing]
     digest = hmac.digest(_LOCK_NAMESPACE, user_id.encode("utf-8"), "sha256")
     lock_key = int.from_bytes(digest[:8], byteorder="big", signed=True)
     db.execute(

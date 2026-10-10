@@ -237,6 +237,7 @@ class CryptoComExchangeReadOnlyClient:
             # The exchange protocol requires HMAC-SHA256. Use the dedicated
             # HMAC digest API so security analysis does not mistake the API
             # secret for a password being hashed with raw SHA-256.
+            # codeql[py/weak-sensitive-data-hashing]
             signature = hmac.digest(
                 self._api_secret.encode(), signature_payload.encode(), "sha256"
             ).hex()
