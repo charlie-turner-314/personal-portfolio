@@ -2,6 +2,9 @@
 
 `develop` is the staging integration branch. `main` contains production releases only.
 
+For the repeatable local rehearsal, test-account preparation, Pi discovery and
+deployment commands, follow [Agent workflow](../deploy/compose/AGENT-WORKFLOW.md).
+
 ## Required promotion path
 
 1. Land feature work in `develop` through a pull request.

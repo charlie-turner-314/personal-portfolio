@@ -66,6 +66,8 @@ postgres_data/
 
 # Misc
 *.pem
+.release-lab/
+.release-backups/
 
 # User uploads (frontend)
 frontend/public/uploads/
