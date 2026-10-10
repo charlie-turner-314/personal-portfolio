@@ -36,6 +36,12 @@ from app.services.investment_csv_presets.crypto_com_app import (
     is_crypto_com_app_provider,
     normalize_crypto_com_app_rows,
 )
+from app.services.superhero_report_service import (
+    SuperheroReportError,
+    is_superhero_income_csv,
+    parse_superhero_amit_pdf,
+    parse_superhero_income_csv,
+)
 
 
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
@@ -550,8 +556,30 @@ def parse_investment_csv(
     default_activity_type: str | None = None,
     activity_type_aliases: Mapping[str, str] | None = None,
     income_data_kind: str = "cash_activity",
+    file_encoding: str = "utf8",
 ) -> ParsedInvestmentImport:
     """Parse independent rows and retain actionable rejection reasons."""
+    is_pdf = file_name.casefold().endswith(".pdf") or file_encoding == "base64"
+    if file_encoding not in {"utf8", "base64"}:
+        raise InvestmentCsvImportError(f"Unsupported file encoding {file_encoding!r}.")
+    if is_pdf:
+        if not _is_superhero_provider(provider):
+            raise InvestmentCsvImportError("PDF imports are currently supported only for Superhero AMIT statements.")
+        if file_encoding != "base64":
+            raise InvestmentCsvImportError("PDF content must use base64 encoding.")
+        try:
+            parsed = parse_superhero_amit_pdf(file_name=file_name, encoded_content=file_content)
+        except SuperheroReportError as exc:
+            raise InvestmentCsvImportError(str(exc)) from exc
+        return ParsedInvestmentImport(
+            batch=parsed.batch,
+            rows=parsed.rows,
+            rejected_rows=parsed.rejected_rows,
+            headers=parsed.headers,
+            amount_format=parsed.amount_format,
+        )
+    if file_encoding != "utf8":
+        raise InvestmentCsvImportError("Delimited investment files must use UTF-8 text encoding.")
     date_format = date_format.upper()
     amount_format = amount_format.upper()
     if date_format not in DATE_FORMATS:
@@ -564,6 +592,22 @@ def parse_investment_csv(
         file_content,
         provider=provider,
     )
+    if _is_superhero_provider(provider) and is_superhero_income_csv(file_content):
+        if income_data_kind != "cash_activity":
+            raise InvestmentCsvImportError(
+                "Superhero Income Reports contain cash activity; import the AMIT PDF as the annual statement."
+            )
+        try:
+            parsed = parse_superhero_income_csv(file_name=file_name, content=file_content)
+        except SuperheroReportError as exc:
+            raise InvestmentCsvImportError(str(exc)) from exc
+        return ParsedInvestmentImport(
+            batch=parsed.batch,
+            rows=parsed.rows,
+            rejected_rows=parsed.rejected_rows,
+            headers=parsed.headers,
+            amount_format=parsed.amount_format,
+        )
     if is_crypto_com_app_provider(provider):
         if income_data_kind != "cash_activity":
             raise InvestmentCsvImportError("Crypto.com App exports are activity files, not annual tax statements.")

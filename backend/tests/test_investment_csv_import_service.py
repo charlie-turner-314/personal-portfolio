@@ -2,6 +2,8 @@ from decimal import Decimal
 from pathlib import Path
 import uuid
 
+import base64
+
 import pytest
 
 from app.models import (
@@ -22,6 +24,7 @@ from app.services.investment_csv_import_service import (
     parse_investment_csv,
     preview_investment_csv,
 )
+from app.services.superhero_report_service import parse_superhero_amit_pdf
 
 
 MAPPING = {
@@ -200,6 +203,128 @@ Payment Date,Security,Security Code,Transaction Type,Gross Amount,Franking Credi
     assert parsed.batch.records[0].activities[0].activity_type == "dividend"
 
 
+def test_superhero_aus_income_preset_uses_exact_delayed_header_contract():
+    content = (Path(__file__).parent / "fixtures" / "superhero_income_report_aus.csv").read_text()
+    parsed = parse_investment_csv(**{
+        **_options(content),
+        "file_name": "Income Report (AUS).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    })
+
+    assert parsed.batch.normalization_version == "superhero-income-v1"
+    assert [row["row_number"] for row in parsed.rows] == [11, 12]
+    assert len(parsed.batch.records) == 2
+    first = parsed.batch.records[0]
+    activity = first.activities[0]
+    assert first.provider_record_id == "AUS:EXM:2025-08-01:2025-08-15:85.00"
+    assert activity.activity_type == "dividend"
+    assert activity.currency == "AUD"
+    assert activity.gross_amount == Decimal("85.00")
+    assert activity.net_amount == Decimal("85.00")
+    assert activity.tax_amount == Decimal("0.00")
+    assert activity.metadata["franked_amount"] == "70"
+    assert activity.metadata["unfranked_amount"] == "15"
+    assert activity.metadata["franking_credit"] == "30"
+    assert "entity_name" not in first.metadata["superhero_report"]
+    assert all("TOTAL" not in record.raw_payload.values() for record in parsed.batch.records)
+
+
+def test_superhero_us_income_preset_supports_empty_and_withholding_reports():
+    fixture_dir = Path(__file__).parent / "fixtures"
+    empty = parse_investment_csv(**{
+        **_options((fixture_dir / "superhero_income_report_us_empty.csv").read_text()),
+        "file_name": "Income Report (US).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    })
+    assert empty.batch.records == ()
+    assert empty.rejected_rows == ()
+
+    populated = parse_investment_csv(**{
+        **_options((fixture_dir / "superhero_income_report_us_synthetic.csv").read_text()),
+        "file_name": "Income Report (US).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    })
+    activity = populated.batch.records[0].activities[0]
+    assert activity.asset_symbol == "AAPL"
+    assert activity.currency == "USD"
+    assert activity.metadata["foreign_income"] == "10"
+    assert activity.metadata["foreign_tax_paid"] == "1.5"
+    assert activity.tax_amount == Decimal("1.50")
+
+
+def test_superhero_amit_pdf_extracts_annual_components_without_personal_header(monkeypatch):
+    class Page:
+        def __init__(self, text):
+            self.text = text
+
+        def extract_text(self):
+            return self.text
+
+    pages = [
+        Page("""Synthetic Investor\n1 Example Street\nEXAMPLE INDEX ETF - EXM
+ATTRIBUTION MANAGED INVESTMENT TRUST MEMBER ANNUAL STATEMENT
+FOR THE YEAR ENDED 30 JUNE 2026
+Gross Interest 10L $1.25
+Share of net income from trusts, less net capital gains, foreign income & franked distributions 13U $20.00
+Franked distribution from trusts 13C $30.00
+Share of franking credits from franked dividends 13Q $12.86
+Net capital gain 18A $8.00
+Total current year capital gains 18H $16.00
+Other net foreign source income 20M $4.00
+Foreign income tax offset 20O $0.60"""),
+        Page("COMPONENTS OF ATTRIBUTION"),
+        Page("""Tax-Deferred Amount $2.00 $2.00
+Tax Free Income $1.00 $1.00
+Total Non-assessable amounts $3.00 $3.00
+Gross Cash Distribution $50.00
+Less: TFN/ABN Withholding Tax $1.25
+Net Cash Distribution $48.75"""),
+        Page("""ATTRIBUTION MANAGED INVESTMENT TRUST ('AMIT') COST BASE ADJUSTMENTS AMOUNT
+AMIT cost base net decrease amount $5.00
+AMIT cost base net increase amount $100.00"""),
+    ]
+    monkeypatch.setattr("app.services.superhero_report_service.PdfReader", lambda _stream: type("Reader", (), {"pages": pages})())
+    encoded = base64.b64encode(b"%PDF-1.7 synthetic test payload").decode()
+    parsed = parse_superhero_amit_pdf(file_name="amit-statement.pdf", encoded_content=encoded)
+
+    assert parsed.batch.normalization_version == "superhero-amit-v1"
+    assert parsed.rows[0]["row_number"] == 1
+    record = parsed.batch.records[0]
+    activity = record.activities[0]
+    assert record.provider_record_id == "amit:2026:EXM"
+    assert activity.asset_symbol == "EXM"
+    assert activity.gross_amount == Decimal("50.00")
+    assert activity.net_amount == Decimal("48.75")
+    assert activity.metadata["annual_aggregate"] is True
+    assert activity.metadata["franked_amount"] == "30"
+    assert activity.metadata["unfranked_amount"] == "20"
+    assert activity.metadata["cost_base_increase"] == "100"
+    assert activity.metadata["cost_base_decrease"] == "5"
+    assert activity.metadata["amit_amma_components"]["ato_18a_net_capital_gain"] == "8.00"
+    assert activity.metadata["amit_amma_components"]["ato_18h_total_current_year_capital_gains"] == "16.00"
+    assert "Synthetic Investor" not in str(record.raw_payload)
+    assert "Example Street" not in str(record.metadata)
+
+
+def test_pdf_dispatch_requires_superhero_and_base64(monkeypatch):
+    with pytest.raises(InvestmentCsvImportError, match="only for Superhero"):
+        parse_investment_csv(**{
+            **_options("not-used"),
+            "file_name": "statement.pdf",
+            "file_encoding": "base64",
+            "provider": "Generic",
+        })
+    with pytest.raises(InvestmentCsvImportError, match="base64"):
+        parse_investment_csv(**{
+            **_options("not-used"),
+            "file_name": "statement.pdf",
+            "provider": "Superhero",
+        })
+
+
 def test_superhero_overlapping_transaction_reports_are_idempotent(
     db_session, investment_account
 ):
@@ -231,6 +356,36 @@ def test_superhero_overlapping_transaction_reports_are_idempotent(
     assert second["skipped_duplicate_records"] == 2
     run = db_session.query(InvestmentIngestionRun).filter_by(id=first["run_id"]).one()
     assert any("Superhero Transaction Statement preset applied" in item for item in run.warnings)
+
+
+def test_superhero_overlapping_income_reports_are_idempotent(
+    db_session, investment_account
+):
+    user, account = investment_account
+    content = (Path(__file__).parent / "fixtures" / "superhero_income_report_aus.csv").read_text()
+    options = {
+        **_options(content),
+        "file_name": "Income Report (AUS).csv",
+        "provider": "Superhero",
+        "mapping": {},
+    }
+
+    first = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=options,
+    )
+    overlapping = {
+        **options,
+        "file_content": content.replace("Report Start Date,01/07/2025", "Report Start Date,01/01/2025"),
+    }
+    second = apply_investment_csv(
+        db_session, user_id=user.id, account_id=account.id, parse_options=overlapping,
+    )
+
+    assert first["inserted_activities"] == 2
+    assert second["inserted_activities"] == 0
+    assert second["skipped_duplicate_records"] == 2
+    run = db_session.query(InvestmentIngestionRun).filter_by(id=first["run_id"]).one()
+    assert run.source_name == "Superhero Income Report (AUS).csv"
 
 
 def test_parser_preserves_crypto_market_value_and_fee_provenance():

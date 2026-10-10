@@ -682,6 +682,19 @@ def _ensure_holding(db: Session, account: Account, activity: InvestmentActivity)
         )
         .one_or_none()
     )
+    if holding is None and activity.activity_type in {
+        "dividend", "distribution", "drp", "interest", "staking_reward", "airdrop"
+    }:
+        # Provider income reports often omit an instrument classification. Reuse
+        # a unique same-symbol holding rather than creating a parallel equity/ETF
+        # shell that cannot reconcile to the imported trade history.
+        symbol_matches = (
+            db.query(Holding)
+            .filter(Holding.account_id == account.id, Holding.symbol == activity.asset_symbol)
+            .all()
+        )
+        if len(symbol_matches) == 1:
+            holding = symbol_matches[0]
     if holding is None:
         holding = Holding(
             user_id=account.user_id,

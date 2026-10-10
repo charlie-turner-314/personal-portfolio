@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/api/investments", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/transactions/csv-upload-dropzone", () => ({
-  CsvUploadDropzone: ({ onFileSelect }: { onFileSelect: (file: File, content: string) => void }) => (
+  CsvUploadDropzone: ({ onFileSelect }: { onFileSelect: (file: File, content: string, encoding?: "utf8" | "base64") => void }) => (
     <>
       <button type="button" onClick={() => onFileSelect(
         new File(["Reference,Date,Type,Symbol,Quantity,Price,Currency\nT1,2025-01-01,Buy,VAS,2,100,AUD\n"], "statement.csv"),
@@ -34,6 +34,11 @@ vi.mock("@/components/transactions/csv-upload-dropzone", () => ({
         ].join("\n");
         onFileSelect(new File([content], "superhero.csv"), content);
       }}>Choose Superhero CSV</button>
+      <button type="button" onClick={() => onFileSelect(
+        new File(["synthetic"], "amit-statement.pdf", { type: "application/pdf" }),
+        "JVBERi0xLjc=",
+        "base64",
+      )}>Choose Superhero AMIT PDF</button>
     </>
   ),
 }));
@@ -124,10 +129,11 @@ describe("InvestmentImportWizard", () => {
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "Superhero" } });
 
     expect(await screen.findByText("Superhero report guidance")).toBeTruthy();
-    expect(screen.getByText(/Transaction Statement for buys and sells/)).toBeTruthy();
+    expect(screen.getByText(/Transaction Statements and/)).toBeTruthy();
     expect(screen.getByText(/Full Portfolio Report does not include AMIT\/AMMA/)).toBeTruthy();
+    expect(screen.getByText(/AMIT member annual statement in its supplied PDF format/)).toBeTruthy();
     expect(screen.getByText(/does not offer DRP/)).toBeTruthy();
-    expect(screen.getByText(/combines Brokerage with GST/)).toBeTruthy();
+    expect(screen.getByText(/Brokerage plus GST is combined/)).toBeTruthy();
   });
 
   it("finds and maps a Superhero transaction header below its report preamble", async () => {
@@ -150,6 +156,26 @@ describe("InvestmentImportWizard", () => {
           asset_symbol: "Security Code",
           fee_amount: "Brokerage",
         }),
+      }),
+    ));
+  });
+
+  it("uploads a Superhero AMIT PDF as an automatically mapped annual statement", async () => {
+    render(<InvestmentImportWizard accounts={accounts} />);
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "Superhero" } });
+    fireEvent.click(screen.getByRole("button", { name: "Choose Superhero AMIT PDF" }));
+
+    expect(await screen.findByText(/layout is detected automatically/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /preview import/i }));
+
+    await waitFor(() => expect(mocks.previewInvestmentImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "Superhero",
+        file_name: "amit-statement.pdf",
+        file_content: "JVBERi0xLjc=",
+        file_encoding: "base64",
+        income_data_kind: "annual_statement",
+        default_asset_type: "fund",
       }),
     ));
   });

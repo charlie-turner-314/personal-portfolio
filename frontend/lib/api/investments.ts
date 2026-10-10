@@ -668,6 +668,7 @@ export type InvestmentImportRequest = {
   provider: string;
   file_name: string;
   file_content: string;
+  file_encoding?: "utf8" | "base64";
   mapping: InvestmentImportMapping;
   date_format: "AUTO" | "DD-MM-YYYY" | "MM-DD-YYYY";
   amount_format: "AUTO" | "DOT_DECIMAL" | "COMMA_DECIMAL";

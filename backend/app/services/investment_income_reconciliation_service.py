@@ -271,6 +271,18 @@ def _annual_candidates(
     event_type: str,
 ) -> list[InvestmentIncomeEvent]:
     metadata = activity.activity_metadata or {}
+    if metadata.get("annual_aggregate"):
+        period_start = datetime.fromisoformat(str(metadata["statement_period_start"])).date()
+        period_end = datetime.fromisoformat(str(metadata["statement_period_end"])).date()
+        return db.query(InvestmentIncomeEvent).filter(
+            InvestmentIncomeEvent.user_id == account.user_id,
+            InvestmentIncomeEvent.account_id == account.id,
+            InvestmentIncomeEvent.holding_id == holding.id,
+            InvestmentIncomeEvent.event_type == event_type,
+            InvestmentIncomeEvent.currency == (activity.currency or account.currency or "AUD"),
+            InvestmentIncomeEvent.pay_date >= period_start,
+            InvestmentIncomeEvent.pay_date <= period_end,
+        ).order_by(InvestmentIncomeEvent.pay_date, InvestmentIncomeEvent.id).all()
     pay_date = (
         datetime.fromisoformat(str(metadata["cash_pay_date"])).date()
         if metadata.get("cash_pay_date")
@@ -572,6 +584,11 @@ def reconcile_annual_statement(
                 "symbol": holding.symbol,
                 "event_type": event_type,
                 "statement_date": activity.occurred_at.date().isoformat(),
+                **({
+                    "statement_period_start": metadata.get("statement_period_start"),
+                    "statement_period_end": metadata.get("statement_period_end"),
+                    "annual_aggregate": True,
+                } if metadata.get("annual_aggregate") else {}),
             },
         )
         return None

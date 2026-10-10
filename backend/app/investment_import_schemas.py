@@ -61,6 +61,7 @@ class InvestmentImportRequest(BaseModel):
     provider: str = Field(default="generic", min_length=1, max_length=100)
     file_name: str = Field(min_length=1, max_length=255)
     file_content: str = Field(min_length=1)
+    file_encoding: Literal["utf8", "base64"] = "utf8"
     mapping: InvestmentImportColumnMapping
     date_format: str = "AUTO"
     amount_format: str = "AUTO"
@@ -79,6 +80,7 @@ class InvestmentImportRequest(BaseModel):
         return {
             "file_name": self.file_name,
             "file_content": self.file_content,
+            "file_encoding": self.file_encoding,
             "provider": self.provider,
             "mapping": self.mapping.model_dump(),
             "date_format": self.date_format,
@@ -101,8 +103,8 @@ class InvestmentImportApplyRequest(InvestmentImportRequest):
     def unique_positive_rows(cls, value: Optional[list[int]]) -> Optional[list[int]]:
         if value is None:
             return None
-        if any(row < 2 for row in value):
-            raise ValueError("selected row numbers must refer to data rows")
+        if any(row < 1 for row in value):
+            raise ValueError("selected row numbers must be positive source locations")
         if len(value) != len(set(value)):
             raise ValueError("selected row numbers must be unique")
         return value

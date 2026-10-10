@@ -34,6 +34,7 @@ import {
   EMPTY_INVESTMENT_IMPORT_MAPPING,
   INVESTMENT_IMPORT_FIELDS,
   isLikelySuperheroReportHeader,
+  isSuperheroIncomeHeader,
   reconcileSavedInvestmentMapping,
   suggestInvestmentImportMapping,
 } from "@/lib/investment-import/mapping";
@@ -57,6 +58,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   const [provider, setProvider] = useState("generic");
   const [fileName, setFileName] = useState("");
   const [fileContent, setFileContent] = useState("");
+  const [fileEncoding, setFileEncoding] = useState<"utf8" | "base64">("utf8");
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<InvestmentImportMapping>(EMPTY_INVESTMENT_IMPORT_MAPPING);
   const [dateFormat, setDateFormat] = useState<InvestmentImportRequest["date_format"]>("AUTO");
@@ -82,19 +84,22 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   const providerKey = provider.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
   const isSuperhero = providerKey === "superhero";
   const isCryptoComApp = providerKey === "cryptocom" || providerKey === "cryptocomapp";
+  const isPdf = fileEncoding === "base64";
+  const isSuperheroIncome = isSuperhero && isSuperheroIncomeHeader(headers);
 
   const requestPayload = useCallback((): InvestmentImportRequest => ({
     account_id: accountId,
     provider: provider.trim(),
     file_name: fileName,
     file_content: fileContent,
+    file_encoding: fileEncoding,
     mapping,
     date_format: dateFormat,
     amount_format: amountFormat,
     default_asset_type: assetType,
     default_currency: defaultCurrency.trim().toUpperCase() || account?.base_currency || "AUD",
     income_data_kind: incomeDataKind,
-  }), [account?.base_currency, accountId, amountFormat, assetType, dateFormat, defaultCurrency, fileContent, fileName, incomeDataKind, mapping, provider]);
+  }), [account?.base_currency, accountId, amountFormat, assetType, dateFormat, defaultCurrency, fileContent, fileEncoding, fileName, incomeDataKind, mapping, provider]);
 
   const loadHistory = useCallback(async () => {
     if (!accountId) return;
@@ -151,7 +156,22 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     return () => { cancelled = true; };
   }, [account?.base_currency, accountId, headers, incomeDataKind, provider]);
 
-  const onFileSelect = useCallback((file: File, content: string) => {
+  const onFileSelect = useCallback((file: File, content: string, encoding: "utf8" | "base64" = "utf8") => {
+    const pdf = encoding === "base64";
+    setFileName(file.name);
+    setFileContent(content);
+    setFileEncoding(encoding);
+    if (pdf) {
+      setHeaders([]);
+      setMapping(EMPTY_INVESTMENT_IMPORT_MAPPING);
+      setAssetType("fund");
+      setDefaultCurrency("AUD");
+      setIncomeDataKind("annual_statement");
+      setPreview(null);
+      setCompletedMessage(null);
+      setError(isSuperhero ? null : "PDF imports are currently supported only for Superhero AMIT statements.");
+      return;
+    }
     const delimiter = detectCsvDelimiter(content);
     const parsed = isSuperhero
       ? parseDelimitedTextFromMatchingHeader(
@@ -160,8 +180,6 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
           isLikelySuperheroReportHeader,
         )
       : parseDelimitedText(content, delimiter);
-    setFileName(file.name);
-    setFileContent(content);
     setHeaders(parsed.headers);
     setMapping(suggestInvestmentImportMapping(parsed.headers, provider));
     if (isCryptoComApp) {
@@ -185,7 +203,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
   );
 
   const runPreview = async () => {
-    if (!accountId || !fileContent || !provider.trim() || missingRequired.length > 0) {
+    if (!accountId || !fileContent || !provider.trim() || (!isPdf && !isSuperheroIncome && missingRequired.length > 0)) {
       setError("Choose an account and file, then map Date, Activity type, and Symbol.");
       return;
     }
@@ -355,16 +373,16 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
             <div className="space-y-2 border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
               <div className="font-medium text-foreground">Superhero report guidance</div>
               <p>
-                In Superhero, open Reports on the web, or Profile → Tax Reports in the app, and download CSV rather than PDF.
-                Use a Transaction Statement for buys and sells, and an Income Report for dividends. Upload each report separately.
+                In Superhero, open Reports on the web, or Profile → Tax Reports in the app. Upload Transaction Statements and
+                AUS/US Income Reports as CSV; upload the AMIT member annual statement in its supplied PDF format.
               </p>
               <p>
-                The Full Portfolio Report does not include AMIT/AMMA data. Import the separate AMIT/AMMA statement when Superhero makes it available.
+                The Full Portfolio Report does not include AMIT/AMMA data. Import the separate AMIT PDF after the matching cash income CSV.
                 Superhero does not offer DRP, so its income rows should not be mapped as dividend reinvestments.
               </p>
               <p>
-                Report table headers are detected below their preamble; the known AUS/US Transaction Statement layout maps automatically and combines Brokerage with GST.
-                Income and AMIT/AMMA schemas are not published by Superhero, so review their suggested mapping before preview.
+                Report table headers are detected below their preamble. Transaction and Income layouts map automatically;
+                transaction Brokerage plus GST is combined, and PDF annual totals remain in reconciliation review until linked to a recorded distribution.
                 See <a className="underline underline-offset-2" href="https://www.superhero.com.au/support/articles/13648478865167-tax-reporting/" target="_blank" rel="noreferrer">Tax Reporting</a>
                 {" and "}<a className="underline underline-offset-2" href="https://support.superhero.com.au/hc/en-au/articles/14787654257807-Dividends" target="_blank" rel="noreferrer">Dividends</a>.
               </p>
@@ -401,16 +419,20 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
               map any network fee separately so its disposal remains auditable.
             </div>
           )}
-          <CsvUploadDropzone onFileSelect={onFileSelect} isUploading={busy === "preview" || busy === "import"} />
+          <CsvUploadDropzone
+            onFileSelect={onFileSelect}
+            isUploading={busy === "preview" || busy === "import"}
+            acceptPdf={isSuperhero}
+          />
           {profileMessage && <p className="text-xs text-muted-foreground">{profileMessage}</p>}
         </CardContent>
       </Card>
 
-      {headers.length > 0 && (
+      {(headers.length > 0 || isPdf) && (
         <Card className="rounded-none">
           <CardHeader><CardTitle className="text-base">2. Map columns</CardTitle></CardHeader>
           <CardContent className="space-y-5">
-            <div className="grid gap-x-5 gap-y-3 md:grid-cols-2">
+            {!isPdf && <div className="grid gap-x-5 gap-y-3 md:grid-cols-2">
               {INVESTMENT_IMPORT_FIELDS.map((field) => (
                 <div key={field.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-3">
                   <Label htmlFor={`investment-map-${field.key}`} className="text-xs">
@@ -427,7 +449,13 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                   </select>
                 </div>
               ))}
-            </div>
+            </div>}
+            {isPdf && (
+              <div className="border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                The Superhero AMIT statement layout is detected automatically. Personal header text is not retained;
+                annual tax components and cost-base adjustments are previewed by holding before import.
+              </div>
+            )}
             <div className="grid gap-4 border-t border-border pt-4 md:grid-cols-3">
               <div className="space-y-2">
                 <Label>Date format</Label>
@@ -467,7 +495,10 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                 </Select>
               </div>
             </div>
-            <Button onClick={runPreview} disabled={busy !== null || missingRequired.length > 0}>
+            <Button
+              onClick={runPreview}
+              disabled={busy !== null || (!isPdf && !isSuperheroIncome && missingRequired.length > 0)}
+            >
               {busy === "preview" && <RiLoader4Line className="size-4 animate-spin" />} Preview import
             </Button>
           </CardContent>

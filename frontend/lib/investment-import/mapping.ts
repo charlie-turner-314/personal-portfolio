@@ -169,13 +169,31 @@ const SUPERHERO_TRANSACTION_HEADERS = [
   "tax",
 ];
 
+const SUPERHERO_AUS_INCOME_HEADERS = [
+  "income type", "security", "ex date", "payment date", "dividend rate per unit",
+  "participating shares", "unfranked amount", "franked amount", "total payment",
+  "withholding tax", "net amount", "franking credit",
+];
+
+const SUPERHERO_US_INCOME_HEADERS = [
+  "security description", "ex date", "payment date", "dividend rate per unit",
+  "participating shares", "total payment", "withholding tax", "net amount",
+];
+
 export function isSuperheroTransactionHeader(cells: string[]): boolean {
   const available = new Set(cells.map(normalized));
   return SUPERHERO_TRANSACTION_HEADERS.every((header) => available.has(header));
 }
 
+export function isSuperheroIncomeHeader(cells: string[]): boolean {
+  const available = new Set(cells.map(normalized));
+  return SUPERHERO_AUS_INCOME_HEADERS.every((header) => available.has(header))
+    || SUPERHERO_US_INCOME_HEADERS.every((header) => available.has(header));
+}
+
 export function isLikelySuperheroReportHeader(cells: string[]): boolean {
   return isSuperheroTransactionHeader(cells)
+    || isSuperheroIncomeHeader(cells)
     || cells.filter((cell) => cell.trim().length > 0).length >= 3;
 }
 
@@ -208,6 +226,20 @@ export function suggestInvestmentImportMapping(headers: string[], provider = "ge
     ]>) {
       mapping[field] = headerByNormalized.get(normalized(header)) ?? null;
     }
+  }
+  if (providerKey === "superhero" && isSuperheroIncomeHeader(headers)) {
+    mapping.occurred_at = headerByNormalized.get("payment date") ?? null;
+    mapping.activity_type = headerByNormalized.get("income type") ?? null;
+    mapping.asset_symbol = headerByNormalized.get("security")
+      ?? headerByNormalized.get("security description")
+      ?? null;
+    mapping.gross_amount = headerByNormalized.get("total payment") ?? null;
+    mapping.net_amount = headerByNormalized.get("net amount") ?? null;
+    mapping.tax_amount = headerByNormalized.get("withholding tax") ?? null;
+    mapping.ex_date = headerByNormalized.get("ex date") ?? null;
+    mapping.franked_amount = headerByNormalized.get("franked amount") ?? null;
+    mapping.unfranked_amount = headerByNormalized.get("unfranked amount") ?? null;
+    mapping.franking_credit = headerByNormalized.get("franking credit") ?? null;
   }
   return mapping;
 }

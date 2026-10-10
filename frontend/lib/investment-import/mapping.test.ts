@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_INVESTMENT_IMPORT_MAPPING,
   isLikelySuperheroReportHeader,
+  isSuperheroIncomeHeader,
   isSuperheroTransactionHeader,
   reconcileSavedInvestmentMapping,
   suggestInvestmentImportMapping,
@@ -48,6 +49,27 @@ describe("investment import mapping", () => {
     expect(isLikelySuperheroReportHeader(["Entity Name", "Example"])).toBe(false);
     expect(isLikelySuperheroReportHeader([
       "Payment Date", "Security Code", "Gross Amount", "Franking Credit",
+    ])).toBe(true);
+  });
+
+  it("recognises the exact Superhero AUS and US income headers", () => {
+    const aus = [
+      "Income Type", "Security", "Ex Date", "Payment Date", "Dividend Rate Per Unit ",
+      "Participating Shares ", "Unfranked Amount ", "Franked Amount ", "Total Payment  ",
+      "Withholding Tax ", "Net Amount ", "Franking Credit ",
+    ];
+    expect(isSuperheroIncomeHeader(aus)).toBe(true);
+    expect(suggestInvestmentImportMapping(aus, "Superhero")).toMatchObject({
+      occurred_at: "Payment Date",
+      activity_type: "Income Type",
+      asset_symbol: "Security",
+      gross_amount: "Total Payment  ",
+      net_amount: "Net Amount ",
+      tax_amount: "Withholding Tax ",
+    });
+    expect(isSuperheroIncomeHeader([
+      "Security Description", "Ex Date", "Payment Date", "Dividend Rate Per Unit",
+      "Participating Shares", "Total Payment", "Withholding Tax", "Net Amount",
     ])).toBe(true);
   });
 

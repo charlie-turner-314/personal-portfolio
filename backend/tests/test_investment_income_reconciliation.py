@@ -332,6 +332,58 @@ def test_unmatched_statement_is_reviewed_and_does_not_create_cash_income(db_sess
     assert item.status == "pending"
 
 
+def test_annual_aggregate_lists_financial_year_distributions_for_explicit_link(db_session, accounts):
+    user, investment, _ = accounts
+    second_cash = CanonicalActivityInput(
+        activity_type="distribution",
+        occurred_at=datetime(2025, 1, 15),
+        asset_symbol="VAS",
+        asset_type="fund",
+        gross_amount="30",
+        net_amount="30",
+        currency="AUD",
+    )
+    apply_batch(
+        db_session,
+        user_id=user.id,
+        account_id=investment.id,
+        batch=_batch("cash_broker", _buy(), _cash_distribution(), ("cash-2", second_cash)),
+    )
+    annual = _annual_statement(
+        cost_base_increase="0",
+        annual_aggregate=True,
+        statement_period_start="2024-07-01",
+        statement_period_end="2025-06-30",
+    )
+    apply_batch(
+        db_session,
+        user_id=user.id,
+        account_id=investment.id,
+        batch=_batch("fund_statement", annual),
+    )
+
+    events = db_session.query(InvestmentIncomeEvent).filter_by(account_id=investment.id).order_by(
+        InvestmentIncomeEvent.pay_date,
+    ).all()
+    assert len(events) == 2
+    item = db_session.query(InvestmentReconciliationItem).filter_by(
+        account_id=investment.id, kind="annual_statement",
+    ).one()
+    assert item.details["annual_aggregate"] is True
+    assert set(item.candidate_income_event_ids) == {str(event.id) for event in events}
+
+    resolve_reconciliation_item(
+        db_session,
+        user_id=user.id,
+        item_id=item.id,
+        action="link_income_event",
+        income_event_id=events[0].id,
+    )
+    db_session.refresh(events[0])
+    assert events[0].franking_credit == Decimal("12.86")
+    assert db_session.query(InvestmentIncomeEvent).filter_by(account_id=investment.id).count() == 2
+
+
 def test_drp_retains_income_and_links_reinvestment_trade(db_session, accounts):
     user, investment, _ = accounts
     drp = CanonicalActivityInput(
