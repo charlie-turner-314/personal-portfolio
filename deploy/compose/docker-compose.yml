@@ -112,7 +112,7 @@ services:
   worker:
     image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
     container_name: personal-portfolio-worker
-    command: celery -A celery_app worker --loglevel=info --concurrency=4
+    command: celery -A celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-1}
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

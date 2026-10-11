@@ -9,6 +9,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    concurrency:
+      group: publish-${{ github.ref }}-${{ matrix.service }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -19,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -35,28 +40,29 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker meta
+        if: github.ref_type != 'tag'
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ matrix.service }}
           tags: |
-            type=ref,event=tag
             type=raw,value=edge,enable={{is_default_branch}}
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
 
       - name: Build & push
+        if: github.ref_type != 'tag'
         uses: docker/build-push-action@v6
         with:
           context: ./${{ matrix.service }}
           file: ./${{ matrix.service }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: type=gha,scope=production-${{ matrix.service }}
+          cache-to: type=gha,scope=production-${{ matrix.service }},mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # backend/Dockerfile's frontend-deps stage renders report
-          # newsletters (npx tsx frontend/emails/render-report.ts, invoked
-          # from backend/tasks/report_tasks.py) and needs frontend/ as a
+          # backend/Dockerfile bundles the report renderer and needs frontend/ as a
           # named additional context since the primary context stays
           # ./backend. No-op for the frontend matrix entry.
           build-contexts: |
@@ -65,6 +71,16 @@ jobs:
             NEXT_PUBLIC_DISABLE_SIGN_UPS=${{ vars.NEXT_PUBLIC_DISABLE_SIGN_UPS || 'false' }}
             NEXT_PUBLIC_DEMO_EMAIL=${{ vars.NEXT_PUBLIC_DEMO_EMAIL || '' }}
             NEXT_PUBLIC_DEMO_PASSWORD=${{ vars.NEXT_PUBLIC_DEMO_PASSWORD || '' }}
+
+      - name: Promote exact-commit images for release (no rebuild)
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ matrix.service }}
+        run: |
+          COMMIT=$(git rev-parse HEAD)
+          git merge-base --is-ancestor "$COMMIT" origin/main
+          python3 scripts/promote-release-image.py "$IMAGE" "$COMMIT" "$RELEASE_TAG"
 
   release_bundle:
     if: startsWith(github.ref, 'refs/tags/v')
