@@ -87,3 +87,7 @@ deploy/railway/V1_TO_V2_MIGRATION.md
 # Private release rehearsal state and backups
 .release-lab/
 .release-backups/
+
+# Browser test output (may contain account/session details)
+frontend/test-results/
+frontend/playwright-report/

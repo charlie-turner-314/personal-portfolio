@@ -159,7 +159,7 @@ services:
 
   worker:
     image: ghcr.io/charlie-turner-314/personal-portfolio-backend:${APP_VERSION:-edge}
-    command: celery -A celery_app worker --loglevel=info --concurrency=4
+    command: celery -A celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-1}
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
