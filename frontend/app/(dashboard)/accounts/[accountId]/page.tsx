@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { AccountDetail } from "./account-detail";
-import { getAccountById, getAccountBalanceHistory } from "@/lib/actions/accounts";
+import { getAccountById, getAccountBalanceHistory, getAccountFreshnessForAccount } from "@/lib/actions/accounts";
 import { getTransactionsForAccount } from "@/lib/actions/transactions";
 import { getUserCategories } from "@/lib/actions/categories";
 import { listHoldings, type Holding } from "@/lib/api/investments";
@@ -33,7 +33,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
   const financialYearStart = getAustralianFinancialYearStartYear();
 
   // Then fetch remaining data in parallel
-  const [balanceHistory, transactions, categories, holdings, superAccount, superCapProgress] =
+  const [balanceHistory, transactions, categories, holdings, superAccount, superCapProgress, freshness] =
     await Promise.all([
       getAccountBalanceHistory(accountId, null),
       getTransactionsForAccount(accountId),
@@ -43,6 +43,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
         : Promise.resolve([] as Holding[]),
       isSuperAccount ? getSuperAccountDetails(accountId) : Promise.resolve(null),
       isSuperAccount ? getSuperCapProgress(financialYearStart) : Promise.resolve(null),
+      getAccountFreshnessForAccount(accountId),
     ]);
 
   return (
@@ -52,6 +53,12 @@ export default async function AccountPage({ params }: AccountPageProps) {
         balanceHistory={balanceHistory}
         initialTransactions={transactions}
         categories={categories}
+        freshness={freshness ?? {
+          source: "manual",
+          status: "manual",
+          lastUpdatedAt: null,
+          dataThrough: null,
+        }}
       />
       {isSuperAccount && superAccount && (
         <SuperAccountManager
