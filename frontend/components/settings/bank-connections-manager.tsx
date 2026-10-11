@@ -67,20 +67,28 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const [pollingIds, setPollingIds] = useState<Set<string>>(new Set());
   const [syncProgress, setSyncProgress] = useState<Map<string, SyncProgress>>(new Map());
   const [elapsedSeconds, setElapsedSeconds] = useState<Map<string, number>>(new Map());
+  const [syncNotices, setSyncNotices] = useState<Map<string, string>>(new Map());
   const [upToken, setUpToken] = useState("");
   const [isConnectingUp, setIsConnectingUp] = useState(false);
   const [upError, setUpError] = useState<string | null>(null);
   const pollingTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const elapsedTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const initialSyncTimes = useRef<Map<string, string | null>>(new Map());
+  const mounted = useRef(false);
 
   // Cleanup all timers on unmount
   useEffect(() => {
+    mounted.current = true;
     const pollingTimersForCleanup = pollingTimers.current;
     const elapsedTimersForCleanup = elapsedTimers.current;
+    const initialTimesForCleanup = initialSyncTimes.current;
     return () => {
+      mounted.current = false;
       pollingTimersForCleanup.forEach((timer) => clearTimeout(timer));
       elapsedTimersForCleanup.forEach((timer) => clearInterval(timer));
+      pollingTimersForCleanup.clear();
+      elapsedTimersForCleanup.clear();
+      initialTimesForCleanup.clear();
     };
   }, []);
 
@@ -120,6 +128,11 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const startPolling = useCallback(
     (connectionId: string, currentLastSyncedAt: string | null) => {
       initialSyncTimes.current.set(connectionId, currentLastSyncedAt);
+      setSyncNotices((prev) => {
+        const next = new Map(prev);
+        next.delete(connectionId);
+        return next;
+      });
       setPollingIds((prev) => new Set([...prev, connectionId]));
 
       // Start elapsed seconds ticker (clear any stale one first)
@@ -135,18 +148,22 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
       }, 1000);
       elapsedTimers.current.set(connectionId, elapsedInterval);
 
-      let elapsed = 0;
+      const pollingStartedAt = Date.now();
       const poll = async () => {
-        elapsed += 3000;
-        if (elapsed > 600000) {
+        if (Date.now() - pollingStartedAt >= 600000) {
+          setSyncNotices((prev) => new Map(prev).set(connectionId,
+            "Sync completion could not be confirmed after 10 minutes. The job may still be running; check worker logs before retrying."));
           stopPolling(connectionId);
           return;
         }
 
         try {
-          const resp = await fetch(`/api/enable-banking/status/${connectionId}`);
+          const resp = await fetch(`/api/enable-banking/status/${encodeURIComponent(connectionId)}`, {
+            signal: AbortSignal.timeout(30000),
+          });
           if (!resp.ok) throw new Error(`Status ${resp.status}`);
           const data = await resp.json();
+          if (!mounted.current) return;
 
           if (data.sync_progress) {
             setSyncProgress((prev) => new Map(prev).set(connectionId, data.sync_progress));
@@ -168,6 +185,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
           // Network error, keep polling
         }
 
+        if (!mounted.current) return;
         const timer = setTimeout(poll, 3000);
         pollingTimers.current.set(connectionId, timer);
       };
@@ -181,7 +199,8 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   // Auto-detect connections that are active but have never synced (initial sync after wizard)
   useEffect(() => {
     for (const conn of connections) {
-      if (conn.status === "active" && !conn.lastSyncedAt && !pollingIds.has(conn.id)) {
+      if (conn.status === "active" && !conn.lastSyncedAt && !conn.lastSyncError &&
+          !pollingIds.has(conn.id) && !initialSyncTimes.current.has(conn.id)) {
         startPolling(conn.id, null);
         setSyncingIds((prev) => new Set([...prev, conn.id]));
       }
@@ -501,10 +520,10 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                         if (progress && progress.accounts_total > 0) {
                           return `Syncing account ${progress.accounts_done} of ${progress.accounts_total} · ${progress.transactions_created} transactions imported`;
                         }
-                        return "Preparing sync...";
+                        return "Waiting for sync status...";
                       })()}
                     </span>
-                    <span>{elapsedSeconds.get(connection.id) ?? 0}s elapsed</span>
+                    <span>{elapsedSeconds.get(connection.id) ?? 0}s waiting on this page</span>
                   </div>
                   <Progress
                     value={(() => {
@@ -516,6 +535,11 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                     })()}
                   />
                 </div>
+              )}
+              {syncNotices.has(connection.id) && (
+                <p role="status" className="mt-3 text-sm text-muted-foreground">
+                  {syncNotices.get(connection.id)}
+                </p>
               )}
             </div>
           ))}
