@@ -1,8 +1,49 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from app.integrations.up_adapter import UpAdapter, UpApiError
+from tasks.enable_banking_tasks import _account_sync_start_date
+
+
+@pytest.mark.parametrize("value,expected", [
+    (date(2026, 4, 14), "2026-04-14T00:00:00+00:00"),
+    (datetime(2026, 4, 14, 12, 30), "2026-04-14T12:30:00+00:00"),
+    (datetime(2026, 4, 14, 12, 30, tzinfo=timezone.utc), "2026-04-14T12:30:00+00:00"),
+    (datetime(2026, 4, 14, 0, 30, tzinfo=timezone(timedelta(hours=10))), "2026-04-13T14:30:00+00:00"),
+])
+def test_transaction_filters_are_timezone_qualified_timestamps(value, expected):
+    def handler(request):
+        assert request.url.params["filter[since]"] == expected
+        assert request.url.params["filter[until]"] == expected
+        return httpx.Response(200, json={"data": [], "links": {}})
+
+    assert UpAdapter("token", client=_client(handler)).fetch_transactions("acc-1", value, value) == []
+
+
+@pytest.mark.parametrize("last_synced_at", [None, datetime(2026, 4, 15, 12, tzinfo=timezone.utc)])
+def test_real_sync_lookback_dates_are_accepted_by_up_contract(last_synced_at):
+    start = _account_sync_start_date(
+        SimpleNamespace(last_synced_at=last_synced_at), SimpleNamespace(initial_sync_days=180)
+    )
+    assert type(start) is date
+
+    def handler(request):
+        # The real API rejects YYYY-MM-DD even though mocks used to accept it.
+        assert request.url.params["filter[since]"] == f"{start.isoformat()}T00:00:00+00:00"
+        return httpx.Response(200, json={"data": [], "links": {}})
+
+    assert UpAdapter("token", client=_client(handler)).fetch_transactions("acc-1", start) == []
+
+
+def test_unbounded_transaction_request_omits_date_filters():
+    def handler(request):
+        assert not request.url.params
+        return httpx.Response(200, json={"data": [], "links": {}})
+
+    assert UpAdapter("token", client=_client(handler)).fetch_transactions("acc-1") == []
 
 
 def _client(handler):

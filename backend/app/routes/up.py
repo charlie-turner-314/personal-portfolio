@@ -106,6 +106,10 @@ def sync_connection(
     if connection.status != "active":
         raise HTTPException(status_code=400, detail="Up connection is not active")
     from tasks.up_tasks import sync_up_connection
+    # Polling must not mistake a previous attempt's error for the new job's
+    # outcome while it waits in the queue. Commit before publishing the task.
+    connection.last_sync_error = None
+    db.commit()
     task = sync_up_connection.delay(str(connection.id))
     return {"message": "Up sync queued", "task_id": task.id}
 

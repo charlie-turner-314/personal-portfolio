@@ -70,6 +70,40 @@ describe("BankConnectionsManager Up connection", () => {
   it("does not start automatic polling for a connection with a known sync error", () => {
     render(<BankConnectionsManager connections={[{ ...connection, lastSyncError: "Sync failed" }]} />);
     expect(screen.queryByText(/waiting on this page/)).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("Sync failed");
+  });
+
+  it("shows a polled error immediately even before refreshed props arrive", async () => {
+    vi.useFakeTimers();
+    const fetchStatus = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ last_sync_error: "Up API returned HTTP 400" }) });
+    vi.stubGlobal("fetch", fetchStatus);
+    render(<BankConnectionsManager connections={[connection]} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Sync failed: Up API returned HTTP 400");
+    expect(screen.queryByText(/waiting on this page/)).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(fetchStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the old error on retry and keeps it cleared on completion", async () => {
+    vi.useFakeTimers();
+    mocks.triggerUpSync.mockResolvedValue({ success: true });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ last_synced_at: "2026-10-11T00:00:00Z", last_sync_error: null }) }));
+    render(<BankConnectionsManager connections={[{ ...connection, lastSyncError: "Old failure" }]} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Old failure");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Sync now/i })); });
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/waiting on this page/)).toBeNull();
+  });
+
+  it.each([false, true])("shows queueing failures instead of silently stopping (throw=%s)", async (throws) => {
+    if (throws) mocks.triggerUpSync.mockRejectedValue(new Error("Network unavailable"));
+    else mocks.triggerUpSync.mockResolvedValue({ success: false, error: "Queue unavailable" });
+    render(<BankConnectionsManager connections={[{ ...connection, lastSyncedAt: new Date() }]} />);
+    fireEvent.click(screen.getByRole("button", { name: /Sync now/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(throws ? "Unable to start sync" : "Queue unavailable");
   });
   it("submits the token once and moves to account mapping", async () => {
     mocks.createUpConnection.mockResolvedValue({ success: true, connectionId: "up-connection-1" });
