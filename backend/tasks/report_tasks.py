@@ -18,14 +18,12 @@ from app.services.report_data_service import build_report_payload
 from app.services.report_schedule_service import compute_next_run_at
 
 # In a local checkout, backend/ and frontend/ are siblings, so this resolves
-# correctly by default. Inside the celery-worker/celery-beat containers
-# (backend/Dockerfile), the frontend render assets + node_modules are baked
-# in at /frontend/emails and FRONTEND_EMAILS_DIR is set accordingly in
-# docker-compose.yml -- see that file and backend/Dockerfile's frontend-deps
-# stage.
+# correctly by default. Production uses a self-contained JavaScript bundle
+# selected by REPORT_RENDERER_PATH; local source development uses npx tsx.
 _DEFAULT_FRONTEND_EMAILS_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "emails"
 _FRONTEND_EMAILS_DIR = Path(os.environ.get("FRONTEND_EMAILS_DIR", str(_DEFAULT_FRONTEND_EMAILS_DIR)))
-_RENDER_SCRIPT = _FRONTEND_EMAILS_DIR / "render-report.ts"
+_RENDER_BUNDLE = os.environ.get("REPORT_RENDERER_PATH")
+_RENDER_SCRIPT = Path(_RENDER_BUNDLE) if _RENDER_BUNDLE else _FRONTEND_EMAILS_DIR / "render-report.ts"
 
 
 @celery_app.task(name="tasks.report_tasks.check_due_reports")
@@ -135,15 +133,15 @@ def send_report_run(report_run_id: str) -> None:
             payload["manage_url"] = f"{frontend_base_url}/reports/{report.id}"
 
             result = subprocess.run(
-                ["npx", "tsx", str(_RENDER_SCRIPT)],
+                ["node", str(_RENDER_SCRIPT)] if _RENDER_BUNDLE else ["npx", "tsx", str(_RENDER_SCRIPT)],
                 input=json.dumps(payload),
                 capture_output=True,
                 text=True,
                 timeout=60,
-                cwd=str(_RENDER_SCRIPT.parent.parent),
+                cwd=str(_RENDER_SCRIPT.parent if _RENDER_BUNDLE else _RENDER_SCRIPT.parent.parent),
             )
             if result.returncode != 0:
-                raise RuntimeError(f"render-report.ts failed: {result.stderr}")
+                raise RuntimeError(f"Report renderer failed: {result.stderr}")
             rendered = json.loads(result.stdout)
 
             adapter = get_mail_adapter()

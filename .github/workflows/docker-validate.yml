@@ -31,9 +31,15 @@ jobs:
           file: ./${{ matrix.service }}/Dockerfile
           platforms: linux/amd64
           push: false
+          load: true
+          tags: local/${{ matrix.service }}:test
+          cache-from: type=gha,scope=production-${{ matrix.service }}
           build-contexts: |
             ${{ matrix.service == 'backend' && 'frontend=./frontend' || '' }}
           build-args: |
             NEXT_PUBLIC_DISABLE_SIGN_UPS=${{ vars.NEXT_PUBLIC_DISABLE_SIGN_UPS || 'false' }}
             NEXT_PUBLIC_DEMO_EMAIL=${{ vars.NEXT_PUBLIC_DEMO_EMAIL || '' }}
             NEXT_PUBLIC_DEMO_PASSWORD=${{ vars.NEXT_PUBLIC_DEMO_PASSWORD || '' }}
+
+      - name: Smoke runtime entry points offline
+        run: python3 scripts/test-image-runtime.py '${{ matrix.service }}' 'local/${{ matrix.service }}:test'
