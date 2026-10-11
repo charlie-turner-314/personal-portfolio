@@ -68,6 +68,8 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const [syncProgress, setSyncProgress] = useState<Map<string, SyncProgress>>(new Map());
   const [elapsedSeconds, setElapsedSeconds] = useState<Map<string, number>>(new Map());
   const [syncNotices, setSyncNotices] = useState<Map<string, string>>(new Map());
+  // Null explicitly clears a stale server-prop error after a retry/success.
+  const [syncErrors, setSyncErrors] = useState<Map<string, string | null>>(new Map());
   const [upToken, setUpToken] = useState("");
   const [isConnectingUp, setIsConnectingUp] = useState(false);
   const [upError, setUpError] = useState<string | null>(null);
@@ -171,12 +173,14 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
 
           const startedAt = initialSyncTimes.current.get(connectionId);
           if (data.last_synced_at && data.last_synced_at !== startedAt) {
+            setSyncErrors((prev) => new Map(prev).set(connectionId, null));
             stopPolling(connectionId);
             router.refresh();
             return;
           }
 
           if (data.last_sync_error) {
+            setSyncErrors((prev) => new Map(prev).set(connectionId, data.last_sync_error));
             stopPolling(connectionId);
             router.refresh();
             return;
@@ -209,6 +213,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
 
   const handleSync = async (connectionId: string) => {
     setSyncingIds((prev) => new Set(prev).add(connectionId));
+    setSyncErrors((prev) => new Map(prev).set(connectionId, null));
 
     const conn = connections.find((c) => c.id === connectionId);
     const currentLastSyncedAt = conn?.lastSyncedAt?.toISOString() || null;
@@ -216,7 +221,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
     try {
       const result = conn?.provider === "up" ? await triggerUpSync(connectionId) : await triggerSync(connectionId);
       if (!result.success) {
-        console.error("Sync failed:", result.error);
+        setSyncErrors((prev) => new Map(prev).set(connectionId, result.error || "Unable to start sync. Please try again."));
         setSyncingIds((prev) => {
           const next = new Set(prev);
           next.delete(connectionId);
@@ -226,6 +231,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
       }
       startPolling(connectionId, currentLastSyncedAt);
     } catch {
+      setSyncErrors((prev) => new Map(prev).set(connectionId, "Unable to start sync. Please try again."));
       setSyncingIds((prev) => {
         const next = new Set(prev);
         next.delete(connectionId);
@@ -439,9 +445,9 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                       </span>
                     </div>
                   )}
-                  {connection.lastSyncError && connection.status === "error" && (
-                    <p className="mt-1 text-xs text-destructive">
-                      {connection.lastSyncError}
+                  {(syncErrors.has(connection.id) ? syncErrors.get(connection.id) : connection.lastSyncError) && (
+                    <p role="alert" className="mt-1 text-xs text-destructive">
+                      Sync failed: {syncErrors.has(connection.id) ? syncErrors.get(connection.id) : connection.lastSyncError}
                     </p>
                   )}
                 </div>
