@@ -80,6 +80,8 @@ Promotion is blocked: GitHub reports merge conflicts and a failing CodeQL gate. 
 
 ### Local troubleshooting
 
+For a bank sync that never starts, inspect the worker logs for `Received unregistered task` before retrying or reconnecting. The Up incident was caused by `tasks.up_tasks` missing from Celery's explicit worker imports: API-side lazy imports allowed queuing while a fresh worker discarded the task. `backend/tests/test_celery_task_registration.py` checks startup registration in a fresh process so incidental test imports cannot hide this regression. The frontend waiting counter measures time on that page, not worker progress; it resets on refresh. After deploying the registration fix, retry the existing connection once (or let its scheduled sync run); do not re-enter or print the token. Merging to develop alone does not update the Pi.
+
 If a build stalls before downloading public images, inspect `ps` for a hanging `docker-credential-desktop`. A temporary, credential-free Docker config plus an explicit Docker Desktop socket can isolate the issue without changing the user's saved logins. Only use this for public images; private registry pulls still require authentication.
 
 Check both host disk space and Docker VM disk space. This machine's Docker VM was full even though the Mac had 21 GiB free. Reclaim reviewed, unused build cache and obsolete untagged Syllogic images; preserve active images and all data volumes. Do not use broad system/volume pruning.
