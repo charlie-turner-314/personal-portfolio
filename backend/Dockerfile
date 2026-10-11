@@ -31,7 +31,8 @@ ENV REPORT_RENDERER_PATH=/frontend/render-report.cjs
 # Match Node's Debian generation; copy only Node, not npm or its dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 app
+    && useradd --create-home --uid 10001 app \
+    && chown app:app /app
 COPY --from=frontend-deps /usr/local/bin/node /usr/local/bin/node
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app . .

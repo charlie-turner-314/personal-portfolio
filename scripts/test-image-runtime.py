@@ -12,6 +12,10 @@ def run(*args, payload=""):
 
 
 if service == "backend":
+    # Beat stores its scheduler file in WORKDIR; COPY --chown does not change
+    # ownership of that pre-existing directory.
+    result = run("-e", "require('fs').accessSync('/app', require('fs').constants.W_OK)")
+    assert result.returncode == 0, result.stderr
     payload = {"report_name": "Image smoke report", "generated_at": "2026-10-11T00:00:00Z", "accounts": [], "transactions": {"mode_label": "Recent", "items": []}, "manage_url": "https://example.test/reports"}
     result = run("/frontend/render-report.cjs", payload=json.dumps(payload))
     assert result.returncode == 0, result.stderr
