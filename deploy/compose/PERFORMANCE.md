@@ -66,6 +66,31 @@ Queue delays and required human acceptance remain outside these ranges.
 
 ## Current status
 
-Baseline recorded. Native publishing/shared-cache implementation in progress;
-estimates above have **not** yet been validated by scenario benchmarks. Do not
-describe the goal as completed or the Pi as the sole remaining bottleneck yet.
+Native publishing passed its first live benchmark at commit
+`0f251b1de46fbaf7562edd58d7965abe3ec31670`:
+[Actions run 38129619888](https://github.com/charlie-turner-314/personal-portfolio/actions/runs/38129619888).
+Created 09:47:22 UTC and completed 09:50:58 UTC on 2026-10-11: **3m 36s**
+including scheduling, four builds, native runtime checks and index assembly.
+
+| Native build | Build/publish step | Whole native job |
+| --- | ---: | ---: |
+| Frontend arm64 | 1m 51s | 2m 18s |
+| Backend arm64 | 1m 59s | 2m 35s |
+| Frontend amd64 | 2m 15s | 2m 48s |
+| Backend amd64 | 2m 24s | 3m 07s |
+
+Compared with the prior cold publications (16m 10s and 11m 03s), this run
+was approximately 78% and 67% shorter, respectively. These are observed runs,
+not controlled identical-input comparisons or end-to-end deployment speedups.
+All four native runtime checks and both multiarch revision validations passed;
+the initial PR CI, Docker validation, Compose E2E and CodeQL runs also passed.
+This benchmark did not deploy to the Pi or change production data.
+
+PR Docker validation now imports the trusted registry cache read-only, with the
+old GHA cache retained as a fallback. It cannot export to the trusted cache.
+The cache benefit needs measurement after trusted branch publication seeds it.
+
+Scenario benchmarks, warm changed-source timings, duplicate-build consolidation
+and incremental Pi transfer/downtime measurements remain outstanding. The
+end-to-end estimates above are **not validated**. Do not describe the goal as
+completed or the Pi as the sole remaining bottleneck yet.
