@@ -58,6 +58,24 @@ def temporary_config(name):
     return handle.name
 
 
+def encrypt_state():
+    """Upgrade only this checkout's private state, verifying before removing plaintext."""
+    path = STATE / 'compose.json'
+    if not path.exists():
+        raise SystemExit('No plaintext state to upgrade.')
+    validate_config(json.loads(path.read_text()))
+    cipher()
+    for name in sorted(PRIVATE_FILES):
+        path = STATE / name
+        if path.exists():
+            data = path.read_text()
+            save_private(name, data)
+            if load(name) != data:
+                raise SystemExit('Encrypted state verification failed; plaintext retained.')
+            path.unlink()
+    print('Verified encrypted copies; removed only matching plaintext lab config/credentials.')
+
+
 def run(args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
@@ -365,7 +383,7 @@ def smoke():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['prepare', 'up', 'rehearse', 'cached-bootstrap', 'repair-auth', 'smoke', 'verify', 'accounts', 'status', 'stop'])
+    parser.add_argument('action', choices=['prepare', 'up', 'rehearse', 'cached-bootstrap', 'repair-auth', 'smoke', 'verify', 'accounts', 'status', 'stop', 'encrypt-state'])
     parser.add_argument('--cached-image', default='syllogic-frontend:local')
     parser.add_argument('--source-db', default='syllogic-postgres')
     parser.add_argument('--source-app', default='syllogic-app')
@@ -381,3 +399,4 @@ if __name__ == '__main__':
     elif args.action == 'accounts': accounts()
     elif args.action == 'status': run(compose('ps', '-a'))
     elif args.action == 'stop': run(compose('stop'))
+    elif args.action == 'encrypt-state': encrypt_state()
