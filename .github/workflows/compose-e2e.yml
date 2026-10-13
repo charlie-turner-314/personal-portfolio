@@ -64,6 +64,9 @@ jobs:
       - name: Verify clean database migration contract
         run: ./scripts/compose-migration-smoke.sh
 
+      - name: Verify trade backfill preserves existing dates
+        run: python3 scripts/test-trade-backfill.py --container personal-portfolio-postgres
+
       - name: Run Chromium end-to-end happy path
         working-directory: frontend
         env:
