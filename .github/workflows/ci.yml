@@ -77,6 +77,14 @@ jobs:
       working-directory: ./frontend
       run: pnpm install --frozen-lockfile
 
+    - name: Build landing site
+      working-directory: ./landing
+      env:
+        NEXT_TELEMETRY_DISABLED: 1
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm build
+
     - name: Verify deployment contract
       id: deploy-contract
       run: ./scripts/verify-deploy-contract.sh
