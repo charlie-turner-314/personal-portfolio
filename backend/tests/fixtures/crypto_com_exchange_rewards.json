@@ -1,0 +1,10 @@
+{
+  "id": 1,
+  "method": "private/staking/get-reward-history",
+  "code": 0,
+  "result": {
+    "data": [
+      {"staking_inst_name": "ETH.staked", "underlying_inst_name": "ETH", "reward_inst_name": "ETH", "reward_quantity": "0.00250000", "staked_balance": "2.00000000", "event_timestamp_ms": 1767434400000}
+    ]
+  }
+}

@@ -46,13 +46,15 @@ import {
 import { EditHoldingDialog } from "./EditHoldingDialog";
 import { OwnerBadges } from "@/components/household/owner-badges";
 
-type Filter = "All" | "ETF" | "Equity" | "Cash";
+type Filter = "All" | "ETF" | "Equity" | "Crypto" | "Cash" | "Other";
 type SortKey = "sym" | "acct" | "type" | "qty" | "price" | "value" | "pnl";
 
-export function TypeBadge({ type }: { type: "etf" | "equity" | "cash" }) {
+export function TypeBadge({ type }: { type: Holding["instrument_type"] }) {
   if (type === "etf") return <Badge>ETF</Badge>;
   if (type === "equity") return <Badge variant="secondary">Equity</Badge>;
-  return <Badge variant="outline">Cash</Badge>;
+  if (type === "crypto") return <Badge variant="secondary">Crypto</Badge>;
+  if (type === "cash") return <Badge variant="outline">Cash</Badge>;
+  return <Badge variant="outline">Other</Badge>;
 }
 
 export function HoldingsTableHF({
@@ -94,7 +96,9 @@ export function HoldingsTableHF({
           filter === "All" ||
           (filter === "ETF" && h.instrument_type === "etf") ||
           (filter === "Equity" && h.instrument_type === "equity") ||
-          (filter === "Cash" && h.instrument_type === "cash"),
+          (filter === "Crypto" && h.instrument_type === "crypto") ||
+          (filter === "Cash" && h.instrument_type === "cash") ||
+          (filter === "Other" && h.instrument_type === "other"),
       )
       .map((h) => {
         const qty = Number(h.quantity);
@@ -173,7 +177,7 @@ export function HoldingsTableHF({
           variant="outline"
           size="sm"
         >
-          {(["All", "ETF", "Equity", "Cash"] as Filter[]).map((t) => (
+          {(["All", "ETF", "Equity", "Crypto", "Cash", "Other"] as Filter[]).map((t) => (
             <ToggleGroupItem key={t} value={t} aria-label={`Filter ${t}`}>
               {t}
             </ToggleGroupItem>

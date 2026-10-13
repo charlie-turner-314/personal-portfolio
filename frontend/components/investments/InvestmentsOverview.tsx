@@ -10,6 +10,7 @@ import {
 } from "@/lib/actions/investments";
 import {
   deleteHolding,
+  type BrokerConnection,
   type Holding,
   type PortfolioSummary,
   type ValuationPoint,
@@ -24,6 +25,7 @@ import { AllocationRow } from "./AllocationRow";
 import { HoldingsTableHF } from "./HoldingsTableHF";
 import { PortfolioIncomeSummary } from "./PortfolioIncomeSummary";
 import { PortfolioCgtSummary } from "./PortfolioCgtSummary";
+import { BrokerConnectionsPanel } from "./BrokerConnectionsPanel";
 import type { CgtFinancialYearSummary } from "./cgt-types";
 import type { PortfolioIncomeSummary as IncomeSummary } from "./income-types";
 
@@ -34,6 +36,7 @@ export function InvestmentsOverview({
   initialRange = "1M",
   incomeSummaries = [],
   cgtSummaries = [],
+  connections = [],
   isDemoRestricted = false,
 }: {
   portfolio: PortfolioSummary;
@@ -42,6 +45,7 @@ export function InvestmentsOverview({
   initialRange?: Range;
   incomeSummaries?: IncomeSummary[];
   cgtSummaries?: CgtFinancialYearSummary[];
+  connections?: BrokerConnection[];
   isDemoRestricted?: boolean;
 }) {
   const router = useRouter();
@@ -144,7 +148,7 @@ export function InvestmentsOverview({
     setSyncing(true);
     try {
       await syncAllInvestmentsAction();
-      toast.success("Prices refreshing — updates in a moment");
+      toast.success("Portfolio refresh queued — updates will appear shortly");
       // Give the in-process background sync ~10 s to complete before
       // refreshing. The sync runs in the FastAPI worker after responding.
       setTimeout(() => router.refresh(), 10_000);
@@ -163,10 +167,10 @@ export function InvestmentsOverview({
       size="sm"
       onClick={onSync}
       disabled={syncing}
-      title="Refresh prices"
+      title="Refresh portfolio"
     >
       <RiRefreshLine className={syncing ? "size-3 animate-spin" : "size-3"} />
-      {syncing ? "Syncing…" : "Refresh prices"}
+      {syncing ? "Syncing…" : "Refresh portfolio"}
     </Button>
   );
 
@@ -183,6 +187,8 @@ export function InvestmentsOverview({
         staleCount={staleCount}
         headerAction={refreshButton}
       />
+
+      <BrokerConnectionsPanel connections={connections} readOnly={isDemoRestricted} />
 
       <Card className={pending ? "opacity-70 transition-opacity" : "transition-opacity"}>
         <CardContent className="p-4">

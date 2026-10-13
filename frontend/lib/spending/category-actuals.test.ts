@@ -20,4 +20,20 @@ describe("buildLinkedExpenseAmountSql", () => {
     expect(query.params).toContain("2026-04-30T23:59:59.999Z");
     expect(query.params).not.toContainEqual(expect.any(Date));
   });
+
+  it("applies the effective allocation for a selected household person", () => {
+    const query = new PgDialect().sqlToQuery(
+      buildLinkedExpenseAmountSql({
+        userId: "user-1",
+        startDate: new Date("2026-04-01T00:00:00.000Z"),
+        endDate: new Date("2026-04-30T23:59:59.999Z"),
+        accountIds: [],
+        personId: "person-half",
+      })
+    );
+
+    expect(query.sql).toContain("account_ownership_allocations");
+    expect(query.sql).toContain("effective_from <= t2.booked_at::date");
+    expect(query.params).toContain("person-half");
+  });
 });

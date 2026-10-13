@@ -9,6 +9,7 @@ type Person = { id: string; name: string; color?: string | null; avatarUrl?: str
 export function PersonFilter(props: {
   value: string[];
   onChange: (next: string[]) => void;
+  single?: boolean;
 }) {
   const [people, setPeople] = useState<Person[]>([]);
 
@@ -21,6 +22,11 @@ export function PersonFilter(props: {
   if (people.length < 2) return null; // single-person households: hide.
 
   function toggle(id: string) {
+    if (props.single) {
+      props.onChange(props.value.includes(id) ? [] : [id]);
+      return;
+    }
+
     props.onChange(
       props.value.includes(id) ? props.value.filter((x) => x !== id) : [...props.value, id]
     );

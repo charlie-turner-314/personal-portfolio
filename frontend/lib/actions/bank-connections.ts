@@ -68,11 +68,11 @@ export async function triggerSync(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const url = `${backendBase}/api/enable-banking/sync/${connectionId}`;
+    const url = `${backendBase}/api/enable-banking/sync/${encodeURIComponent(connectionId)}`;
 
     const signatureHeaders = createInternalAuthHeaders({
       method: "POST",
-      pathWithQuery: `/api/enable-banking/sync/${connectionId}`,
+      pathWithQuery: `/api/enable-banking/sync/${encodeURIComponent(connectionId)}`,
       userId,
     });
 
@@ -96,6 +96,101 @@ export async function triggerSync(
   }
 }
 
+/** Create an Up connection. The token is sent to the backend and never persisted beyond the form. */
+export async function createUpConnection(
+  token: string
+): Promise<{ success: boolean; connectionId?: string; error?: string }> {
+  const session = await getAuthenticatedSession();
+  const userId = session?.user?.id;
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (isDemoRestrictedUserEmail(session.user.email)) {
+    return { success: false, error: DEMO_RESTRICTED_ACTION_ERROR };
+  }
+
+  const trimmedToken = token.trim();
+  if (!trimmedToken) return { success: false, error: "Enter an Up personal access token" };
+
+  try {
+    const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
+    const pathWithQuery = "/api/up/connections";
+    const resp = await fetch(`${backendBase}${pathWithQuery}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...createInternalAuthHeaders({ method: "POST", pathWithQuery, userId }),
+      },
+      body: JSON.stringify({ token: trimmedToken }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({ detail: "Could not connect to Up" }));
+      return { success: false, error: data.detail || "Could not connect to Up" };
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (!data.connection_id) return { success: false, error: "Up did not return a connection" };
+    revalidatePath("/settings");
+    return { success: true, connectionId: data.connection_id };
+  } catch {
+    return { success: false, error: "Could not connect to Up" };
+  }
+}
+
+export async function triggerUpSync(
+  connectionId: string
+): Promise<{ success: boolean; error?: string }> {
+  const session = await getAuthenticatedSession();
+  const userId = session?.user?.id;
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (isDemoRestrictedUserEmail(session.user.email)) {
+    return { success: false, error: DEMO_RESTRICTED_ACTION_ERROR };
+  }
+
+  try {
+    const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
+    const pathWithQuery = `/api/up/connections/${encodeURIComponent(connectionId)}/sync`;
+    const resp = await fetch(`${backendBase}${pathWithQuery}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...createInternalAuthHeaders({ method: "POST", pathWithQuery, userId }),
+      },
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({ detail: "Up sync failed" }));
+      return { success: false, error: data.detail || "Up sync failed" };
+    }
+    revalidatePath("/settings");
+    return { success: true };
+  } catch {
+    return { success: false, error: "Up sync failed" };
+  }
+}
+
+export async function disconnectUp(connectionId: string): Promise<{ success: boolean; error?: string }> {
+  const session = await getAuthenticatedSession();
+  const userId = session?.user?.id;
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (isDemoRestrictedUserEmail(session.user.email)) {
+    return { success: false, error: DEMO_RESTRICTED_ACTION_ERROR };
+  }
+
+  try {
+    const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
+    const pathWithQuery = `/api/up/connections/${encodeURIComponent(connectionId)}`;
+    const resp = await fetch(`${backendBase}${pathWithQuery}`, {
+      method: "DELETE",
+      headers: createInternalAuthHeaders({ method: "DELETE", pathWithQuery, userId }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({ detail: "Could not disconnect Up" }));
+      return { success: false, error: data.detail || "Could not disconnect Up" };
+    }
+    revalidatePath("/settings");
+    return { success: true };
+  } catch {
+    return { success: false, error: "Could not disconnect Up" };
+  }
+}
+
 export async function disconnectBank(
   connectionId: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -108,11 +203,11 @@ export async function disconnectBank(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const url = `${backendBase}/api/enable-banking/${connectionId}`;
+    const url = `${backendBase}/api/enable-banking/${encodeURIComponent(connectionId)}`;
 
     const signatureHeaders = createInternalAuthHeaders({
       method: "DELETE",
-      pathWithQuery: `/api/enable-banking/${connectionId}`,
+      pathWithQuery: `/api/enable-banking/${encodeURIComponent(connectionId)}`,
       userId,
     });
 
@@ -245,7 +340,7 @@ export async function submitAccountMappings(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/connections/${connectionId}/map-accounts`;
+    const pathWithQuery = `/api/enable-banking/connections/${encodeURIComponent(connectionId)}/map-accounts`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -290,7 +385,7 @@ export async function triggerRecategorize(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/connections/${connectionId}/recategorize`;
+    const pathWithQuery = `/api/enable-banking/connections/${encodeURIComponent(connectionId)}/recategorize`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -331,7 +426,7 @@ export async function getConnectionStatus(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/status/${connectionId}`;
+    const pathWithQuery = `/api/enable-banking/status/${encodeURIComponent(connectionId)}`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -374,7 +469,7 @@ export async function getSuggestedMappings(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/connections/${connectionId}/suggested-mappings`;
+    const pathWithQuery = `/api/enable-banking/connections/${encodeURIComponent(connectionId)}/suggested-mappings`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -389,7 +484,7 @@ export async function getSuggestedMappings(
     });
 
     if (!resp.ok) {
-      console.warn(`getSuggestedMappings: backend returned ${resp.status} for ${connectionId}`);
+      console.warn(`getSuggestedMappings: backend returned ${resp.status} for ${encodeURIComponent(connectionId)}`);
       return [];
     }
     return await resp.json();

@@ -1,0 +1,4 @@
+[
+  {"symbol": "BTCUSDT", "id": 28457, "orderId": 100234, "price": "50000", "qty": "0.01000000", "quoteQty": "500", "commission": "0.00001000", "commissionAsset": "BTC", "time": 1767614400000, "isBuyer": true, "isMaker": false, "isBestMatch": true},
+  {"symbol": "BTCUSDT", "id": 28458, "orderId": 100234, "price": "50100", "qty": "0.02000000", "quoteQty": "1002", "commission": "0.00007500", "commissionAsset": "BNB", "time": 1767614401000, "isBuyer": true, "isMaker": false, "isBestMatch": true}
+]

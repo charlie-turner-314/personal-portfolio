@@ -1,10 +1,10 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, accountBalances, transactionLinks, propertyLiabilityLinks, superAccounts } from "@/lib/db/schema";
+import { accounts, transactions, categories, users, properties, vehicles, accountBalances, accountOwnershipAllocations, transactionLinks, propertyLiabilityLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getCachedUserAccounts } from "@/lib/data/cached";
-import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
+import { eq, sql, gte, lte, and, desc, inArray, isNull, type SQL, type SQLWrapper } from "drizzle-orm";
 import { buildConservativeSankey } from "@/lib/dashboard/sankey";
 import {
   buildIncomeExpenseBuckets,
@@ -41,6 +41,27 @@ function normalizeAccountIds(accountIds?: string[]): string[] | undefined {
   const uniqueIds = Array.from(new Set(accountIds.map((id) => id.trim()).filter(Boolean)));
   return uniqueIds.length > 0 ? uniqueIds : undefined;
 }
+
+function ownershipShareSql(
+  personId: string | undefined,
+  accountId: SQLWrapper,
+  bookedAt: SQLWrapper,
+): SQL<unknown> {
+  if (!personId) return sql`1`;
+
+  return sql`COALESCE((
+    SELECT aoa.share
+    FROM ${accountOwnershipAllocations} aoa
+    WHERE aoa.account_id = ${accountId}
+      AND aoa.person_id = ${personId}
+      AND aoa.effective_from <= (${bookedAt})::date
+    ORDER BY aoa.effective_from DESC
+    LIMIT 1
+  ), 0)`;
+}
+
+const t2AccountId = sql.raw("t2.account_id");
+const t2BookedAt = sql.raw("t2.booked_at");
 
 function errorToLogContext(error: unknown): {
   message: string;
@@ -113,7 +134,7 @@ export async function getAvailableMonths() {
   }));
 }
 
-export async function getTotalBalance(accountIds?: string[]) {
+export async function getTotalBalance(accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
@@ -147,10 +168,17 @@ export async function getTotalBalance(accountIds?: string[]) {
   const [result, currency] = await Promise.all([
     db
       .select({
-        total: sql<string>`COALESCE(SUM(ab.balance_in_functional_currency), 0)`,
+        total: personId
+          ? sql<string>`COALESCE(SUM(ab.balance_in_functional_currency * COALESCE((
+              SELECT aoa.share FROM ${accountOwnershipAllocations} aoa
+              WHERE aoa.account_id = ab.account_id AND aoa.person_id = ${personId}
+                AND aoa.effective_from <= ab.date::date
+              ORDER BY aoa.effective_from DESC LIMIT 1
+            ), 0)), 0)`
+          : sql<string>`COALESCE(SUM(ab.balance_in_functional_currency), 0)`,
       })
       .from(sql`(
-        SELECT DISTINCT ON (account_id) account_id, balance_in_functional_currency
+        SELECT DISTINCT ON (account_id) account_id, balance_in_functional_currency, date
         FROM account_balances
         WHERE account_id IN (${sql.join(selectedAccountIds.map((id) => sql`${id}`), sql`, `)})
         ORDER BY account_id, date DESC
@@ -164,7 +192,7 @@ export async function getTotalBalance(accountIds?: string[]) {
   };
 }
 
-export async function getBalanceHistory(startDate: Date, endDate: Date, accountIds?: string[]) {
+export async function getBalanceHistory(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
@@ -188,7 +216,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
     .where(and(...accountConditions));
 
   if (userAccounts.length === 0) {
-    return normalizedAccountIds?.length ? [] : getHistoricalSnapshotHistory(startDate, endDate);
+    return normalizedAccountIds?.length || personId ? [] : getHistoricalSnapshotHistory(startDate, endDate);
   }
 
   const selectedAccountIds = userAccounts.map((a) => a.id);
@@ -197,7 +225,14 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   const result = await db
     .select({
       date: sql<string>`DATE(${accountBalances.date})`,
-      value: sql<string>`SUM(${accountBalances.balanceInFunctionalCurrency})`,
+      value: personId
+        ? sql<string>`SUM(${accountBalances.balanceInFunctionalCurrency} * COALESCE((
+            SELECT aoa.share FROM ${accountOwnershipAllocations} aoa
+            WHERE aoa.account_id = ${accountBalances.accountId} AND aoa.person_id = ${personId}
+              AND aoa.effective_from <= ${accountBalances.date}::date
+            ORDER BY aoa.effective_from DESC LIMIT 1
+          ), 0))`
+        : sql<string>`SUM(${accountBalances.balanceInFunctionalCurrency})`,
     })
     .from(accountBalances)
     .where(and(
@@ -214,14 +249,21 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   }));
   // Imported snapshots are complete reported net-worth points. Prefer them for
   // matching dates so partial account balances cannot double-count assets.
-  if (normalizedAccountIds?.length) return calculated;
+  // Imported snapshots describe the whole household and cannot be split
+  // retrospectively without account-level data.
+  if (normalizedAccountIds?.length || personId) return calculated;
   const imported = await getHistoricalSnapshotHistory(startDate, endDate);
   const byDate = new Map(calculated.map((point) => [point.date.slice(0, 10), point]));
   for (const point of imported) byDate.set(point.date, point);
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export async function getPeriodSpending(startDate: Date, endDate: Date, accountIds?: string[]) {
+export async function getPeriodSpending(
+  startDate: Date,
+  endDate: Date,
+  accountIds?: string[],
+  personId?: string,
+) {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
@@ -252,7 +294,7 @@ export async function getPeriodSpending(startDate: Date, endDate: Date, accountI
               WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
                 COALESCE((
                   SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
+                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
                     ELSE 0
                   END
                   FROM ${transactions} t2
@@ -261,7 +303,7 @@ export async function getPeriodSpending(startDate: Date, endDate: Date, accountI
                     AND tl2.group_id IS NOT NULL
                 ), 0)
               WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ABS(${transactions.amount})
+              ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
             END
           ), 0)`,
         })
@@ -298,7 +340,12 @@ export async function getPeriodSpending(startDate: Date, endDate: Date, accountI
   }
 }
 
-export async function getPeriodIncome(startDate: Date, endDate: Date, accountIds?: string[]) {
+export async function getPeriodIncome(
+  startDate: Date,
+  endDate: Date,
+  accountIds?: string[],
+  personId?: string,
+) {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
@@ -329,7 +376,7 @@ export async function getPeriodIncome(startDate: Date, endDate: Date, accountIds
               WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
                 COALESCE((
                   SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount), 0) > 0 THEN COALESCE(SUM(t2.amount), 0)
+                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) > 0 THEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0)
                     ELSE 0
                   END
                   FROM ${transactions} t2
@@ -338,7 +385,7 @@ export async function getPeriodIncome(startDate: Date, endDate: Date, accountIds
                     AND tl2.group_id IS NOT NULL
                 ), 0)
               WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ${transactions.amount}
+              ELSE ${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}
             END
           ), 0)`,
         })
@@ -375,7 +422,12 @@ export async function getPeriodIncome(startDate: Date, endDate: Date, accountIds
   }
 }
 
-export async function getSpendingHistory(startDate: Date, endDate: Date, accountIds?: string[]) {
+export async function getSpendingHistory(
+  startDate: Date,
+  endDate: Date,
+  accountIds?: string[],
+  personId?: string,
+) {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
@@ -399,7 +451,7 @@ export async function getSpendingHistory(startDate: Date, endDate: Date, account
   const result = await db
     .select({
       date: sql<string>`DATE(${transactions.bookedAt})`,
-      value: sql<string>`COALESCE(SUM(ABS(${transactions.amount})), 0)`,
+      value: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
     })
     .from(transactions)
     .innerJoin(
@@ -416,7 +468,12 @@ export async function getSpendingHistory(startDate: Date, endDate: Date, account
   }));
 }
 
-export async function getIncomeHistory(startDate: Date, endDate: Date, accountIds?: string[]) {
+export async function getIncomeHistory(
+  startDate: Date,
+  endDate: Date,
+  accountIds?: string[],
+  personId?: string,
+) {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
@@ -440,7 +497,7 @@ export async function getIncomeHistory(startDate: Date, endDate: Date, accountId
   const result = await db
     .select({
       date: sql<string>`DATE(${transactions.bookedAt})`,
-      value: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
+      value: sql<string>`COALESCE(SUM(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}), 0)`,
     })
     .from(transactions)
     .innerJoin(
@@ -461,7 +518,8 @@ export async function getIncomeExpenseData(
   startDate: Date,
   endDate: Date,
   accountIds?: string[],
-  grouping?: IncomeExpenseGrouping
+  grouping?: IncomeExpenseGrouping,
+  personId?: string,
 ) {
   const session = await getAuthenticatedSession();
 
@@ -496,7 +554,7 @@ export async function getIncomeExpenseData(
               WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
                 COALESCE((
                   SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount), 0) > 0 THEN COALESCE(SUM(t2.amount), 0)
+                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) > 0 THEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0)
                     ELSE 0
                   END
                   FROM ${transactions} t2
@@ -505,7 +563,7 @@ export async function getIncomeExpenseData(
                     AND tl2.group_id IS NOT NULL
                 ), 0)
               WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ABS(${transactions.amount})
+              ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
             END
           ELSE 0
         END
@@ -517,7 +575,7 @@ export async function getIncomeExpenseData(
               WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
                 COALESCE((
                   SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
+                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
                     ELSE 0
                   END
                   FROM ${transactions} t2
@@ -526,7 +584,7 @@ export async function getIncomeExpenseData(
                     AND tl2.group_id IS NOT NULL
                 ), 0)
               WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ABS(${transactions.amount})
+              ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
             END
           ELSE 0
         END
@@ -576,7 +634,8 @@ export async function getSpendingByCategory(
   startDate: Date,
   endDate: Date,
   accountIds?: string[],
-  limit: number = 5
+  limit: number = 5,
+  personId?: string,
 ) {
   const session = await getAuthenticatedSession();
 
@@ -611,7 +670,7 @@ export async function getSpendingByCategory(
             WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
               COALESCE((
                 SELECT CASE 
-                  WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
+                  WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
                   ELSE 0
                 END
                 FROM ${transactions} t2
@@ -620,7 +679,7 @@ export async function getSpendingByCategory(
                   AND tl2.group_id IS NOT NULL
               ), 0)
             WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-            ELSE ABS(${transactions.amount})
+            ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
           END
         ), 0)`,
       })
@@ -640,7 +699,7 @@ export async function getSpendingByCategory(
           WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
             COALESCE((
               SELECT CASE 
-                WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
+                WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
                 ELSE 0
               END
               FROM ${transactions} t2
@@ -649,7 +708,7 @@ export async function getSpendingByCategory(
                 AND tl2.group_id IS NOT NULL
             ), 0)
           WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-          ELSE ABS(${transactions.amount})
+          ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
         END
       ), 0)`))
       .limit(limit);
@@ -657,7 +716,7 @@ export async function getSpendingByCategory(
   // Get uncategorized spending (non-linked only)
   const uncategorizedResult = await db
     .select({
-      amount: sql<string>`COALESCE(SUM(ABS(${transactions.amount})), 0)`,
+      amount: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
     })
     .from(transactions)
     .leftJoin(
@@ -681,7 +740,7 @@ export async function getSpendingByCategory(
         WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
           COALESCE((
             SELECT CASE 
-              WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
+              WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
               ELSE 0
             END
             FROM ${transactions} t2
@@ -690,7 +749,7 @@ export async function getSpendingByCategory(
               AND tl2.group_id IS NOT NULL
           ), 0)
         WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-        ELSE ABS(${transactions.amount})
+        ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
       END
     ), 0)`,
     })
@@ -882,7 +941,8 @@ export interface SankeyData {
 export async function getSankeyData(
   startDate?: Date,
   endDate?: Date,
-  accountIds?: string[]
+  accountIds?: string[],
+  personId?: string,
 ): Promise<SankeyData> {
   const session = await getAuthenticatedSession();
 
@@ -920,7 +980,7 @@ export async function getSankeyData(
     .select({
       categoryId: sql<string>`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
       categoryName: categories.name,
-      total: sql<string>`COALESCE(SUM(ABS(${transactions.amount})), 0)`,
+      total: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
     })
     .from(transactions)
     .innerJoin(
@@ -937,14 +997,14 @@ export async function getSankeyData(
       sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
       categories.name
     )
-    .orderBy(desc(sql`SUM(ABS(${transactions.amount}))`));
+    .orderBy(desc(sql`SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}))`));
 
   // Get expenses by category (categories with type 'expense' only, excludes transfers)
   const expensesByCategory = await db
     .select({
       categoryId: sql<string>`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
       categoryName: categories.name,
-      total: sql<string>`COALESCE(SUM(ABS(${transactions.amount})), 0)`,
+      total: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
     })
     .from(transactions)
     .innerJoin(
@@ -961,7 +1021,7 @@ export async function getSankeyData(
       sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
       categories.name
     )
-    .orderBy(desc(sql`SUM(ABS(${transactions.amount}))`));
+    .orderBy(desc(sql`SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}))`));
 
   // Filter and limit categories
   const incomeCategories = incomeByCategory
@@ -994,6 +1054,7 @@ export async function getSankeyData(
 
 export interface DashboardFilters {
   accountIds?: string[];
+  personId?: string;
   dateFrom?: Date;
   dateTo?: Date;
   horizon?: number;
@@ -1084,16 +1145,16 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     sankeyData,
     upcomingPlannedExpenses,
   ] = await Promise.all([
-    getTotalBalance(normalizedAccountIds),
-    getBalanceHistory(startDate, endDate, normalizedAccountIds),
-    getPeriodSpending(startDate, endDate, normalizedAccountIds),
-    getPeriodIncome(startDate, endDate, normalizedAccountIds),
-    getSpendingHistory(startDate, endDate, normalizedAccountIds),
-    getIncomeHistory(startDate, endDate, normalizedAccountIds),
-    getIncomeExpenseData(startDate, endDate, normalizedAccountIds, incomeExpenseGrouping),
-    getSpendingByCategory(startDate, endDate, normalizedAccountIds, 5),
+    getTotalBalance(normalizedAccountIds, filters.personId),
+    getBalanceHistory(startDate, endDate, normalizedAccountIds, filters.personId),
+    getPeriodSpending(startDate, endDate, normalizedAccountIds, filters.personId),
+    getPeriodIncome(startDate, endDate, normalizedAccountIds, filters.personId),
+    getSpendingHistory(startDate, endDate, normalizedAccountIds, filters.personId),
+    getIncomeHistory(startDate, endDate, normalizedAccountIds, filters.personId),
+    getIncomeExpenseData(startDate, endDate, normalizedAccountIds, incomeExpenseGrouping, filters.personId),
+    getSpendingByCategory(startDate, endDate, normalizedAccountIds, 5, filters.personId),
     getAssetsOverview(),
-    getSankeyData(startDate, endDate, normalizedAccountIds),
+    getSankeyData(startDate, endDate, normalizedAccountIds, filters.personId),
     getUpcomingPlannedExpenses({ days: 90, accountIds: normalizedAccountIds }),
   ]);
 

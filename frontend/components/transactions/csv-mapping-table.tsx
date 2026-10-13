@@ -129,7 +129,7 @@ export function CsvMappingTable({
             </div>
             <Select
               value={mapping.typeConfig?.dateFormat ?? "DD-MM-YYYY"}
-              onValueChange={(value) => updateTypeConfig("dateFormat", value as "DD-MM-YYYY" | "MM-DD-YYYY")}
+              onValueChange={(value) => updateTypeConfig("dateFormat", value as "DD-MM-YYYY" | "MM-DD-YYYY" | "CUSTOM")}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select date format" />
@@ -137,8 +137,24 @@ export function CsvMappingTable({
               <SelectContent>
                 <SelectItem value="DD-MM-YYYY">DD-MM-YYYY (European)</SelectItem>
                 <SelectItem value="MM-DD-YYYY">MM-DD-YYYY (US)</SelectItem>
+                <SelectItem value="CUSTOM">Custom format</SelectItem>
               </SelectContent>
             </Select>
+            {mapping.typeConfig?.dateFormat === "CUSTOM" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="customDateFormat">Custom format</Label>
+                <input
+                  id="customDateFormat"
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  value={mapping.typeConfig?.customDateFormat ?? ""}
+                  onChange={(event) => updateTypeConfig("customDateFormat", event.target.value)}
+                  placeholder="e.g. dd MMM yy"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use a date-fns format string. For example, <code>dd MMM yy</code> parses <code>21 Aug 26</code>; include time fields when they are in the same column.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

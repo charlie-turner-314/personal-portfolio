@@ -167,7 +167,20 @@ From repository root:
 
 See [`deploy/railway/`](../railway/) for a Railway-specific compose file and instructions.
 
-## Backups (Docs-Only in v1)
+## Investment Sync Operations
+
+- Connected investment accounts are queued daily by Celery beat. Set
+  `PERSONAL_PORTFOLIO_INVESTMENT_SYNC_HOUR_UTC` to an integer from `0` to `23`
+  (default `2`). The Investments UI shows the configured hour, last scheduled
+  enqueue, retry time, recent CSV/API ingestion runs, and balance differences.
+- Use **Download diagnostics** on a connection for a credential-free JSON bundle
+  containing sync health, sanitized provenance, run warnings, and transfer state.
+- Disconnecting an investment provider deletes its encrypted credentials and
+  stops future sync. The account becomes manual; imported economic history and
+  immutable provenance remain available. Delete the account separately only
+  when you intend PostgreSQL's account cascades to remove that history.
+
+## Backup and Recovery
 
 Example manual backup:
 
@@ -175,3 +188,33 @@ Example manual backup:
 docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml exec -T postgres \
   sh -lc 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup.sql
 ```
+
+The SQL dump contains financial data, sanitized ingestion provenance, and
+encrypted provider credentials. Protect it as sensitive data and retain the
+`DATA_ENCRYPTION_KEY_CURRENT` value (and any configured previous rotation key)
+separately; credentials cannot be recovered without the matching encryption
+key.
+
+Verify a backup before relying on it:
+
+```bash
+test -s backup.sql
+grep -q 'PostgreSQL database dump' backup.sql
+```
+
+Restore into an empty database using the same application version and
+encryption-key configuration:
+
+```bash
+docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml stop backend worker beat frontend
+docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml exec -T postgres \
+  sh -lc 'dropdb -U "$POSTGRES_USER" --if-exists "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
+docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml exec -T postgres \
+  sh -lc 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backup.sql
+docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml up -d
+```
+
+After restore, check service health, open one investment connection, inspect its
+recent ingestion runs, and run a manual refresh. Overlapping API history is
+idempotent; cross-provider economic matches retained from an earlier CSV import
+are recorded as duplicate observations rather than applied twice.

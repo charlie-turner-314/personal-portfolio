@@ -1,0 +1,13 @@
+{
+  "id": -1,
+  "method": "public/get-instruments",
+  "code": 0,
+  "result": {
+    "data": [
+      {"symbol": "BTC_USDT", "inst_type": "CCY_PAIR", "base_ccy": "BTC", "quote_ccy": "USDT", "tradable": true},
+      {"symbol": "ETH_USDT", "inst_type": "CCY_PAIR", "base_ccy": "ETH", "quote_ccy": "USDT", "tradable": true},
+      {"symbol": "USDT_USD", "inst_type": "CCY_PAIR", "base_ccy": "USDT", "quote_ccy": "USD", "tradable": true},
+      {"symbol": "BTCUSD-PERP", "inst_type": "PERPETUAL_SWAP", "base_ccy": "BTC", "quote_ccy": "USD", "tradable": true}
+    ]
+  }
+}

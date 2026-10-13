@@ -14,7 +14,7 @@ export function HouseholdTab({ people }: { people: Person[] }) {
       <div>
         <h2 className="text-lg font-semibold">Your household</h2>
         <p className="text-sm text-muted-foreground">
-          Track who owns what — useful for joint accounts and household-level reports.
+          Track who owns what — useful for joint accounts and household-level reports. Household people are placeholders and do not need their own application accounts.
         </p>
       </div>
       <PeopleList initialPeople={people} />
