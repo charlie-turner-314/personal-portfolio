@@ -270,7 +270,8 @@ export async function initializeCsvImport(
         eq(csvImportProfiles.accountId, accountId),
         eq(csvImportProfiles.userId, session.user.id),
         eq(csvImportProfiles.importKind, "transactions"),
-        eq(csvImportProfiles.provider, "generic")
+        eq(csvImportProfiles.provider, "generic"),
+        eq(csvImportProfiles.profileVariant, "default")
       ),
     });
 
@@ -603,6 +604,7 @@ export async function saveColumnMapping(
           accountId: importSession.accountId,
           importKind: "transactions",
           provider: "generic",
+          profileVariant: "default",
           name: "Default CSV mapping",
           columnMapping: { ...normalizedMapping, accountMappings: undefined },
           headerSignature,
@@ -615,6 +617,7 @@ export async function saveColumnMapping(
             csvImportProfiles.accountId,
             csvImportProfiles.importKind,
             csvImportProfiles.provider,
+            csvImportProfiles.profileVariant,
           ],
           set: {
             columnMapping: { ...normalizedMapping, accountMappings: undefined },
