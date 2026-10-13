@@ -77,12 +77,23 @@ jobs:
       working-directory: ./frontend
       run: pnpm install --frozen-lockfile
 
+    - name: Build landing site
+      working-directory: ./landing
+      env:
+        NEXT_TELEMETRY_DISABLED: 1
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm build
+
     - name: Verify deployment contract
       id: deploy-contract
       run: ./scripts/verify-deploy-contract.sh
 
     - name: Test release image promotion safety
       run: python3 -m unittest discover -s scripts -p 'test_release_efficiency.py'
+
+    - name: Test local rehearsal isolation
+      run: python3 -m unittest discover -s scripts -p 'test_release_lab.py'
 
     - name: Lint frontend
       # These regressions must run in CI: API smoke tests alone cannot detect
