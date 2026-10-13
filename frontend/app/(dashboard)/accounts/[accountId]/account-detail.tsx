@@ -8,12 +8,14 @@ import type { Account, Category } from "@/lib/db/schema";
 import type { BalanceHistoryPoint } from "@/lib/actions/accounts";
 import type { TransactionWithRelations } from "@/lib/actions/transactions";
 import type { CategoryDisplay } from "@/types";
+import type { AccountFreshness } from "@/lib/account-freshness";
 
 interface AccountDetailProps {
   account: Account;
   balanceHistory: BalanceHistoryPoint[];
   initialTransactions: TransactionWithRelations[];
   categories: Category[];
+  freshness: AccountFreshness;
 }
 
 export function AccountDetail({
@@ -21,6 +23,7 @@ export function AccountDetail({
   balanceHistory,
   initialTransactions,
   categories,
+  freshness,
 }: AccountDetailProps) {
   const [transactions, setTransactions] = useState(initialTransactions);
   const currency = account.currency || "EUR";
@@ -66,7 +69,14 @@ export function AccountDetail({
 
   return (
     <div className="flex flex-col gap-4">
-      <AccountHeader account={account} currency={currency} />
+      <AccountHeader
+        account={account}
+        currency={currency}
+        freshness={freshness}
+        onUploadCsv={() => {
+          window.location.href = `/transactions/import?accountId=${encodeURIComponent(account.id)}`;
+        }}
+      />
       <AccountBalanceChart
         data={balanceHistory}
         currency={currency}
