@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 
 async function registerAndReachTransactionImport(page: Page, email: string, password: string) {
   await page.goto("/register");
@@ -44,7 +45,12 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   });
 
   await registerAndReachTransactionImport(page, email, password);
-  await page.locator("#csv-file-input").setInputFiles(path.join(process.cwd(), "e2e/fixtures/transactions.csv"));
+  // Deliberately historical data: a recent upload must not make old data current.
+  const csv = readFileSync(path.join(process.cwd(), "e2e/fixtures/transactions.csv"), "utf8")
+    .replaceAll("2026-07-", "2000-07-");
+  await page.locator("#csv-file-input").setInputFiles({
+    name: "transactions.csv", mimeType: "text/csv", buffer: Buffer.from(csv),
+  });
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("Map your columns", { exact: true })).toBeVisible();
@@ -75,6 +81,20 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Login" }).click();
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+
+  await page.goto("/assets");
+  await page.getByRole("button", { name: "Close walkthrough" }).click();
+  await expect(page.getByText(/Update recommended/)).toBeVisible();
+  await page.getByRole("button", { name: "Upload CSV", exact: true }).click();
+  await expect(page).toHaveURL(/\/transactions\/import\?accountId=/);
+  await expect(page.getByRole("combobox")).toHaveText("E2E Savings");
+  const accountId = new URL(page.url()).searchParams.get("accountId");
+  expect(accountId).toBeTruthy();
+  await page.goto(`/accounts/${accountId}`);
+  await expect(page.getByText(/Update recommended/)).toBeVisible();
+  await page.getByRole("button", { name: "Upload CSV", exact: true }).click();
+  await expect(page.getByRole("combobox")).toHaveText("E2E Savings");
+
   await expect.poll(() => browserErrors, { message: "browser console errors" }).toEqual([]);
   expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
 });
