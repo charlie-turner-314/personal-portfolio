@@ -10,6 +10,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / '.release-lab'
+PROJECT = 'syllogic-release-lab-' + hashlib.sha256(str(ROOT).encode()).hexdigest()[:10]
 
 
 def run(args, **kwargs):
@@ -23,6 +24,7 @@ def output(args):
 def save(name, data):
     path = STATE / name
     with open(path, 'w', opener=lambda p, f: os.open(p, f, 0o600)) as f:
+        os.fchmod(f.fileno(), 0o600)
         f.write(data)
 
 
@@ -33,7 +35,36 @@ def logged(name, args):
 
 
 def compose(*args):
-    return ['docker', 'compose', '-p', 'syllogic-release-lab', '-f', str(STATE / 'compose.json'), *args]
+    config = json.loads((STATE / 'compose.json').read_text())
+    validate_config(config)
+    return ['docker', 'compose', '-p', PROJECT, '-f', str(STATE / 'compose.json'), *args]
+
+
+def validate_config(config):
+    """Refuse legacy/shared projects, foreign volumes and external endpoints."""
+    if config.get('name') != PROJECT:
+        raise SystemExit('Lab belongs to another checkout or an older helper. Prepare a new isolated lab.')
+    allowed = {'postgres', 'redis', 'uploads-init', 'migrate', 'backend', 'app'}
+    if set(config['services']) != allowed:
+        raise SystemExit('Unexpected lab services; workers and scheduler are forbidden.')
+    for key, volume in config['volumes'].items():
+        if volume.get('external') or volume.get('name') != f'{PROJECT}_{key}':
+            raise SystemExit('Lab volume identity mismatch.')
+    for key, network in config.get('networks', {}).items():
+        if network.get('external') or network.get('name') != f'{PROJECT}_{key}':
+            raise SystemExit('Lab network identity mismatch.')
+    for name, service in config['services'].items():
+        if service.get('container_name'):
+            raise SystemExit('Explicit container names are forbidden in the lab.')
+        for mount in service.get('volumes', []):
+            if mount.get('type') != 'volume' or mount.get('source') not in config['volumes']:
+                raise SystemExit('Unexpected lab mount.')
+        env = service.get('environment', {})
+        if name in {'app', 'backend', 'migrate'}:
+            from urllib.parse import urlparse
+            endpoint = urlparse(env.get('DATABASE_URL', ''))
+            if endpoint.hostname != 'postgres' or endpoint.path != '/finance_db':
+                raise SystemExit('Lab database must use the isolated postgres service.')
 
 
 def env_of(container):
@@ -59,23 +90,29 @@ def snapshot(container):
 
 
 def prepare(args):
-    if (STATE / 'compose.json').exists():
+    if STATE.exists() and any(STATE.iterdir()):
         raise SystemExit('Lab already prepared; use up/verify. Use a separate checkout for a new rehearsal.')
     STATE.mkdir(mode=0o700, exist_ok=True)
+    STATE.chmod(0o700)
     source = env_of(args.source_app)
     if not source.get('BETTER_AUTH_SECRET'):
         raise SystemExit('Source BETTER_AUTH_SECRET is required to decrypt restored JWKS signing keys.')
     password = secrets.token_urlsafe(24)
-    env = {'POSTGRES_PASSWORD': password, 'DATABASE_URL': f'postgresql://financeuser:{password}@postgres:5432/finance_db',
+    env = {'POSTGRES_USER': 'financeuser', 'POSTGRES_DB': 'finance_db',
+           'POSTGRES_PASSWORD': password, 'DATABASE_URL': f'postgresql://financeuser:{password}@postgres:5432/finance_db',
            'BETTER_AUTH_SECRET': source['BETTER_AUTH_SECRET'], 'INTERNAL_AUTH_SECRET': secrets.token_urlsafe(32),
-           'APP_URL': f'http://localhost:{args.port}', 'HTTP_PORT': str(args.port)}
+           'APP_URL': f'http://localhost:{args.port}', 'HTTP_PORT': str(args.port),
+           'REDIS_URL': 'redis://redis:6379/0', 'BACKEND_URL': 'http://backend:8000',
+           'MCP_SERVER_URL': '', 'OPENAI_API_KEY': '', 'LOGO_DEV_API_KEY': '',
+           'STORAGE_PROVIDER': 'local', 'LOCAL_STORAGE_PATH': '/data/uploads'}
     for key in ['DATA_ENCRYPTION_KEY_CURRENT', 'DATA_ENCRYPTION_KEY_PREVIOUS', 'DATA_ENCRYPTION_KEY_ID']:
         env[key] = source.get(key, '')
     save('.env', ''.join(f'{k}={v}\n' for k, v in env.items()))
     command = ['docker', 'compose', '--env-file', str(STATE / '.env'), '-f', str(ROOT / 'deploy/compose/docker-compose.yml'),
                '-f', str(ROOT / 'deploy/compose/docker-compose.local.yml'), 'config', '--format', 'json']
-    config = json.loads(output(command))
-    config['name'] = 'syllogic-release-lab'
+    # Shell variables normally override --env-file; never inherit production DB/API settings.
+    config = json.loads(subprocess.check_output(command, text=True, env={**os.environ, **env}))
+    config['name'] = PROJECT
     # No workers or scheduler: restored bank credentials must never trigger sync.
     config['services'] = {k: v for k, v in config['services'].items() if k in ['postgres', 'redis', 'uploads-init', 'migrate', 'backend', 'app']}
     for name, service in config['services'].items():
@@ -83,15 +120,19 @@ def prepare(args):
         service.pop('ports', None)
         service['restart'] = 'no'
         if name in ['app', 'migrate']:
-            service['image'] = 'syllogic-release-lab-frontend:local'
+            service['image'] = f'{PROJECT}-frontend:local'
         elif name == 'backend':
-            service['image'] = 'syllogic-release-lab-backend:local'
+            service['image'] = f'{PROJECT}-backend:local'
     config['services']['app']['ports'] = [f'127.0.0.1:{args.port}:3000']
     # Compose config expands volume names; explicitly isolate them as well.
     for key, volume in config['volumes'].items():
-        volume['name'] = f'syllogic-release-lab_{key}'
+        volume['name'] = f'{PROJECT}_{key}'
     for key, network in config.get('networks', {}).items():
-        network['name'] = f'syllogic-release-lab_{key}'
+        network['name'] = f'{PROJECT}_{key}'
+    validate_config(config)
+    for resource in ['container', 'volume', 'network']:
+        if output(['docker', resource, 'ls', '-q', '--filter', f'label=com.docker.compose.project={PROJECT}']):
+            raise SystemExit('Existing lab resources found without matching state; refusing to reuse them.')
     save('compose.json', json.dumps(config, indent=2))
     before = snapshot(args.source_db)
     save('before.json', json.dumps(before, indent=2))
@@ -99,16 +140,26 @@ def prepare(args):
     with open(dump, 'wb', opener=lambda p, f: os.open(p, f, 0o600)) as f:
         run(['docker', 'exec', args.source_db, 'sh', '-c', 'exec pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"'], stdout=f)
     save('manifest.json', json.dumps({'source_db': args.source_db, 'source_app': args.source_app,
-         'candidate': output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD']), 'port': args.port}, indent=2))
+         'project': PROJECT, 'candidate': output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD']), 'port': args.port}, indent=2))
     print('Prepared isolated lab and database backup. Run up next.')
 
 
 def restore():
     run(compose('up', '-d', '--wait', 'postgres', 'redis'))
     if not (STATE / 'restored').exists():
+        if (STATE / 'restore-started').exists():
+            raise SystemExit('Previous restore was interrupted; inspect the isolated DB before retrying.')
+        save('restore-started', 'yes\n')
         with (STATE / 'source.dump').open('rb') as f:
             run(compose('exec', '-T', 'postgres', 'sh', '-c',
                 'exec pg_restore --exit-on-error --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"'), stdin=f)
+        # The dump is transactionally consistent; the live source may have changed
+        # between its diagnostic snapshot and pg_dump. Compare against the restore.
+        db = output(compose('ps', '-q', 'postgres'))
+        baseline = snapshot(db)
+        if not baseline:
+            raise SystemExit('Restored database has no expected tables; refusing empty evidence.')
+        save('before.json', json.dumps(baseline, indent=2))
         save('restored', 'yes\n')
 
 
@@ -135,7 +186,7 @@ def rehearse(cached_image):
     service['volumes'] = [f'{ROOT}/frontend/scripts:/app/scripts:ro',
                           f'{ROOT}/frontend/lib/db/migrations:/app/lib/db/migrations:ro']
     save('migration-only.json', json.dumps(config, indent=2))
-    command = ['docker', 'compose', '-p', 'syllogic-release-lab', '-f', str(STATE / 'migration-only.json'),
+    command = ['docker', 'compose', '-p', PROJECT, '-f', str(STATE / 'migration-only.json'),
                'run', '--rm', '--no-deps', 'migrate']
     logged('migration-first.log', command)
     logged('migration-second.log', command)
@@ -146,6 +197,8 @@ def rehearse(cached_image):
 def verify():
     db = output(compose('ps', '-q', 'postgres'))
     before = json.loads((STATE / 'before.json').read_text())
+    if not before:
+        raise SystemExit('Missing baseline tables; empty evidence cannot certify an upgrade.')
     report = {}
     for table, expected in before.items():
         cols = expected['columns']
@@ -196,6 +249,7 @@ def accounts():
 def cached_bootstrap():
     """Prepare accounts only; deliberately not candidate UI acceptance."""
     config = json.loads((STATE / 'compose.json').read_text())
+    validate_config(config)
     for name in ['app', 'migrate']:
         config['services'][name]['image'] = 'syllogic-frontend:local'
         config['services'][name].pop('build', None)
@@ -205,7 +259,7 @@ def cached_bootstrap():
     config['services']['backend']['image'] = 'syllogic-backend:local'
     config['services']['backend'].pop('build', None)
     save('bootstrap.json', json.dumps(config, indent=2))
-    run(['docker', 'compose', '-p', 'syllogic-release-lab', '-f', str(STATE / 'bootstrap.json'),
+    run(['docker', 'compose', '-p', PROJECT, '-f', str(STATE / 'bootstrap.json'),
          'up', '-d', '--wait', '--no-build', 'backend', 'app'])
     save('runtime.json', json.dumps({'mode': 'cached-bootstrap', 'candidate_ui_verified': False}, indent=2))
     print('Cached runtime started for account preparation only. Candidate UI has NOT been built.')
@@ -213,6 +267,7 @@ def cached_bootstrap():
 
 def repair_auth():
     """Preserve encrypted JWKS when repairing labs created with a new auth secret."""
+    validate_config(json.loads((STATE / 'compose.json').read_text()))
     manifest = json.loads((STATE / 'manifest.json').read_text())
     secret = env_of(manifest['source_app']).get('BETTER_AUTH_SECRET')
     if not secret:
@@ -227,7 +282,7 @@ def repair_auth():
     save('.env', '\n'.join('BETTER_AUTH_SECRET=' + secret if line.startswith('BETTER_AUTH_SECRET=') else line for line in lines) + '\n')
     mode = json.loads((STATE / 'runtime.json').read_text())['mode']
     filename = 'bootstrap.json' if mode == 'cached-bootstrap' else 'compose.json'
-    run(['docker', 'compose', '-p', 'syllogic-release-lab', '-f', str(STATE / filename),
+    run(['docker', 'compose', '-p', PROJECT, '-f', str(STATE / filename),
          'up', '-d', '--no-deps', '--no-build', '--wait', 'app'])
     print('Matching auth secret restored. Sign in again if your browser has an old session cookie.')
 

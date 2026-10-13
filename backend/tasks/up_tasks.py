@@ -44,6 +44,7 @@ def sync_up_connection(self, connection_id: str):
             raise RuntimeError("Up connection has no encrypted access token")
 
         connection.sync_started_at = datetime.now(timezone.utc)
+        connection.last_sync_error = None
         db.commit()
         started = True
         access_token = decrypt_value(connection.credentials_encrypted)
@@ -101,6 +102,7 @@ def sync_up_connection(self, connection_id: str):
         }
     except Exception as exc:
         logger.exception("Up sync failed for connection %s", connection_id)
+        db.rollback()
         connection = db.query(BankConnection).filter(BankConnection.id == connection_id).first()
         if connection:
             connection.last_sync_error = str(exc)[:500]

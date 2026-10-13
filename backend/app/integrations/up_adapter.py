@@ -5,7 +5,7 @@ adapter intentionally exposes no token serialization or logging surface.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -20,6 +20,19 @@ class UpApiError(RuntimeError):
 
 class UpAdapter(BankAdapter):
     BASE_URL = "https://api.up.com.au/api/v1"
+
+    @staticmethod
+    def _timestamp(value: date | datetime) -> str:
+        """Up requires RFC 3339 timestamps, including for date-valued sync bounds.
+
+        The shared sync lookback returns dates. Interpret those (and legacy
+        naive datetimes) as UTC, never the worker host's local timezone.
+        """
+        if not isinstance(value, datetime):
+            value = datetime.combine(value, time.min, tzinfo=timezone.utc)
+        elif value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
 
     def __init__(self, access_token: str, client: Optional[httpx.Client] = None):
         self._client = client or httpx.Client(
@@ -77,14 +90,14 @@ class UpAdapter(BankAdapter):
     def fetch_transactions(
         self,
         account_external_id: str,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: Optional[date | datetime] = None,
+        end_date: Optional[date | datetime] = None,
     ) -> list[TransactionData]:
         params: dict[str, str] = {}
         if start_date:
-            params["filter[since]"] = start_date.isoformat()
+            params["filter[since]"] = self._timestamp(start_date)
         if end_date:
-            params["filter[until]"] = end_date.isoformat()
+            params["filter[until]"] = self._timestamp(end_date)
         result: list[TransactionData] = []
         next_url: Optional[str] = f"/accounts/{account_external_id}/transactions"
         # Up paginates with absolute links.next URLs. A hard cap protects workers

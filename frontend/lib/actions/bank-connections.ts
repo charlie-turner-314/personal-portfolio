@@ -68,11 +68,11 @@ export async function triggerSync(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const url = `${backendBase}/api/enable-banking/sync/${connectionId}`;
+    const url = `${backendBase}/api/enable-banking/sync/${encodeURIComponent(connectionId)}`;
 
     const signatureHeaders = createInternalAuthHeaders({
       method: "POST",
-      pathWithQuery: `/api/enable-banking/sync/${connectionId}`,
+      pathWithQuery: `/api/enable-banking/sync/${encodeURIComponent(connectionId)}`,
       userId,
     });
 
@@ -146,7 +146,7 @@ export async function triggerUpSync(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/up/connections/${connectionId}/sync`;
+    const pathWithQuery = `/api/up/connections/${encodeURIComponent(connectionId)}/sync`;
     const resp = await fetch(`${backendBase}${pathWithQuery}`, {
       method: "POST",
       headers: {
@@ -175,7 +175,7 @@ export async function disconnectUp(connectionId: string): Promise<{ success: boo
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/up/connections/${connectionId}`;
+    const pathWithQuery = `/api/up/connections/${encodeURIComponent(connectionId)}`;
     const resp = await fetch(`${backendBase}${pathWithQuery}`, {
       method: "DELETE",
       headers: createInternalAuthHeaders({ method: "DELETE", pathWithQuery, userId }),
@@ -203,11 +203,11 @@ export async function disconnectBank(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const url = `${backendBase}/api/enable-banking/${connectionId}`;
+    const url = `${backendBase}/api/enable-banking/${encodeURIComponent(connectionId)}`;
 
     const signatureHeaders = createInternalAuthHeaders({
       method: "DELETE",
-      pathWithQuery: `/api/enable-banking/${connectionId}`,
+      pathWithQuery: `/api/enable-banking/${encodeURIComponent(connectionId)}`,
       userId,
     });
 
@@ -340,7 +340,7 @@ export async function submitAccountMappings(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/connections/${connectionId}/map-accounts`;
+    const pathWithQuery = `/api/enable-banking/connections/${encodeURIComponent(connectionId)}/map-accounts`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -385,7 +385,7 @@ export async function triggerRecategorize(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/connections/${connectionId}/recategorize`;
+    const pathWithQuery = `/api/enable-banking/connections/${encodeURIComponent(connectionId)}/recategorize`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -426,7 +426,7 @@ export async function getConnectionStatus(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/status/${connectionId}`;
+    const pathWithQuery = `/api/enable-banking/status/${encodeURIComponent(connectionId)}`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -469,7 +469,7 @@ export async function getSuggestedMappings(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/connections/${connectionId}/suggested-mappings`;
+    const pathWithQuery = `/api/enable-banking/connections/${encodeURIComponent(connectionId)}/suggested-mappings`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
@@ -484,7 +484,7 @@ export async function getSuggestedMappings(
     });
 
     if (!resp.ok) {
-      console.warn(`getSuggestedMappings: backend returned ${resp.status} for ${connectionId}`);
+      console.warn(`getSuggestedMappings: backend returned ${resp.status} for ${encodeURIComponent(connectionId)}`);
       return [];
     }
     return await resp.json();

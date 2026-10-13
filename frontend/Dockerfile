@@ -22,11 +22,6 @@ COPY xlsx-0.20.3.tgz ./xlsx-0.20.3.tgz
 RUN pnpm install --frozen-lockfile
 
 
-FROM deps AS prod-deps
-# Drop devDependencies for the runtime image.
-RUN pnpm prune --prod
-
-
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
@@ -56,6 +51,8 @@ ARG NEXT_PUBLIC_DEMO_PASSWORD=""
 ENV NEXT_PUBLIC_DEMO_PASSWORD=$NEXT_PUBLIC_DEMO_PASSWORD
 
 RUN pnpm build
+# Keep the independent migration entry point, including its dynamic imports.
+RUN pnpm exec esbuild scripts/migrate.js --bundle --platform=node --format=cjs --target=node20 --outfile=dist/migrate.js
 
 
 FROM node:20-bookworm-slim AS runner
@@ -66,14 +63,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# Production dependencies + build output
-COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
-COPY --from=builder --chown=node:node /app/package.json ./package.json
-COPY --from=builder --chown=node:node /app/.next ./.next
+# Next traces only the dependencies required by the production server.
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
 
 # Migration runner + SQL migrations (used by docker-compose one-shot "migrate" service)
-COPY --from=builder --chown=node:node /app/scripts/migrate.js ./scripts/migrate.js
+COPY --from=builder --chown=node:node /app/dist/migrate.js ./scripts/migrate.js
 COPY --from=builder --chown=node:node /app/lib/db/migrations ./lib/db/migrations
 
 # Uploads live on a persistent volume in production (LOCAL_STORAGE_PATH,
@@ -84,4 +80,4 @@ COPY --from=builder --chown=node:node /app/lib/db/migrations ./lib/db/migrations
 USER node
 
 EXPOSE 3000
-CMD ["sh", "-c", "node scripts/migrate.js && exec node_modules/.bin/next start -p 3000 -H 0.0.0.0"]
+CMD ["sh", "-c", "node scripts/migrate.js && exec node server.js"]
