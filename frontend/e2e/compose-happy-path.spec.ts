@@ -83,6 +83,7 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
 
   await page.goto("/assets");
+  await page.getByRole("button", { name: "Close walkthrough" }).click();
   await expect(page.getByText(/Update recommended/)).toBeVisible();
   await page.getByRole("button", { name: "Upload CSV", exact: true }).click();
   await expect(page).toHaveURL(/\/transactions\/import\?accountId=/);
