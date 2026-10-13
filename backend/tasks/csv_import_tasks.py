@@ -75,6 +75,12 @@ def _process_transaction_batch(
     Returns:
         Dict with counts of inserted, skipped transactions and categorization summary
     """
+    if any(row.get("multi_account") for row in transactions_data):
+        if not all(row.get("multi_account") for row in transactions_data):
+            raise ValueError("Cannot mix routed and single-account CSV rows")
+        from app.services.multi_account_csv import import_routed_rows
+        return import_routed_rows(db, user_id, transactions_data, csv_import_id)
+
     from app.routes.categories import categorize_transactions_batch
     from decimal import Decimal
 
@@ -321,7 +327,7 @@ def process_csv_import(
 
     try:
         # Get the CSV import record
-        csv_import = db.query(CsvImport).filter(CsvImport.id == csv_import_id).first()
+        csv_import = db.query(CsvImport).filter(CsvImport.id == csv_import_id, CsvImport.user_id == user_id).first()
         if not csv_import:
             raise ValueError(f"CsvImport {csv_import_id} not found")
 
@@ -407,7 +413,7 @@ def process_csv_import(
                     )
 
             # Chain to shared post-processing pipeline
-            account_ids = [str(csv_import.account_id)]
+            account_ids = affected_account_ids
             post_import_pipeline.delay(
                 user_id=user_id,
                 account_ids=account_ids,
@@ -447,9 +453,10 @@ def process_csv_import(
         import traceback
         logger.error(traceback.format_exc())
 
+        db.rollback()
         # Update CSV import record with error
         try:
-            csv_import = db.query(CsvImport).filter(CsvImport.id == csv_import_id).first()
+            csv_import = db.query(CsvImport).filter(CsvImport.id == csv_import_id, CsvImport.user_id == user_id).first()
             if csv_import:
                 csv_import.status = "failed"
                 csv_import.error_message = str(e)

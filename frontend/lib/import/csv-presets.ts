@@ -1,6 +1,9 @@
 import { inferAmountFormat, type AmountFormat } from "@/lib/import/parsing";
 
 export interface SuggestedCsvColumnMapping {
+  sourceAccount?: string | null;
+  destinationAccount?: string | null;
+  transactionId?: string | null;
   date: string | null;
   amount: string | null;
   debitAmount: string | null;
@@ -23,6 +26,9 @@ export interface SuggestedCsvColumnMapping {
 }
 
 const HEADER_ALIASES = {
+  sourceAccount: ["from account", "source account"],
+  destinationAccount: ["to account", "destination account"],
+  transactionId: ["transaction id", "transaction identifier"],
   date: ["date", "transaction date", "posted date", "effective date", "process date"],
   amount: ["amount", "transaction amount", "value", "net amount"],
   debitAmount: ["debit", "debit amount", "withdrawal", "withdrawals", "money out", "paid out"],
@@ -144,6 +150,9 @@ export function suggestAustralianCsvMapping(
   const inferredAmountFormat = inferAmountFormat(amountSamples);
 
   return {
+    sourceAccount: findHeader(headers, HEADER_ALIASES.sourceAccount),
+    destinationAccount: findHeader(headers, HEADER_ALIASES.destinationAccount),
+    transactionId: findHeader(headers, HEADER_ALIASES.transactionId),
     date,
     amount,
     debitAmount,

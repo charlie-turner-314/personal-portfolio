@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import { readFileSync } from "node:fs";
+import { parseDelimitedText } from "../lib/import/parsing";
 
-async function registerAndReachTransactionImport(page: Page, email: string, password: string) {
+async function registerAndReachTransactionImport(page: Page, email: string, password: string, multiAccount = false) {
   await page.goto("/register");
   await page.getByLabel("Name").fill("Compose E2E");
   await page.getByLabel("Email").fill(email);
@@ -24,8 +25,22 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
   await page.getByLabel("Account Name").fill("E2E Savings");
   await page.getByRole("dialog").getByRole("combobox").first().click();
   await page.getByRole("option", { name: "Savings Account" }).click();
+  if (multiAccount) {
+    await page.getByRole("dialog").getByRole("combobox").nth(1).click();
+    await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
+  }
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByText("E2E Savings", { exact: true })).toBeVisible();
+  if (multiAccount) {
+    await page.getByRole("button", { name: "Add another account" }).click();
+    await page.getByLabel("Account Name").fill("E2E Spending");
+    await page.getByRole("dialog").getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Savings Account" }).click();
+    await page.getByRole("dialog").getByRole("combobox").nth(1).click();
+    await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
+    await page.getByRole("button", { name: "Create Account" }).click();
+    await expect(page.getByText("E2E Spending", { exact: true })).toBeVisible();
+  }
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("Import your transactions", { exact: true })).toBeVisible();
@@ -115,4 +130,43 @@ test("a new user can finish onboarding without a transaction CSV", async ({ page
   await expect(page.getByRole("button", { name: "Close walkthrough" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
   expect(serverFailures, "server-side failures observed by the browser").toEqual([]);
+});
+
+
+test("multi-account CSV confirms aliases, imports transfer pairs and detects reimports", async ({ page }) => {
+  test.setTimeout(150_000);
+  const email = `compose-e2e-multi-${Date.now()}@example.test`;
+  await registerAndReachTransactionImport(page, email, "ComposeE2E!123", true);
+  const privateSample = process.env.PPF41_SAMPLE_CSV;
+  const csv = privateSample ? readFileSync(privateSample, "utf8") :
+    "Date,Description,Debit,Credit,Source account,Destination account,Transaction ID\n2026-10-08,Shared move,,100,Reserve,Daily,transfer-1\n2026-10-09,Example purchase,20,,Daily,,purchase-1";
+  const rows = privateSample ? 50 : 2;
+  const aliases = privateSample ? { "Save Account": "E2E Savings", "Savings account": "E2E Savings", "Pay Account": "E2E Spending", "Spend account": "E2E Spending" } : { Reserve: "E2E Savings", Daily: "E2E Spending" };
+  const upload = async () => {
+    await page.locator("#csv-file-input").setInputFiles({ name: "multi-account.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Confirm accounts" })).toBeVisible();
+    for (const [alias, account] of Object.entries(aliases)) {
+      const selector = page.getByLabel(`Account for ${alias}`, { exact: true });
+      await expect(selector).toHaveValue("");
+      await selector.selectOption({ label: `${account} (AUD)` });
+    }
+    await page.getByRole("button", { name: "Preview Transactions" }).click();
+  };
+  await upload();
+  await expect(page.getByText(/E2E Savings → E2E Spending · Internal transfer/).first()).toBeVisible();
+  await page.getByRole("button", { name: `Import ${rows} Transactions`, exact: true }).click();
+  await page.getByRole("button", { name: "Get Started" }).click();
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await page.getByRole("button", { name: "Close walkthrough" }).click();
+  await page.goto("/transactions");
+  // The import must finish before testing duplicate detection.
+  const expectedDescription = privateSample ? parseDelimitedText(csv, ",").rows[0][1] : "Example purchase";
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByText(expectedDescription, { exact: true }).first()).toBeVisible();
+  }).toPass({ timeout: 60_000 });
+  await page.goto("/transactions/import");
+  await upload();
+  await expect(page.getByRole("button", { name: "Import 0 Transactions", exact: true })).toBeDisabled();
 });

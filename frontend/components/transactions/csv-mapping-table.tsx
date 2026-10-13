@@ -19,6 +19,9 @@ interface CsvMappingTableProps {
 }
 
 const FIELD_MAPPINGS = [
+  { key: "sourceAccount", label: "Source Account", description: "Account money leaves (optional multi-account import)", required: false },
+  { key: "destinationAccount", label: "Destination Account", description: "Account money enters", required: false },
+  { key: "transactionId", label: "Transaction ID", description: "Bank reference used to prevent repeat imports", required: false },
   { key: "date", label: "Date", description: "Transaction date", required: true },
   { key: "amount", label: "Amount", description: "Signed or single transaction amount", required: false },
   { key: "debitAmount", label: "Debit Amount", description: "Outgoing amount when debits and credits use separate columns", required: false },

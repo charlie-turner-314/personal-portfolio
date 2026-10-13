@@ -118,6 +118,16 @@ jobs:
         DATABASE_URL: postgresql://financeuser:financepass@localhost:5432/finance_db
       run: node scripts/migrate.js
 
+    - name: Test multi-account CSV persistence
+      working-directory: ./backend
+      env:
+        DATABASE_URL: postgresql+psycopg://financeuser:financepass@localhost:5432/finance_db
+      run: python -m pytest tests/test_multi_account_csv.py -q
+
+    - name: Test CSV routing and mapping
+      working-directory: ./frontend
+      run: pnpm exec vitest run lib/actions/csv-import.multi-account.test.ts lib/import/account-routing.test.ts lib/import/csv-presets.test.ts components/transactions/dashboard-import-mapping-page.test.tsx
+
     - name: Build frontend
       working-directory: ./frontend
       env:
