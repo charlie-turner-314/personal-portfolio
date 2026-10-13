@@ -4,6 +4,7 @@ import {
   getPortfolioHistory,
   getInvestmentIncomeSummary,
   getCgtFinancialYearSummary,
+  getBrokerConnections,
 } from "@/lib/api/investments";
 import { InvestmentsOverview } from "@/components/investments/InvestmentsOverview";
 import { InvestmentsEmpty } from "@/components/investments/InvestmentsEmpty";
@@ -15,18 +16,19 @@ import { getAustralianFinancialYearForDate } from "@/lib/dates/australian-financ
 export async function InvestmentsSection() {
   const { from, to } = rangeToDates("1M");
   const financialYearStart = getAustralianFinancialYearForDate().startYear;
-  const [portfolio, holdings, history, incomeSummaries, cgtSummary, session] = await Promise.all([
+  const [portfolio, holdings, history, incomeSummaries, cgtSummary, connections, session] = await Promise.all([
     getPortfolio(),
     listHoldings(),
     getPortfolioHistory(from, to),
     getInvestmentIncomeSummary(financialYearStart).catch(() => []),
     getCgtFinancialYearSummary(financialYearStart).catch(() => null),
+    getBrokerConnections(),
     getAuthenticatedSession(),
   ]);
 
   const isDemoRestricted = isDemoRestrictedUserEmail(session?.user?.email);
 
-  if (holdings.length === 0) {
+  if (holdings.length === 0 && connections.length === 0) {
     return <InvestmentsEmpty isDemoRestricted={isDemoRestricted} />;
   }
 
@@ -59,6 +61,7 @@ export async function InvestmentsSection() {
         assumptions: cgtSummary.assumptions,
         unavailable_reason: cgtSummary.missing_fx_allocation_count > 0 ? `${cgtSummary.missing_fx_allocation_count} allocation(s) have missing FX.` : null,
       }] : []}
+      connections={connections}
       isDemoRestricted={isDemoRestricted}
     />
   );

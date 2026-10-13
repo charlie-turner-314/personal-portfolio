@@ -1,0 +1,4 @@
+[
+  {"id": "wd-1", "amount": "0.1", "transactionFee": "0.001", "coin": "BTC", "status": 6, "address": "bc1q-sanitized", "txId": "tx-wd-1", "applyTime": "2026-01-02 10:00:00", "completeTime": "2026-01-02 10:05:00", "network": "BTC"},
+  {"id": "wd-processing", "amount": "2", "transactionFee": "0.01", "coin": "ETH", "status": 4, "address": "0x-sanitized", "txId": "tx-wd-pending", "applyTime": "2026-01-02 11:00:00", "network": "ETH"}
+]

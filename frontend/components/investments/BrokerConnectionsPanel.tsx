@@ -1,0 +1,417 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import {
+  RiDeleteBinLine,
+  RiDownloadLine,
+  RiErrorWarningLine,
+  RiRefreshLine,
+  RiShieldCheckLine,
+} from "@remixicon/react";
+import {
+  disconnectBrokerConnection,
+  getBrokerConnectionDiagnostics,
+  listInvestmentIngestionRuns,
+  syncBrokerConnection,
+  updateBrokerApiCredentials,
+  updateBinanceTradeSymbols,
+  type BrokerConnection,
+  type InvestmentImportRun,
+} from "@/lib/api/investments";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+
+const STATUS_LABELS: Record<string, string> = {
+  ok: "Healthy",
+  partial: "Review difference",
+  needs_reauth: "Key rejected",
+  pending: "Sync pending",
+  error: "Sync failed",
+};
+
+function dateTimeLabel(value: string | null): string {
+  if (!value) return "Never";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString("en-AU");
+}
+
+function providerLabel(provider: BrokerConnection["provider"]): string {
+  if (provider === "coinspot") return "CoinSpot";
+  if (provider === "binance") return "Binance";
+  if (provider === "crypto_com_exchange") return "Crypto.com Exchange";
+  return "IBKR Flex";
+}
+
+export function BrokerConnectionsPanel({
+  connections,
+  readOnly = false,
+}: {
+  connections: BrokerConnection[];
+  readOnly?: boolean;
+}) {
+  const router = useRouter();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [reconnectId, setReconnectId] = useState<string | null>(null);
+  const [replacementKey, setReplacementKey] = useState("");
+  const [replacementSecret, setReplacementSecret] = useState("");
+  const [replacementReadOnlyConfirmed, setReplacementReadOnlyConfirmed] = useState(false);
+  const [pairEditId, setPairEditId] = useState<string | null>(null);
+  const [pairEditValue, setPairEditValue] = useState("");
+  const [runsByAccount, setRunsByAccount] = useState<Record<string, InvestmentImportRun[]>>({});
+
+  const pendingKey = connections
+    .filter((connection) => connection.last_sync_status === "pending")
+    .map((connection) => connection.id)
+    .join(",");
+  useEffect(() => {
+    if (!pendingKey) return;
+    const interval = window.setInterval(() => router.refresh(), 10_000);
+    return () => window.clearInterval(interval);
+  }, [pendingKey, router]);
+
+  const connectionAccountsKey = connections.map((item) => item.account_id).join(",");
+  useEffect(() => {
+    let cancelled = false;
+    const accountIds = [...new Set(connectionAccountsKey.split(",").filter(Boolean))];
+    Promise.all(accountIds.map(async (accountId) => [
+      accountId,
+      await listInvestmentIngestionRuns(accountId),
+    ] as const)).then((entries) => {
+      if (!cancelled) setRunsByAccount(Object.fromEntries(entries));
+    }).catch(() => {
+      // Connection status remains useful if run history is temporarily unavailable.
+    });
+    return () => { cancelled = true; };
+  }, [connectionAccountsKey]);
+
+  if (connections.length === 0) return null;
+
+  const refresh = async (connection: BrokerConnection) => {
+    setBusyId(connection.id);
+    try {
+      await syncBrokerConnection(connection.id);
+      toast.success(`${connection.account_name} sync queued`);
+      setTimeout(() => router.refresh(), 4_000);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Sync failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const disconnect = async (connection: BrokerConnection) => {
+    if (!window.confirm(
+      `Disconnect ${connection.account_name}? Imported history stays in your portfolio and the encrypted credentials are removed.`,
+    )) return;
+    setBusyId(connection.id);
+    try {
+      await disconnectBrokerConnection(connection.id);
+      toast.success(`${connection.account_name} disconnected`);
+      router.refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Disconnect failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const downloadDiagnostics = async (connection: BrokerConnection) => {
+    setBusyId(connection.id);
+    try {
+      const diagnostics = await getBrokerConnectionDiagnostics(connection.id);
+      const blob = new Blob([JSON.stringify(diagnostics, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `investment-diagnostics-${connection.provider}-${connection.id}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Diagnostics export failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const reconnect = async (connection: BrokerConnection) => {
+    setBusyId(connection.id);
+    try {
+      await updateBrokerApiCredentials(connection.id, {
+        api_key: replacementKey,
+        api_secret: replacementSecret,
+        read_only_confirmed: connection.provider === "crypto_com_exchange"
+          ? replacementReadOnlyConfirmed
+          : undefined,
+      });
+      setReplacementKey("");
+      setReplacementSecret("");
+      setReplacementReadOnlyConfirmed(false);
+      setReconnectId(null);
+      toast.success(`${connection.account_name} key verified; sync queued`);
+      router.refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Key verification failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const savePairs = async (connection: BrokerConnection) => {
+    setBusyId(connection.id);
+    try {
+      await updateBinanceTradeSymbols(
+        connection.id,
+        pairEditValue.split(/[\s,]+/).filter(Boolean).map((value) => value.toUpperCase()),
+      );
+      setPairEditId(null);
+      toast.success(`${connection.account_name} pairs updated; sync queued`);
+      router.refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Pair update failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-semibold">Connected providers</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              Connection health, balance reconciliation, and sync controls
+            </div>
+          </div>
+        </div>
+        <div className="divide-y divide-border border border-border">
+          {connections.map((connection) => {
+            const status = connection.last_sync_status || "pending";
+            const differences = connection.health_details.differences || [];
+            const isBusy = busyId === connection.id;
+            const isProblem = status === "error" || status === "needs_reauth";
+            const recentRuns = (runsByAccount[connection.account_id] || []).slice(0, 3);
+            return (
+              <div key={connection.id} className="p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="font-medium text-sm">{connection.account_name}</div>
+                  <Badge variant={isProblem ? "destructive" : status === "partial" ? "outline" : "secondary"}>
+                    {STATUS_LABELS[status] || status}
+                  </Badge>
+                  {connection.read_only_verified_at && (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                      <RiShieldCheckLine size={12} /> {connection.provider === "crypto_com_exchange" ? "Read-only confirmed" : "Read-only verified"}
+                    </span>
+                  )}
+                  <div className="ml-auto flex items-center gap-1.5">
+                    {connection.provider === "binance" && !readOnly && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const opening = pairEditId !== connection.id;
+                          setPairEditId(opening ? connection.id : null);
+                          if (opening) setPairEditValue((connection.health_details.trade_symbols || []).join(", "));
+                        }}
+                      >
+                        Edit pairs
+                      </Button>
+                    )}
+                    {status === "needs_reauth" && !readOnly && (
+                      <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const opening = reconnectId !== connection.id;
+                        setReconnectId(opening ? connection.id : null);
+                        if (opening) setReplacementReadOnlyConfirmed(false);
+                      }}
+                      >
+                        Replace key
+                      </Button>
+                    )}
+                    {!readOnly && (
+                      <>
+                        <Button size="sm" variant="outline" disabled={isBusy} onClick={() => refresh(connection)}>
+                          <RiRefreshLine className={isBusy ? "animate-spin" : ""} /> Refresh
+                        </Button>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Download diagnostics for ${connection.account_name}`}
+                          disabled={isBusy}
+                          onClick={() => void downloadDiagnostics(connection)}
+                        >
+                          <RiDownloadLine />
+                        </Button>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Disconnect ${connection.account_name}`}
+                          disabled={isBusy}
+                          onClick={() => disconnect(connection)}
+                        >
+                          <RiDeleteBinLine />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-muted-foreground">
+                  Scheduled sync: daily at {connection.health_details.scheduled_sync_hour_utc ?? 2}:00 UTC
+                  {connection.health_details.scheduled_sync_queued_at
+                    ? ` · last queued ${dateTimeLabel(connection.health_details.scheduled_sync_queued_at)}`
+                    : " · awaiting first scheduled run"}
+                </div>
+
+                {recentRuns.length > 0 && (
+                  <div className="border border-border p-2.5 text-xs">
+                    <div className="mb-1.5 font-medium">Recent ingestion runs</div>
+                    <div className="space-y-1 text-muted-foreground">
+                      {recentRuns.map((run) => (
+                        <div key={run.id} className="flex flex-wrap justify-between gap-2">
+                          <span>{run.provider} · {run.ingestion_type?.replace("_", " ") ?? "import"}</span>
+                          <span>{run.status} · {dateTimeLabel(run.started_at)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                  <div>Provider: <span className="text-foreground">{providerLabel(connection.provider)}</span></div>
+                  <div>Last successful sync: <span className="text-foreground">{dateTimeLabel(connection.last_sync_at)}</span></div>
+                  <div>
+                    Balance check:{" "}
+                    <span className="text-foreground">
+                      {connection.health_details.balances_reconciled === undefined
+                        ? "Waiting for first sync"
+                        : connection.health_details.balances_reconciled ? "Reconciled" : "Difference found"}
+                    </span>
+                  </div>
+                </div>
+
+                {connection.last_sync_error && (
+                  <div role="alert" className="flex gap-2 border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">
+                    <RiErrorWarningLine size={14} className="shrink-0" />
+                    <span>{connection.last_sync_error}</span>
+                  </div>
+                )}
+
+                {reconnectId === connection.id && connection.provider !== "ibkr_flex" && (
+                  <form
+                    className="grid gap-2 border border-border bg-muted/30 p-3 sm:grid-cols-[1fr_1fr_auto]"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void reconnect(connection);
+                    }}
+                  >
+                    <Input
+                      required
+                      autoComplete="off"
+                      aria-label={`Replacement ${providerLabel(connection.provider)} API key`}
+                      placeholder="New read-only API key"
+                      value={replacementKey}
+                      onChange={(event) => setReplacementKey(event.target.value)}
+                    />
+                    <Input
+                      required
+                      type="password"
+                      autoComplete="new-password"
+                      aria-label={`Replacement ${providerLabel(connection.provider)} API secret`}
+                      placeholder="New API secret"
+                      value={replacementSecret}
+                      onChange={(event) => setReplacementSecret(event.target.value)}
+                    />
+                    <Button type="submit" disabled={isBusy}>Verify & sync</Button>
+                    {connection.provider === "crypto_com_exchange" && (
+                      <label className="flex items-start gap-2 text-xs sm:col-span-3">
+                        <input
+                          required
+                          type="checkbox"
+                          checked={replacementReadOnlyConfirmed}
+                          onChange={(event) => setReplacementReadOnlyConfirmed(event.target.checked)}
+                        />
+                        <span>I confirm this Exchange key has Can Read only; Trading and Withdrawal are disabled.</span>
+                      </label>
+                    )}
+                  </form>
+                )}
+
+                {pairEditId === connection.id && connection.provider === "binance" && (
+                  <form
+                    className="flex flex-col gap-2 border border-border bg-muted/30 p-3 sm:flex-row"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void savePairs(connection);
+                    }}
+                  >
+                    <Input
+                      aria-label="Binance historical Spot pairs"
+                      placeholder="BTCAUD, ETHUSDT, BNBBTC"
+                      value={pairEditValue}
+                      onChange={(event) => setPairEditValue(event.target.value.toUpperCase())}
+                    />
+                    <Button type="submit" disabled={isBusy}>Save &amp; sync</Button>
+                  </form>
+                )}
+
+                {(connection.health_details.missing_product_warnings || []).length > 0 && (
+                  <div className="border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                    <div className="font-medium">Coverage notes</div>
+                    {(connection.health_details.missing_product_warnings || []).map((warning) => (
+                      <div key={warning}>• {warning}</div>
+                    ))}
+                  </div>
+                )}
+
+                {(connection.health_details.unpriced_assets || []).length > 0 && (
+                  <div className="text-[11px] text-muted-foreground">
+                    No current AUD market route for: {connection.health_details.unpriced_assets?.join(", ")}
+                  </div>
+                )}
+
+                {differences.length > 0 && (
+                  <div className="overflow-x-auto border border-border">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr>
+                          <th className="px-2.5 py-2 text-left font-medium">Asset</th>
+                          <th className="px-2.5 py-2 text-right font-medium">Activity ledger</th>
+                          <th className="px-2.5 py-2 text-right font-medium">{connection.provider === "coinspot" ? "CoinSpot" : "Provider"}</th>
+                          <th className="px-2.5 py-2 text-right font-medium">Difference</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {differences.map((difference) => (
+                          <tr key={difference.symbol}>
+                            <td className="px-2.5 py-2 font-medium">{difference.symbol}</td>
+                            <td className="px-2.5 py-2 text-right tabular-nums">{difference.activity_quantity}</td>
+                            <td className="px-2.5 py-2 text-right tabular-nums">{difference.provider_quantity}</td>
+                            <td className="px-2.5 py-2 text-right tabular-nums text-amber-700 dark:text-amber-400">{difference.difference}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {connection.next_retry_at && (
+                  <div className="text-[11px] text-muted-foreground">
+                    Automatic retry after {dateTimeLabel(connection.next_retry_at)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

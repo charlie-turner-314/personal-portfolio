@@ -316,7 +316,7 @@ def map_accounts(
                 name=name,
                 account_type=_ACCOUNT_TYPE_MAP.get((acc_data.get("cash_account_type") or "").upper(), "checking"),
                 currency=acc_data.get("currency", "EUR"),
-                provider="enable_banking",
+                provider=connection.provider,
                 institution=connection.aspsp_name,
                 bank_connection_id=connection.id,
                 external_id=mapping.bank_uid,
@@ -350,7 +350,7 @@ def map_accounts(
                     detail=f"Account '{mapping.existing_account_id}' is already linked to a bank connection",
                 )
             existing.bank_connection_id = connection.id
-            existing.provider = "enable_banking"
+            existing.provider = connection.provider
             existing.external_id = mapping.bank_uid
             encrypted = encrypt_value(mapping.bank_uid)
             hashed = blind_index(mapping.bank_uid)
@@ -372,8 +372,12 @@ def map_accounts(
 
     # Trigger initial sync
     try:
-        from tasks.enable_banking_tasks import sync_bank_connection
-        sync_bank_connection.delay(str(connection.id))
+        if connection.provider == "up":
+            from tasks.up_tasks import sync_up_connection
+            sync_up_connection.delay(str(connection.id))
+        else:
+            from tasks.enable_banking_tasks import sync_bank_connection
+            sync_bank_connection.delay(str(connection.id))
     except Exception:
         logger.warning("Failed to dispatch sync task after map-accounts", exc_info=True)
 

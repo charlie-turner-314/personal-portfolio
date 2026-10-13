@@ -1,0 +1,11 @@
+{
+  "id": 1,
+  "method": "private/get-deposit-history",
+  "code": 0,
+  "result": {
+    "deposit_list": [
+      {"id": "dep-1", "currency": "BTC", "amount": "0.35000000", "fee": "0", "create_time": 1767175200000, "update_time": 1767175260000, "status": "1", "address": "sanitized"},
+      {"id": "dep-pending", "currency": "ETH", "amount": "1.00000000", "fee": "0", "create_time": 1767175300000, "update_time": 1767175300000, "status": "3", "address": "sanitized"}
+    ]
+  }
+}

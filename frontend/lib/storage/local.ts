@@ -16,8 +16,27 @@ export class LocalStorageProvider implements StorageProvider {
     }
   }
 
-  private getFullPath(filePath: string): string {
-    return path.join(this.storageRoot, filePath);
+  private async getFullPath(filePath: string): Promise<string> {
+    if (!filePath || filePath.includes("\0") || filePath.includes("\\") || path.isAbsolute(filePath)) {
+      throw new Error("Invalid storage path");
+    }
+    const root = path.resolve(this.storageRoot);
+    const fullPath = path.resolve(root, filePath);
+    if (!fullPath.startsWith(root + path.sep)) {
+      throw new Error("Storage path must remain inside the storage root");
+    }
+    // A lexically contained path must not escape through an existing symlink.
+    let current = root;
+    for (const part of path.relative(root, fullPath).split(path.sep)) {
+      current = path.join(current, part);
+      try {
+        if ((await fs.lstat(current)).isSymbolicLink()) throw new Error("Storage symlinks are not allowed");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+        throw error;
+      }
+    }
+    return fullPath;
   }
 
   async upload(
@@ -25,7 +44,7 @@ export class LocalStorageProvider implements StorageProvider {
     data: Buffer | Blob,
     options?: UploadOptions
   ): Promise<StorageFile> {
-    const fullPath = this.getFullPath(filePath);
+    const fullPath = await this.getFullPath(filePath);
     const directory = path.dirname(fullPath);
 
     // Ensure directory exists
@@ -49,12 +68,12 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async download(filePath: string): Promise<Buffer> {
-    const fullPath = this.getFullPath(filePath);
+    const fullPath = await this.getFullPath(filePath);
     return fs.readFile(fullPath);
   }
 
   async delete(filePath: string): Promise<void> {
-    const fullPath = this.getFullPath(filePath);
+    const fullPath = await this.getFullPath(filePath);
     try {
       await fs.unlink(fullPath);
     } catch (error) {
@@ -66,7 +85,7 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async exists(filePath: string): Promise<boolean> {
-    const fullPath = this.getFullPath(filePath);
+    const fullPath = await this.getFullPath(filePath);
     try {
       await fs.access(fullPath);
       return true;
@@ -76,7 +95,7 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async getMetadata(filePath: string): Promise<StorageFile | null> {
-    const fullPath = this.getFullPath(filePath);
+    const fullPath = await this.getFullPath(filePath);
     try {
       const stats = await fs.stat(fullPath);
       return {

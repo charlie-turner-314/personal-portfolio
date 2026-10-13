@@ -81,9 +81,25 @@ jobs:
       id: deploy-contract
       run: ./scripts/verify-deploy-contract.sh
 
+    - name: Test release image promotion safety
+      run: python3 -m unittest discover -s scripts -p 'test_release_efficiency.py'
+
     - name: Lint frontend
+      # These regressions must run in CI: API smoke tests alone cannot detect
+      # a task that is queued by the API but absent from a fresh worker.
       working-directory: ./frontend
       run: pnpm lint
+
+    - name: Test worker registration and Up adapter
+      working-directory: ./backend
+      env:
+        DATABASE_URL: postgresql+psycopg://financeuser:financepass@localhost:5432/finance_db
+        REDIS_URL: redis://localhost:6379/0
+      run: python -m pytest tests/test_celery_task_registration.py tests/test_up_adapter.py tests/test_up_sync.py -q
+
+    - name: Test bank sync waiting states
+      working-directory: ./frontend
+      run: pnpm exec vitest run components/settings/bank-connections-manager.test.tsx
 
     - name: Run DB migrations (Drizzle)
       working-directory: ./frontend

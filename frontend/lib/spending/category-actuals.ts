@@ -1,6 +1,11 @@
 import { and, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { categories, transactions, transactionLinks } from "@/lib/db/schema";
+import {
+  accountOwnershipAllocations,
+  categories,
+  transactions,
+  transactionLinks,
+} from "@/lib/db/schema";
 
 export interface CategoryActualAmount {
   id: string;
@@ -14,6 +19,7 @@ interface FetchCategoryActualAmountsOptions {
   startDate: Date;
   endDate: Date;
   accountIds?: string[];
+  personId?: string;
   includeUncategorized?: boolean;
 }
 
@@ -22,6 +28,7 @@ interface LinkedExpenseAmountSqlOptions {
   startDate: Date;
   endDate: Date;
   accountIds: string[];
+  personId?: string;
   aggregate?: boolean;
 }
 
@@ -30,6 +37,7 @@ export function buildLinkedExpenseAmountSql({
   startDate,
   endDate,
   accountIds,
+  personId,
   aggregate = true,
 }: LinkedExpenseAmountSqlOptions): SQL<string> {
   const linkedGroupConditions = [
@@ -54,11 +62,26 @@ export function buildLinkedExpenseAmountSql({
     );
   }
 
+  // The most recent allocation that started on or before the booked date is
+  // the only one applicable to a transaction. A correlated scalar keeps this
+  // correct for a report range that crosses an ownership change.
+  const ownershipMultiplier = (transactionAlias: string) => personId
+    ? sql`COALESCE((
+        SELECT aoa.share
+        FROM ${accountOwnershipAllocations} aoa
+        WHERE aoa.account_id = ${sql.raw(`${transactionAlias}.account_id`)}
+          AND aoa.person_id = ${personId}
+          AND aoa.effective_from <= ${sql.raw(`${transactionAlias}.booked_at::date`)}
+        ORDER BY aoa.effective_from DESC
+        LIMIT 1
+      ), 0)`
+    : sql`1`;
+
   const amountSql = sql<string>`CASE
     WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
       COALESCE((
         SELECT CASE
-          WHEN COALESCE(SUM(t2.amount), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount), 0))
+          WHEN COALESCE(SUM(t2.amount * ${ownershipMultiplier("t2")}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipMultiplier("t2")}), 0))
           ELSE 0
         END
         FROM ${transactions} t2
@@ -66,7 +89,7 @@ export function buildLinkedExpenseAmountSql({
         WHERE ${sql.join(linkedGroupConditions, sql` AND `)}
       ), 0)
     WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-    ELSE ABS(${transactions.amount})
+    ELSE ABS(${transactions.amount} * ${ownershipMultiplier("transactions")})
   END`;
 
   return aggregate ? sql<string>`COALESCE(SUM(${amountSql}), 0)` : amountSql;
@@ -91,6 +114,7 @@ export async function fetchCategoryActualAmounts(
     startDate,
     endDate,
     accountIds,
+    personId,
     includeUncategorized = true,
   }: FetchCategoryActualAmountsOptions
 ): Promise<CategoryActualAmount[]> {
@@ -112,6 +136,7 @@ export async function fetchCategoryActualAmounts(
     startDate,
     endDate,
     accountIds: normalizedAccountIds,
+    personId,
   });
 
   const categorizedResult = await db
@@ -154,7 +179,17 @@ export async function fetchCategoryActualAmounts(
 
   const uncategorizedResult = await db
     .select({
-      amount: sql<string>`COALESCE(SUM(ABS(${transactions.amount})), 0)`,
+      amount: personId
+        ? sql<string>`COALESCE(SUM(ABS(${transactions.amount} * COALESCE((
+            SELECT aoa.share
+            FROM ${accountOwnershipAllocations} aoa
+            WHERE aoa.account_id = ${transactions.accountId}
+              AND aoa.person_id = ${personId}
+              AND aoa.effective_from <= ${transactions.bookedAt}::date
+            ORDER BY aoa.effective_from DESC
+            LIMIT 1
+          ), 0))), 0)`
+        : sql<string>`COALESCE(SUM(ABS(${transactions.amount})), 0)`,
     })
     .from(transactions)
     .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))

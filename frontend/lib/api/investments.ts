@@ -22,11 +22,11 @@ export type Holding = {
   provider_symbol?: string | null;
   name: string | null;
   currency: string;
-  instrument_type: "equity" | "etf" | "cash";
+  instrument_type: "equity" | "etf" | "cash" | "crypto" | "other";
   quantity: string;
   avg_cost?: string | null;
   as_of_date?: string | null;
-  source: "manual" | "ibkr_flex" | "trade_import";
+  source: "manual" | "ibkr_flex" | "trade_import" | "activity_import" | "coinspot_api" | "binance_api" | "crypto_com_api";
   current_price?: string | null;
   current_value_user_currency?: string | null;
   cost_basis_user_currency?: string | null;
@@ -100,7 +100,15 @@ async function signedFetch(
 async function readJsonOrThrow<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(text || `Request failed: ${resp.status}`);
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      throw new Error(parsed.detail || text || `Request failed: ${resp.status}`);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(text || `Request failed: ${resp.status}`);
+      }
+      throw error;
+    }
   }
   return (await resp.json()) as T;
 }
@@ -167,6 +175,12 @@ export type HoldingTrade = {
   currency: string;
   fees: string;
   external_id?: string | null;
+  economic_type?: string;
+  taxable_disposal?: boolean;
+  aud_value?: string | null;
+  valuation_source?: string | null;
+  valuation_timestamp?: string | null;
+  valuation_missing?: boolean;
   cost_native?: string | null;
   proceeds_native?: string | null;
   running_quantity: string;
@@ -176,6 +190,10 @@ export type HoldingLot = {
   open_date: string;
   quantity_remaining: string;
   cost_per_share_native: string;
+  original_cost_per_share_native: string;
+  cost_base_adjustment_per_share_native: string;
+  adjustment_ids: string[];
+  acquisition_trade_id?: string | null;
   cost_per_share_user?: string | null;
   age_days: number;
   currency: string;
@@ -186,6 +204,7 @@ export type CgtAllocation = {
   acquisition_trade_id: string;
   disposal_trade_id: string;
   symbol: string;
+  instrument_type: string;
   acquisition_date: string;
   disposal_date: string;
   quantity: string;
@@ -193,9 +212,18 @@ export type CgtAllocation = {
   cost_base_native: string;
   proceeds_native: string;
   gain_native: string;
+  cost_base_adjustment_native: string;
   cost_base_aud?: string | null;
   proceeds_aud?: string | null;
   gain_aud?: string | null;
+  cost_base_adjustment_aud?: string | null;
+  adjustment_ids: string[];
+  acquisition_valuation_source?: string | null;
+  disposal_valuation_source?: string | null;
+  acquisition_valuation_timestamp?: string | null;
+  disposal_valuation_timestamp?: string | null;
+  acquisition_economic_type: string;
+  disposal_economic_type: string;
   fx_missing: boolean;
   discount_eligible: boolean;
   calculation_version: string;
@@ -220,6 +248,7 @@ export type AustralianTaxReport = {
   investment_income: Record<string, unknown>;
   cgt: Record<string, unknown>;
   transactions: Record<string, unknown>;
+  crypto_transfers: Record<string, unknown>;
   assumptions: string[];
 };
 
@@ -244,7 +273,7 @@ export type InvestmentIncomeEvent = {
   id: string;
   account_id: string;
   holding_id: string;
-  event_type: "dividend" | "distribution";
+  event_type: "dividend" | "distribution" | "interest" | "staking_reward" | "airdrop";
   pay_date: string;
   ex_date?: string | null;
   currency: string;
@@ -254,6 +283,7 @@ export type InvestmentIncomeEvent = {
   franking_credit?: string | null;
   foreign_income?: string | null;
   foreign_tax_paid?: string | null;
+  tfn_withholding?: string | null;
   amit_amma_components?: Record<string, string | null> | null;
   is_drp: boolean;
   drp_quantity?: string | null;
@@ -261,6 +291,16 @@ export type InvestmentIncomeEvent = {
   source_id?: string | null;
   notes?: string | null;
   reinvestment_trade_id?: string | null;
+  reconciliation_status: "provisional" | "confirmed" | "conflict";
+  user_confirmed_at?: string | null;
+  matched_transaction_id?: string | null;
+  component_sources: Record<string, unknown>;
+  annual_statement_reference?: string | null;
+  asset_quantity?: string | null;
+  aud_market_value?: string | null;
+  valuation_source?: string | null;
+  valuation_timestamp?: string | null;
+  valuation_missing: boolean;
 };
 
 export type InvestmentIncomeSummary = {
@@ -270,16 +310,31 @@ export type InvestmentIncomeSummary = {
   franking_credits: string;
   foreign_income: string;
   foreign_tax_paid: string;
+  tfn_withholding: string;
 };
 
 export type CreateInvestmentIncomeEvent = Omit<
   InvestmentIncomeEvent,
-  "id" | "reinvestment_trade_id"
+  | "id"
+  | "reinvestment_trade_id"
+  | "reconciliation_status"
+  | "user_confirmed_at"
+  | "matched_transaction_id"
+  | "component_sources"
+  | "annual_statement_reference"
+  | "valuation_missing"
 >;
 
 export async function listHoldingIncomeEvents(holdingId: string): Promise<InvestmentIncomeEvent[]> {
   const resp = await signedFetch("GET", "/api/investments/income-events", {
     query: { holding_id: holdingId },
+  });
+  return readJsonOrThrow<InvestmentIncomeEvent[]>(resp);
+}
+
+export async function listAccountIncomeEvents(accountId: string): Promise<InvestmentIncomeEvent[]> {
+  const resp = await signedFetch("GET", "/api/investments/income-events", {
+    query: { account_id: accountId },
   });
   return readJsonOrThrow<InvestmentIncomeEvent[]>(resp);
 }
@@ -344,19 +399,149 @@ export async function searchSymbols(q: string): Promise<SymbolSearchResult[]> {
   return readJsonOrThrow<SymbolSearchResult[]>(resp);
 }
 
-export async function createBrokerConnection(payload: {
-  provider: "ibkr_flex";
-  flex_token: string;
-  query_id_positions: string;
-  query_id_trades: string;
+export type BrokerConnection = {
+  id: string;
+  account_id: string;
   account_name: string;
-  base_currency: string;
-}): Promise<{ connection_id: string; account_id: string }> {
+  provider: "ibkr_flex" | "coinspot" | "binance" | "crypto_com_exchange";
+  last_sync_at: string | null;
+  last_sync_status: "pending" | "ok" | "partial" | "needs_reauth" | "error" | null;
+  last_sync_error: string | null;
+  read_only_verified_at: string | null;
+  consecutive_failures: number;
+  next_retry_at: string | null;
+  health_details: {
+    balances_reconciled?: boolean;
+    pending_records?: number;
+    total_absolute_aud_difference?: string;
+    history_from?: string;
+    history_through?: string;
+    differences?: Array<{
+      symbol: string;
+      activity_quantity: string;
+      provider_quantity: string;
+      difference: string;
+      aud_difference: string;
+    }>;
+    trade_symbols?: string[];
+    configured_trade_symbols?: string[];
+    read_only_verification?: string;
+    scheduled_sync?: "daily";
+    scheduled_sync_hour_utc?: number;
+    scheduled_sync_queued_at?: string;
+    last_attempt_at?: string;
+    skipped_cross_source_records?: number;
+    partial_product_failures?: string[];
+    missing_product_warnings?: string[];
+    unpriced_assets?: string[];
+  };
+};
+
+export type BrokerConnectionPayload =
+  | {
+      provider: "ibkr_flex";
+      account_id?: string;
+      flex_token: string;
+      query_id_positions: string;
+      query_id_trades: string;
+      account_name: string;
+      base_currency: string;
+    }
+  | {
+      provider: "coinspot";
+      account_id?: string;
+      api_key: string;
+      api_secret: string;
+      history_start_date?: string;
+      account_name: string;
+      base_currency: "AUD";
+    }
+  | {
+      provider: "binance";
+      account_id?: string;
+      api_key: string;
+      api_secret: string;
+      history_start_date?: string;
+      trade_symbols?: string[];
+      account_name: string;
+      base_currency: "AUD";
+    }
+  | {
+      provider: "crypto_com_exchange";
+      account_id?: string;
+      api_key: string;
+      api_secret: string;
+      history_start_date?: string;
+      read_only_confirmed: true;
+      account_name: string;
+      base_currency: "AUD";
+    };
+
+export async function createBrokerConnection(
+  payload: BrokerConnectionPayload,
+): Promise<{ connection_id: string; account_id: string }> {
   await assertNotDemoRestricted();
   const resp = await signedFetch("POST", "/api/investments/broker-connections", {
     body: payload,
   });
   return readJsonOrThrow<{ connection_id: string; account_id: string }>(resp);
+}
+
+export async function getBrokerConnections(): Promise<BrokerConnection[]> {
+  const resp = await signedFetch("GET", "/api/investments/broker-connections");
+  return readJsonOrThrow<BrokerConnection[]>(resp);
+}
+
+export async function syncBrokerConnection(connectionId: string): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "POST",
+    `/api/investments/broker-connections/${connectionId}/sync`,
+  );
+  await readJsonOrThrow(resp);
+}
+
+export async function updateBrokerApiCredentials(
+  connectionId: string,
+  payload: {
+    api_key: string;
+    api_secret: string;
+    trade_symbols?: string[];
+    read_only_confirmed?: boolean;
+  },
+): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "PATCH",
+    `/api/investments/broker-connections/${connectionId}/credentials`,
+    { body: payload },
+  );
+  await readJsonOrThrow(resp);
+}
+
+export async function updateBinanceTradeSymbols(
+  connectionId: string,
+  tradeSymbols: string[],
+): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "PATCH",
+    `/api/investments/broker-connections/${connectionId}/configuration`,
+    { body: { trade_symbols: tradeSymbols } },
+  );
+  await readJsonOrThrow(resp);
+}
+
+export async function disconnectBrokerConnection(connectionId: string): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "DELETE",
+    `/api/investments/broker-connections/${connectionId}`,
+  );
+  if (!resp.ok) {
+    const message = await resp.text().catch(() => "");
+    throw new Error(message || `Request failed: ${resp.status}`);
+  }
 }
 
 export async function createManualAccount(
@@ -427,4 +612,320 @@ export async function updateHolding(
     const text = await resp.text().catch(() => "");
     throw new Error(text || `Request failed: ${resp.status}`);
   }
+}
+
+export type InvestmentImportMapping = {
+  occurred_at: string | null;
+  activity_type: string | null;
+  asset_symbol: string | null;
+  asset_name: string | null;
+  asset_type: string | null;
+  quantity: string | null;
+  price: string | null;
+  gross_amount: string | null;
+  net_amount: string | null;
+  currency: string | null;
+  fee_amount: string | null;
+  fee_currency: string | null;
+  fee_aud_value: string | null;
+  fee_valuation_source: string | null;
+  fee_valuation_timestamp: string | null;
+  tax_amount: string | null;
+  tax_currency: string | null;
+  source_reference: string | null;
+  counter_asset_symbol: string | null;
+  counter_quantity: string | null;
+  direction: string | null;
+  external_group_id: string | null;
+  transaction_hash: string | null;
+  aud_value: string | null;
+  valuation_source: string | null;
+  valuation_timestamp: string | null;
+  description: string | null;
+  ex_date: string | null;
+  franked_amount: string | null;
+  unfranked_amount: string | null;
+  franking_credit: string | null;
+  foreign_income: string | null;
+  foreign_tax_paid: string | null;
+  tfn_withholding: string | null;
+  amit_amma_components: string | null;
+  cost_base_increase: string | null;
+  cost_base_decrease: string | null;
+  cost_base_effective_date: string | null;
+  annual_statement_reference: string | null;
+  amma_interest: string | null;
+  amma_capital_gains_discounted: string | null;
+  amma_capital_gains_other: string | null;
+  amma_capital_gains_discount: string | null;
+  amma_tax_deferred: string | null;
+  amma_tax_free: string | null;
+  amma_other_non_assessable: string | null;
+};
+
+export type InvestmentImportRequest = {
+  account_id: string;
+  provider: string;
+  file_name: string;
+  file_content: string;
+  file_encoding?: "utf8" | "base64";
+  mapping: InvestmentImportMapping;
+  date_format: "AUTO" | "DD-MM-YYYY" | "MM-DD-YYYY";
+  amount_format: "AUTO" | "DOT_DECIMAL" | "COMMA_DECIMAL";
+  default_asset_type: "equity" | "fund" | "crypto" | "cash" | "option" | "bond" | "other";
+  default_currency?: string | null;
+  default_activity_type?: string | null;
+  activity_type_aliases?: Record<string, string>;
+  income_data_kind?: "cash_activity" | "annual_statement";
+};
+
+export type InvestmentImportPreviewRow = {
+  row_number: number;
+  status: "ready" | "duplicate" | "conflict";
+  duplicate_reason?: string;
+  conflict_reason?: string;
+  asset_status: "existing" | "new";
+  normalized: Record<string, string | string[] | null>;
+  warnings: string[];
+  raw: Record<string, string>;
+};
+
+export type InvestmentImportPreview = {
+  provider: string;
+  file_name: string;
+  source_hash: string;
+  headers: string[];
+  resolved_amount_format: string;
+  rows: InvestmentImportPreviewRow[];
+  rejected_rows: Array<{
+    row_number: number;
+    reasons: string[];
+    raw: Record<string, string>;
+  }>;
+  unmatched_assets: string[];
+  summary: {
+    total_rows: number;
+    ready_rows: number;
+    duplicate_rows: number;
+    rejected_rows: number;
+    conflict_rows: number;
+    warning_rows: number;
+  };
+};
+
+export type InvestmentImportRun = {
+  id: string;
+  account_id: string;
+  provider: string;
+  ingestion_type?: "csv_import" | "api_sync" | "manual";
+  status: "applying" | "completed" | "partial" | "failed" | "reverted";
+  source_name: string | null;
+  summary: Record<string, number | string | string[]>;
+  warnings: string[];
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+  reverted_at: string | null;
+};
+
+export type InvestmentSourceRecord = {
+  id: string;
+  run_id: string;
+  provider: string;
+  provider_record_id: string | null;
+  idempotency_key: string;
+  payload_hash: string;
+  occurred_at: string;
+  source_payload: Record<string, unknown>;
+  source_metadata: Record<string, unknown>;
+  normalization_version: string;
+  created_at: string;
+};
+
+export type InvestmentCryptoTransfer = {
+  id: string;
+  account_id: string;
+  source_activity_id: string;
+  matched_transfer_id: string | null;
+  direction: "in" | "out" | "internal";
+  asset_symbol: string;
+  quantity: string;
+  occurred_at: string;
+  transaction_hash: string | null;
+  status: "pending" | "matched" | "ambiguous" | "internal";
+  match_method: "transaction_hash" | "quantity_time_window" | "user_confirmed" | null;
+  confidence: "high" | "medium" | "confirmed" | null;
+  candidate_transfers: Array<{
+    id: string;
+    account_id: string;
+    account_name: string;
+    direction: "in" | "out";
+    occurred_at: string;
+    match_method: "transaction_hash" | "quantity_time_window";
+    confidence: "high" | "medium";
+  }>;
+  reason: string | null;
+  assumptions: string[];
+};
+
+export type InvestmentImportProfile = {
+  id: string;
+  account_id: string;
+  provider: string;
+  profile_variant: "cash_activity" | "annual_statement" | "default";
+  name: string;
+  mapping: {
+    columns: InvestmentImportMapping;
+    date_format?: InvestmentImportRequest["date_format"];
+    amount_format?: InvestmentImportRequest["amount_format"];
+    default_asset_type?: InvestmentImportRequest["default_asset_type"];
+    default_currency?: string | null;
+    default_activity_type?: string | null;
+    activity_type_aliases?: Record<string, string>;
+    income_data_kind?: InvestmentImportRequest["income_data_kind"];
+  };
+  header_signature: string[];
+  last_used_at: string | null;
+};
+
+export async function previewInvestmentImport(
+  payload: InvestmentImportRequest,
+): Promise<InvestmentImportPreview> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", "/api/investments/imports/preview", { body: payload });
+  return readJsonOrThrow<InvestmentImportPreview>(resp);
+}
+
+export async function applyInvestmentImport(
+  payload: InvestmentImportRequest & {
+    selected_row_numbers?: number[];
+    save_mapping?: boolean;
+    mapping_name?: string;
+  },
+): Promise<{ run_id: string; inserted_records: number; skipped_duplicate_records: number; inserted_activities: number }> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", "/api/investments/imports", { body: payload });
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentImports(accountId: string): Promise<InvestmentImportRun[]> {
+  const resp = await signedFetch("GET", "/api/investments/imports", {
+    query: { account_id: accountId },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentIngestionRuns(accountId: string): Promise<InvestmentImportRun[]> {
+  const resp = await signedFetch("GET", "/api/investments/ingestion-runs", {
+    query: { account_id: accountId },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentIngestionSourceRecords(
+  runId: string,
+): Promise<InvestmentSourceRecord[]> {
+  const resp = await signedFetch(
+    "GET",
+    `/api/investments/ingestion-runs/${runId}/source-records`,
+  );
+  return readJsonOrThrow(resp);
+}
+
+export async function getBrokerConnectionDiagnostics(
+  connectionId: string,
+): Promise<Record<string, unknown>> {
+  const resp = await signedFetch(
+    "GET",
+    `/api/investments/broker-connections/${connectionId}/diagnostics`,
+  );
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentCryptoTransfers(
+  accountId?: string,
+  status: InvestmentCryptoTransfer["status"] | "all" = "all",
+): Promise<InvestmentCryptoTransfer[]> {
+  const resp = await signedFetch("GET", "/api/investments/crypto-transfers", {
+    query: { account_id: accountId, status },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function confirmInvestmentCryptoTransfer(
+  transferId: string,
+  candidateTransferId: string,
+): Promise<InvestmentCryptoTransfer> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch(
+    "POST",
+    `/api/investments/crypto-transfers/${transferId}/confirm`,
+    { body: { candidate_transfer_id: candidateTransferId } },
+  );
+  return readJsonOrThrow(resp);
+}
+
+export async function listInvestmentImportProfiles(
+  accountId: string,
+  provider?: string,
+  incomeDataKind?: "cash_activity" | "annual_statement",
+): Promise<InvestmentImportProfile[]> {
+  const resp = await signedFetch("GET", "/api/investments/import-profiles", {
+    query: { account_id: accountId, provider, income_data_kind: incomeDataKind },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function revertInvestmentImport(runId: string): Promise<{
+  run_id: string;
+  status: "reverted";
+  removed_trades: number;
+  removed_income_events: number;
+  removed_income_enrichments?: number;
+  removed_cost_base_adjustments?: number;
+  removed_reconciliation_items?: number;
+}> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", `/api/investments/imports/${runId}/revert`);
+  return readJsonOrThrow(resp);
+}
+
+export type InvestmentReconciliationItem = {
+  id: string;
+  account_id: string;
+  source_activity_id: string;
+  income_event_id: string | null;
+  kind: "cash_match" | "annual_statement" | "component_conflict";
+  status: "pending" | "resolved" | "ignored";
+  reason: string;
+  candidate_income_event_ids: string[];
+  candidate_transaction_ids: string[];
+  details: Record<string, unknown>;
+  resolution: Record<string, unknown> | null;
+  resolved_at: string | null;
+  created_at: string;
+};
+
+export async function listInvestmentReconciliationItems(
+  accountId: string,
+  status: "pending" | "resolved" | "ignored" | "all" = "pending",
+): Promise<InvestmentReconciliationItem[]> {
+  const resp = await signedFetch("GET", "/api/investments/reconciliation-items", {
+    query: { account_id: accountId, status },
+  });
+  return readJsonOrThrow(resp);
+}
+
+export async function resolveInvestmentReconciliationItem(
+  itemId: string,
+  payload: {
+    action: "ignore" | "link_transaction" | "link_activity" | "link_income_event" | "keep_existing" | "apply_statement";
+    income_event_id?: string;
+    transaction_id?: string;
+    activity_id?: string;
+  },
+): Promise<InvestmentReconciliationItem> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", `/api/investments/reconciliation-items/${itemId}/resolve`, { body: payload });
+  return readJsonOrThrow(resp);
 }

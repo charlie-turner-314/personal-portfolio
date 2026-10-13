@@ -25,9 +25,17 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { triggerSync, disconnectBank, triggerRecategorize } from "@/lib/actions/bank-connections";
+import {
+  createUpConnection,
+  disconnectBank,
+  disconnectUp,
+  triggerRecategorize,
+  triggerSync,
+  triggerUpSync,
+} from "@/lib/actions/bank-connections";
 type BankConnectionItem = {
   id: string;
+  provider: string;
   aspspName: string;
   aspspCountry: string;
   status: string;
@@ -59,17 +67,30 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const [pollingIds, setPollingIds] = useState<Set<string>>(new Set());
   const [syncProgress, setSyncProgress] = useState<Map<string, SyncProgress>>(new Map());
   const [elapsedSeconds, setElapsedSeconds] = useState<Map<string, number>>(new Map());
+  const [syncNotices, setSyncNotices] = useState<Map<string, string>>(new Map());
+  // Null explicitly clears a stale server-prop error after a retry/success.
+  const [syncErrors, setSyncErrors] = useState<Map<string, string | null>>(new Map());
+  const [upToken, setUpToken] = useState("");
+  const [isConnectingUp, setIsConnectingUp] = useState(false);
+  const [upError, setUpError] = useState<string | null>(null);
   const pollingTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const elapsedTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const initialSyncTimes = useRef<Map<string, string | null>>(new Map());
+  const mounted = useRef(false);
 
   // Cleanup all timers on unmount
   useEffect(() => {
+    mounted.current = true;
     const pollingTimersForCleanup = pollingTimers.current;
     const elapsedTimersForCleanup = elapsedTimers.current;
+    const initialTimesForCleanup = initialSyncTimes.current;
     return () => {
+      mounted.current = false;
       pollingTimersForCleanup.forEach((timer) => clearTimeout(timer));
       elapsedTimersForCleanup.forEach((timer) => clearInterval(timer));
+      pollingTimersForCleanup.clear();
+      elapsedTimersForCleanup.clear();
+      initialTimesForCleanup.clear();
     };
   }, []);
 
@@ -109,6 +130,11 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const startPolling = useCallback(
     (connectionId: string, currentLastSyncedAt: string | null) => {
       initialSyncTimes.current.set(connectionId, currentLastSyncedAt);
+      setSyncNotices((prev) => {
+        const next = new Map(prev);
+        next.delete(connectionId);
+        return next;
+      });
       setPollingIds((prev) => new Set([...prev, connectionId]));
 
       // Start elapsed seconds ticker (clear any stale one first)
@@ -124,18 +150,22 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
       }, 1000);
       elapsedTimers.current.set(connectionId, elapsedInterval);
 
-      let elapsed = 0;
+      const pollingStartedAt = Date.now();
       const poll = async () => {
-        elapsed += 3000;
-        if (elapsed > 600000) {
+        if (Date.now() - pollingStartedAt >= 600000) {
+          setSyncNotices((prev) => new Map(prev).set(connectionId,
+            "Sync completion could not be confirmed after 10 minutes. The job may still be running; check worker logs before retrying."));
           stopPolling(connectionId);
           return;
         }
 
         try {
-          const resp = await fetch(`/api/enable-banking/status/${connectionId}`);
+          const resp = await fetch(`/api/enable-banking/status/${encodeURIComponent(connectionId)}`, {
+            signal: AbortSignal.timeout(30000),
+          });
           if (!resp.ok) throw new Error(`Status ${resp.status}`);
           const data = await resp.json();
+          if (!mounted.current) return;
 
           if (data.sync_progress) {
             setSyncProgress((prev) => new Map(prev).set(connectionId, data.sync_progress));
@@ -143,12 +173,14 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
 
           const startedAt = initialSyncTimes.current.get(connectionId);
           if (data.last_synced_at && data.last_synced_at !== startedAt) {
+            setSyncErrors((prev) => new Map(prev).set(connectionId, null));
             stopPolling(connectionId);
             router.refresh();
             return;
           }
 
           if (data.last_sync_error) {
+            setSyncErrors((prev) => new Map(prev).set(connectionId, data.last_sync_error));
             stopPolling(connectionId);
             router.refresh();
             return;
@@ -157,6 +189,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
           // Network error, keep polling
         }
 
+        if (!mounted.current) return;
         const timer = setTimeout(poll, 3000);
         pollingTimers.current.set(connectionId, timer);
       };
@@ -170,7 +203,8 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   // Auto-detect connections that are active but have never synced (initial sync after wizard)
   useEffect(() => {
     for (const conn of connections) {
-      if (conn.status === "active" && !conn.lastSyncedAt && !pollingIds.has(conn.id)) {
+      if (conn.status === "active" && !conn.lastSyncedAt && !conn.lastSyncError &&
+          !pollingIds.has(conn.id) && !initialSyncTimes.current.has(conn.id)) {
         startPolling(conn.id, null);
         setSyncingIds((prev) => new Set([...prev, conn.id]));
       }
@@ -179,14 +213,15 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
 
   const handleSync = async (connectionId: string) => {
     setSyncingIds((prev) => new Set(prev).add(connectionId));
+    setSyncErrors((prev) => new Map(prev).set(connectionId, null));
 
     const conn = connections.find((c) => c.id === connectionId);
     const currentLastSyncedAt = conn?.lastSyncedAt?.toISOString() || null;
 
     try {
-      const result = await triggerSync(connectionId);
+      const result = conn?.provider === "up" ? await triggerUpSync(connectionId) : await triggerSync(connectionId);
       if (!result.success) {
-        console.error("Sync failed:", result.error);
+        setSyncErrors((prev) => new Map(prev).set(connectionId, result.error || "Unable to start sync. Please try again."));
         setSyncingIds((prev) => {
           const next = new Set(prev);
           next.delete(connectionId);
@@ -196,6 +231,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
       }
       startPolling(connectionId, currentLastSyncedAt);
     } catch {
+      setSyncErrors((prev) => new Map(prev).set(connectionId, "Unable to start sync. Please try again."));
       setSyncingIds((prev) => {
         const next = new Set(prev);
         next.delete(connectionId);
@@ -223,7 +259,8 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
   const handleDisconnect = async (connectionId: string) => {
     setDisconnectingIds((prev) => new Set(prev).add(connectionId));
     try {
-      const result = await disconnectBank(connectionId);
+      const connection = connections.find((item) => item.id === connectionId);
+      const result = connection?.provider === "up" ? await disconnectUp(connectionId) : await disconnectBank(connectionId);
       if (!result.success) {
         console.error("Disconnect failed:", result.error);
       }
@@ -234,6 +271,23 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
         next.delete(connectionId);
         return next;
       });
+    }
+  };
+
+  const handleConnectUp = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsConnectingUp(true);
+    setUpError(null);
+    try {
+      const result = await createUpConnection(upToken);
+      if (!result.success || !result.connectionId) {
+        setUpError(result.error || "Could not connect to Up");
+        return;
+      }
+      setUpToken("");
+      router.push(`/settings/connect-bank/map-accounts?connectionId=${result.connectionId}`);
+    } finally {
+      setIsConnectingUp(false);
     }
   };
 
@@ -277,19 +331,11 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
           <h2 className="text-lg font-semibold">Bank Connections</h2>
           <p className="text-sm text-muted-foreground">
             {isAustralianProfile
-              ? "Australian automatic bank sync is not available yet. Use CSV imports for now."
+              ? "Connect Up with a personal access token, or import a bank CSV."
               : "Connect your bank accounts via Open Banking to automatically sync transactions."}
           </p>
         </div>
-        {isAustralianProfile ? (
-          <Link
-            href="/transactions/import"
-            className={buttonVariants({ variant: "default", size: "default" })}
-          >
-            <RiAddLine className="mr-1.5 h-4 w-4" />
-            Import CSV
-          </Link>
-        ) : (
+        {!isAustralianProfile && (
           <Link
             href="/settings/connect-bank"
             className={buttonVariants({ variant: "default", size: "default" })}
@@ -301,10 +347,32 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
       </div>
 
       {isAustralianProfile && (
-        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-          Australian CDR bank connections are planned separately. Import bank CSVs from
-          CommBank, Westpac, NAB, ANZ, Macquarie, ING, and other providers from the
-          transactions import flow.
+        <div className="rounded-lg border bg-muted/30 p-4">
+          <div className="mb-3">
+            <h3 className="font-medium">Connect Up</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Paste a personal access token to discover your Up accounts. Your token is sent securely and is never shown here again.
+            </p>
+          </div>
+          <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleConnectUp}>
+            <input
+              aria-label="Up personal access token"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              type="password"
+              autoComplete="off"
+              placeholder="Up personal access token"
+              value={upToken}
+              onChange={(event) => setUpToken(event.target.value)}
+              disabled={isConnectingUp}
+            />
+            <Button type="submit" disabled={isConnectingUp || !upToken.trim()}>
+              {isConnectingUp ? "Testing..." : "Connect Up"}
+            </Button>
+          </form>
+          {upError && <p className="mt-2 text-sm text-destructive">{upError}</p>}
+          <p className="mt-3 text-xs text-muted-foreground">
+            Other Australian banks can still be imported from the <Link className="underline" href="/transactions/import">CSV import flow</Link>.
+          </p>
         </div>
       )}
 
@@ -313,7 +381,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
           <RiBankLine className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
           <p className="text-sm text-muted-foreground">
             {isAustralianProfile
-              ? "No live Australian bank connections yet. Use CSV import to bring in transactions."
+              ? "No Up connection yet. Paste a personal access token above to get started."
               : "No bank connections yet. Connect a bank to start syncing transactions automatically."}
           </p>
         </div>
@@ -346,7 +414,10 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                       </>
                     )}
                   </div>
-                  {isConsentExpiringSoon(connection) && (
+                    {connection.provider === "up" && (
+                      <span>Up</span>
+                    )}
+                    {connection.provider !== "up" && isConsentExpiringSoon(connection) && (
                     <div className="mt-1 flex items-center gap-1 text-xs text-amber-600">
                       <RiAlertLine className="h-3 w-3" />
                       <span>
@@ -360,7 +431,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                       </span>
                     </div>
                   )}
-                  {connection.status === "expired" && (
+                  {connection.provider !== "up" && connection.status === "expired" && (
                     <div className="mt-1 flex items-center gap-1 text-xs text-destructive">
                       <RiAlertLine className="h-3 w-3" />
                       <span>
@@ -374,9 +445,9 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                       </span>
                     </div>
                   )}
-                  {connection.lastSyncError && connection.status === "error" && (
-                    <p className="mt-1 text-xs text-destructive">
-                      {connection.lastSyncError}
+                  {(syncErrors.has(connection.id) ? syncErrors.get(connection.id) : connection.lastSyncError) && (
+                    <p role="alert" className="mt-1 text-xs text-destructive">
+                      Sync failed: {syncErrors.has(connection.id) ? syncErrors.get(connection.id) : connection.lastSyncError}
                     </p>
                   )}
                 </div>
@@ -397,7 +468,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                     {syncingIds.has(connection.id) ? "Syncing..." : "Sync Now"}
                   </Button>
                 )}
-                {connection.status === "active" && (
+                {connection.provider !== "up" && connection.status === "active" && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -455,10 +526,10 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                         if (progress && progress.accounts_total > 0) {
                           return `Syncing account ${progress.accounts_done} of ${progress.accounts_total} · ${progress.transactions_created} transactions imported`;
                         }
-                        return "Preparing sync...";
+                        return "Waiting for sync status...";
                       })()}
                     </span>
-                    <span>{elapsedSeconds.get(connection.id) ?? 0}s elapsed</span>
+                    <span>{elapsedSeconds.get(connection.id) ?? 0}s waiting on this page</span>
                   </div>
                   <Progress
                     value={(() => {
@@ -470,6 +541,11 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                     })()}
                   />
                 </div>
+              )}
+              {syncNotices.has(connection.id) && (
+                <p role="status" className="mt-3 text-sm text-muted-foreground">
+                  {syncNotices.get(connection.id)}
+                </p>
               )}
             </div>
           ))}

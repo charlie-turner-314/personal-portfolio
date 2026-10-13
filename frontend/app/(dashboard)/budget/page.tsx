@@ -19,12 +19,13 @@ export default async function BudgetPage({ searchParams }: BudgetPageProps) {
   const params = await searchParams;
   const month = typeof params.month === "string" ? params.month : undefined;
   const accountIds = normalizeAccountIds(params.account);
+  const personId = typeof params.person === "string" ? params.person : undefined;
 
   return (
     <>
       <Header title="Budget" />
       <Suspense
-        key={`${month ?? "current"}:${accountIds.join(",")}`}
+        key={`${month ?? "current"}:${accountIds.join(",")}:${personId ?? "household"}`}
         fallback={
           <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
             <CardGridSkeleton count={4} />
@@ -32,7 +33,7 @@ export default async function BudgetPage({ searchParams }: BudgetPageProps) {
           </div>
         }
       >
-        <BudgetSection month={month} accountIds={accountIds} />
+        <BudgetSection month={month} accountIds={accountIds} personId={personId} />
       </Suspense>
     </>
   );
@@ -57,9 +58,11 @@ function normalizeAccountIds(value: string | string[] | undefined): string[] {
 async function BudgetSection({
   month,
   accountIds,
+  personId,
 }: {
   month?: string;
   accountIds: string[];
+  personId?: string;
 }) {
   let data;
   let accounts;
@@ -68,7 +71,7 @@ async function BudgetSection({
 
   try {
     [data, accounts, plannedExpenses, plannedExpenseOptions] = await Promise.all([
-      getBudgetData(month, { accountIds }),
+      getBudgetData(month, { accountIds, personId }),
       getUserAccounts(),
       getBudgetPlannedExpenseSummary(month, { accountIds }),
       getPlannedExpenseFormOptions(),

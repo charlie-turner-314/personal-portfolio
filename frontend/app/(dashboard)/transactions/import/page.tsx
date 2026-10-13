@@ -40,7 +40,9 @@ export default function CsvImportPage() {
       const accountsData = await getUserAccounts();
       setAccounts(accountsData);
       if (accountsData.length > 0) {
-        setSelectedAccountId(accountsData[0].id);
+        const requestedAccountId = new URLSearchParams(window.location.search).get("accountId");
+        const requestedAccount = accountsData.find((account) => account.id === requestedAccountId);
+        setSelectedAccountId(requestedAccount?.id ?? accountsData[0].id);
       }
     };
     loadAccounts();

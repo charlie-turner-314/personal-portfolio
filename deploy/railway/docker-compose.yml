@@ -156,7 +156,7 @@ services:
   # Keep PORT=3000 so Railway proxy routes traffic correctly.
   app:
     image: ghcr.io/charlie-turner-314/personal-portfolio-frontend:v1.0.1
-    command: /bin/sh -lc "mkdir -p /data/uploads/profile /data/uploads/logos /data/uploads/imports /data/uploads/people && chmod -R u+rwX,g+rwX /data/uploads && node scripts/migrate.js && exec node_modules/.bin/next start -p 3000 -H 0.0.0.0"
+    command: /bin/sh -lc "mkdir -p /data/uploads/profile /data/uploads/logos /data/uploads/imports /data/uploads/people && chmod -R u+rwX,g+rwX /data/uploads && node scripts/migrate.js && exec node server.js"
     healthcheck:
       test:
         [

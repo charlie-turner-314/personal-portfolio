@@ -39,6 +39,7 @@ interface SettingsTabsProps {
   csvImports: CsvImportWithStats[];
   bankConnections: Array<{
     id: string;
+    provider: string;
     aspspName: string;
     aspspCountry: string;
     status: string;

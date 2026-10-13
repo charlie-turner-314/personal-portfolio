@@ -83,7 +83,7 @@ need to set custom start commands on Railway. Just set the variable per service:
 | `worker` | backend | `worker` | `celery -A celery_app worker` |
 | `beat` | backend | `beat` | `celery -A celery_app beat` |
 | `mcp` | backend | `mcp` | `uvicorn mcp_server:app` on `PORT` (8001) |
-| `app` | frontend | n/a | image CMD runs `node scripts/migrate.js && next start` |
+| `app` | frontend | n/a | image CMD runs `node scripts/migrate.js && node server.js` |
 
 This was verified end-to-end on Railway: with only `PROCESS_TYPE` set, `worker` logged
 `celery@… ready`, `beat` started the scheduler, and `mcp` served `uvicorn … :8001`.
@@ -96,7 +96,7 @@ If a service is running the wrong process (e.g. `worker` logs show `gunicorn`), 
 The app must run database migrations so BetterAuth tables (`users`, `sessions`, `auth_accounts`) exist. Without this, **Create account** fails.
 
 - **Compose import (image deploy):** `deploy/railway/docker-compose.yml` runs migrations automatically in the app startup command:
-  `node scripts/migrate.js && next start ...`
+  `node scripts/migrate.js && node server.js`
 - **Source deploy (GitHub/template/`railway up` from `frontend/`):** `frontend/railway.toml` sets `preDeployCommand = "node scripts/migrate.js"`.
 
 No manual migration setup is required in either mode.

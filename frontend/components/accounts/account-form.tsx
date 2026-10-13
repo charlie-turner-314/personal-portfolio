@@ -21,7 +21,10 @@ import {
   isLiabilityAccountType,
 } from "@/lib/constants";
 import { createAccount, createPocketAccount } from "@/lib/actions/accounts";
-import { OwnersField, type OwnerValue } from "@/components/household/owners-field";
+import {
+  AccountOwnershipAllocationField,
+  type AccountOwnershipAllocation,
+} from "@/components/household/account-ownership-allocation-field";
 
 const IBAN_RE = /^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/;
 
@@ -71,7 +74,8 @@ export function AccountForm({
   // Ownership state
   const [people, setPeople] = useState<Person[]>([]);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
-  const [owners, setOwners] = useState<OwnerValue[]>([]);
+  const [owners, setOwners] = useState<AccountOwnershipAllocation[]>([]);
+  const [ownershipEffectiveFrom, setOwnershipEffectiveFrom] = useState(() => new Date().toISOString().slice(0, 10));
   const [ownersError, setOwnersError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -81,7 +85,7 @@ export function AccountForm({
         setPeople(data.people);
         const self = data.people.find((p) => p.kind === "self");
         if (self) {
-          setOwners([{ personId: self.id, share: null }]);
+          setOwners([{ personId: self.id, share: 1 }]);
         }
       })
       .catch(() => {
@@ -120,7 +124,8 @@ export function AccountForm({
     setOwnersError(null);
     // Re-seed owners to self
     const self = people.find((p) => p.kind === "self");
-    setOwners(self ? [{ personId: self.id, share: null }] : []);
+    setOwners(self ? [{ personId: self.id, share: 1 }] : []);
+    setOwnershipEffectiveFrom(new Date().toISOString().slice(0, 10));
   };
 
   const validateOwners = (): boolean => {
@@ -128,18 +133,10 @@ export function AccountForm({
       setOwnersError("Select at least one owner.");
       return false;
     }
-    const allNull = owners.every((o) => o.share === null);
-    const allSet = owners.every((o) => o.share !== null);
-    if (!allNull && !allSet) {
-      setOwnersError("All owners must either split equally or specify shares.");
+    const sum = owners.reduce((acc, o) => acc + o.share, 0);
+    if (Math.abs(sum - 1) > 0.0001) {
+      setOwnersError(`Shares must sum to 100% (currently ${Math.round(sum * 100)}%).`);
       return false;
-    }
-    if (allSet) {
-      const sum = owners.reduce((acc, o) => acc + (o.share as number), 0);
-      if (Math.abs(sum - 1) > 0.0001) {
-        setOwnersError(`Shares must sum to 100% (currently ${Math.round(sum * 100)}%).`);
-        return false;
-      }
     }
     setOwnersError(null);
     return true;
@@ -147,17 +144,20 @@ export function AccountForm({
 
   const putOwners = async (entityId: string) => {
     try {
-      const r = await fetch(`/api/owners/account/${entityId}`, {
+      const r = await fetch(`/api/accounts/${entityId}/ownership-allocations`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owners }),
+        body: JSON.stringify({
+          effective_from: ownershipEffectiveFrom,
+          allocations: owners.map((owner) => ({ person_id: owner.personId, share: owner.share })),
+        }),
       });
       if (!r.ok) {
         const text = await r.text().catch(() => "request failed");
         throw new Error(`Failed to save owners: ${text.slice(0, 200)}`);
       }
     } catch (err) {
-      toast.error((err as Error).message || "Account created, but failed to save ownership. You can update it later.");
+      throw err;
     }
   };
 
@@ -502,13 +502,15 @@ export function AccountForm({
 
         {people.length > 0 && (
           <div className="space-y-2">
-            <OwnersField
+            <AccountOwnershipAllocationField
               people={people}
               value={owners}
               onChange={(next) => {
                 setOwners(next);
                 setOwnersError(null);
               }}
+              effectiveFrom={ownershipEffectiveFrom}
+              onEffectiveFromChange={setOwnershipEffectiveFrom}
               disabled={isLoading}
             />
             {ownersError && (

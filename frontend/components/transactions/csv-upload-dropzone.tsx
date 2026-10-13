@@ -7,8 +7,9 @@ import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
 interface CsvUploadDropzoneProps {
-  onFileSelect: (file: File, content: string) => void;
+  onFileSelect: (file: File, content: string, encoding?: "utf8" | "base64") => void;
   isUploading?: boolean;
+  acceptPdf?: boolean;
 }
 
 // Supported file extensions and MIME types
@@ -19,7 +20,7 @@ const VALID_TYPES = [
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ];
 
-export function CsvUploadDropzone({ onFileSelect, isUploading }: CsvUploadDropzoneProps) {
+export function CsvUploadDropzone({ onFileSelect, isUploading, acceptPdf = false }: CsvUploadDropzoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +31,12 @@ export function CsvUploadDropzone({ onFileSelect, isUploading }: CsvUploadDropzo
 
       // Validate file type
       const extension = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
-      const isValidExtension = VALID_EXTENSIONS.includes(extension);
-      const isValidType = VALID_TYPES.includes(file.type) || file.type === "";
+      const isPdf = extension === ".pdf" || file.type === "application/pdf";
+      const isValidExtension = VALID_EXTENSIONS.includes(extension) || (acceptPdf && extension === ".pdf");
+      const isValidType = VALID_TYPES.includes(file.type) || (acceptPdf && file.type === "application/pdf");
 
       if (!isValidExtension && !isValidType) {
-        setError("Please upload a CSV or Excel file");
+        setError(acceptPdf ? "Please upload a CSV, Excel, or PDF file" : "Please upload a CSV or Excel file");
         return;
       }
 
@@ -48,19 +50,28 @@ export function CsvUploadDropzone({ onFileSelect, isUploading }: CsvUploadDropzo
 
       try {
         // Check if it's an Excel file
-        if (file.name.match(/\.xlsx?$/i)) {
+        if (acceptPdf && isPdf) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const dataUrl = String(event.target?.result ?? "");
+            const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+            onFileSelect(file, base64, "base64");
+          };
+          reader.onerror = () => setError("Failed to read file");
+          reader.readAsDataURL(file);
+        } else if (file.name.match(/\.xlsx?$/i)) {
           // Excel file - parse with xlsx library
           const arrayBuffer = await file.arrayBuffer();
           const workbook = XLSX.read(arrayBuffer, { type: "array" });
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
           const csvContent = XLSX.utils.sheet_to_csv(firstSheet);
-          onFileSelect(file, csvContent);
+          onFileSelect(file, csvContent, "utf8");
         } else {
           // CSV - read as text
           const reader = new FileReader();
           reader.onload = (e) => {
             const content = e.target?.result as string;
-            onFileSelect(file, content);
+            onFileSelect(file, content, "utf8");
           };
           reader.onerror = () => {
             setError("Failed to read file");
@@ -71,7 +82,7 @@ export function CsvUploadDropzone({ onFileSelect, isUploading }: CsvUploadDropzo
         setError("Failed to read file");
       }
     },
-    [onFileSelect]
+    [acceptPdf, onFileSelect]
   );
 
   const handleDrop = useCallback(
@@ -156,7 +167,9 @@ export function CsvUploadDropzone({ onFileSelect, isUploading }: CsvUploadDropzo
       <input
         id="csv-file-input"
         type="file"
-        accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        accept={acceptPdf
+          ? ".csv,.xls,.xlsx,.pdf,text/csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          : ".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
         className="hidden"
         onChange={handleFileInput}
       />
@@ -173,7 +186,7 @@ export function CsvUploadDropzone({ onFileSelect, isUploading }: CsvUploadDropzo
           </p>
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
-        <p className="text-xs text-muted-foreground">CSV or Excel (max 10MB)</p>
+        <p className="text-xs text-muted-foreground">{acceptPdf ? "CSV, Excel, or PDF (max 10MB)" : "CSV or Excel (max 10MB)"}</p>
       </div>
     </div>
   );
