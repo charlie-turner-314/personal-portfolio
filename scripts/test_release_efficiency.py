@@ -16,6 +16,44 @@ IMAGES = {p: {"config": {"Labels": {"org.opencontainers.image.revision": SHA}}} 
 prune_spec = importlib.util.spec_from_file_location("prune", Path(__file__).with_name("prune-release-images.py"))
 prune = importlib.util.module_from_spec(prune_spec)
 prune_spec.loader.exec_module(prune)
+native_spec = importlib.util.spec_from_file_location("native", Path(__file__).with_name("assemble-native-images.py"))
+native = importlib.util.module_from_spec(native_spec)
+native_spec.loader.exec_module(native)
+
+
+class NativeAssemblyTests(unittest.TestCase):
+    def configs(self, arch, revision=SHA):
+        return {f"linux/{arch}": {"architecture": arch, "os": "linux", "config": {"Labels": {"org.opencontainers.image.revision": revision}}}}
+
+    def test_tested_platforms_are_assembled_by_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for arch in ("amd64", "arm64"):
+                (Path(directory) / f"{arch}.txt").write_text(DIGEST)
+            with patch.object(native.promotion, "inspect", side_effect=[self.configs("amd64"), self.configs("arm64"), {"digest": DIGEST}, IMAGES]), patch.object(native.promotion, "docker") as docker:
+                native.assemble("registry/app", SHA, directory)
+                docker.assert_called_once_with("create", "--tag", "registry/app:sha-" + SHA, "registry/app@" + DIGEST, "registry/app@" + DIGEST)
+
+    def test_wrong_cpu_or_revision_cannot_be_published(self):
+        for config in [self.configs("arm64"), self.configs("amd64", "c" * 40)]:
+            with tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "amd64.txt").write_text(DIGEST)
+                with patch.object(native.promotion, "inspect", return_value=config), patch.object(native.promotion, "docker") as docker:
+                    with self.assertRaises(ValueError):
+                        native.assemble("registry/app", SHA, directory)
+                    docker.assert_not_called()
+
+    def test_missing_platform_artifact_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(native.promotion, "docker") as docker:
+            with self.assertRaises(FileNotFoundError):
+                native.assemble("registry/app", SHA, directory)
+            docker.assert_not_called()
+
+    def test_invalid_digest_is_not_used_as_a_tag(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(native.promotion, "docker") as docker:
+            (Path(directory) / "amd64.txt").write_text("edge")
+            with self.assertRaises(ValueError):
+                native.assemble("registry/app", SHA, directory)
+            docker.assert_not_called()
 
 
 class PruneTests(unittest.TestCase):

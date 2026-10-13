@@ -33,7 +33,10 @@ jobs:
           push: false
           load: true
           tags: local/${{ matrix.service }}:test
-          cache-from: type=gha,scope=production-${{ matrix.service }}
+          # PRs may read trusted layers, but never write the release cache.
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ matrix.service }}:cache-amd64
+            type=gha,scope=production-${{ matrix.service }}
           build-contexts: |
             ${{ matrix.service == 'backend' && 'frontend=./frontend' || '' }}
           build-args: |
