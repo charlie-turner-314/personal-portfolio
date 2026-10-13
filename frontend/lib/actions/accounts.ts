@@ -1,9 +1,9 @@
 "use server";
 
 import { revalidatePath, updateTag } from "next/cache";
-import { eq, and, lte, gte, lt, desc, sql } from "drizzle-orm";
+import { eq, and, lte, gte, lt, desc, sql, inArray, max } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, type NewAccount } from "@/lib/db/schema";
+import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, csvImports, type NewAccount } from "@/lib/db/schema";
 import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
@@ -11,6 +11,7 @@ import { createInternalAuthHeaders } from "@/lib/internal-auth";
 import { resolveMissingAccountLogo } from "@/lib/actions/account-logos";
 import { getCachedFullUserAccounts, CACHE_TAGS } from "@/lib/data/cached";
 import { isLiabilityAccountType } from "@/lib/constants/account-types";
+import { getAccountFreshness, type AccountFreshness } from "@/lib/account-freshness";
 
 export interface CreateAccountInput {
   name: string;
@@ -318,6 +319,76 @@ export async function hardDeleteAccount(
 
 export async function getAccounts() {
   return getCachedFullUserAccounts();
+}
+
+/**
+ * Returns freshness metadata for the requested accounts. CSV completion time
+ * and transaction dates are queried separately so the Assets page can render
+ * a useful status without loading import history or every transaction row.
+ */
+export async function getAccountsFreshness(
+  accountIds: string[]
+): Promise<Record<string, AccountFreshness>> {
+  const userId = await requireAuth();
+  if (!userId || accountIds.length === 0) return {};
+
+  const [accountRows, csvRows, transactionRows] = await Promise.all([
+    db
+      .select({ id: accounts.id, provider: accounts.provider, lastSyncedAt: accounts.lastSyncedAt })
+      .from(accounts)
+      .where(and(eq(accounts.userId, userId), inArray(accounts.id, accountIds))),
+    db
+      .select({
+        accountId: csvImports.accountId,
+        completedAt: csvImports.completedAt,
+        createdAt: csvImports.createdAt,
+      })
+      .from(csvImports)
+      .where(
+        and(
+          eq(csvImports.userId, userId),
+          inArray(csvImports.accountId, accountIds),
+          eq(csvImports.status, "completed"),
+        )
+      )
+      .orderBy(desc(sql`COALESCE(${csvImports.completedAt}, ${csvImports.createdAt})`)),
+    db
+      .select({ accountId: transactions.accountId, dataThrough: max(transactions.bookedAt) })
+      .from(transactions)
+      .where(and(eq(transactions.userId, userId), inArray(transactions.accountId, accountIds)))
+      .groupBy(transactions.accountId),
+  ]);
+
+  const latestCsvByAccount = new Map<string, Date>();
+  for (const row of csvRows) {
+    if (!latestCsvByAccount.has(row.accountId)) {
+      const importedAt = row.completedAt ?? row.createdAt;
+      if (importedAt) latestCsvByAccount.set(row.accountId, importedAt);
+    }
+  }
+
+  const dataThroughByAccount = new Map(
+    transactionRows.map((row) => [row.accountId, row.dataThrough ?? null])
+  );
+
+  return Object.fromEntries(
+    accountRows.map((account) => [
+      account.id,
+      getAccountFreshness({
+        provider: account.provider,
+        lastSyncedAt: account.lastSyncedAt,
+        lastCsvImportAt: latestCsvByAccount.get(account.id) ?? null,
+        dataThrough: dataThroughByAccount.get(account.id) ?? null,
+      }),
+    ])
+  );
+}
+
+export async function getAccountFreshnessForAccount(
+  accountId: string
+): Promise<AccountFreshness | null> {
+  const freshness = await getAccountsFreshness([accountId]);
+  return freshness[accountId] ?? null;
 }
 
 export async function recalculateStartingBalance(

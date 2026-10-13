@@ -1,12 +1,12 @@
 "use client";
 
-import { RiRefreshLine } from "@remixicon/react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { AccountLogo } from "@/components/ui/account-logo";
-import { formatDistanceToNow } from "date-fns";
 import type { Account } from "@/lib/db/schema";
 import { getAccountTypeLabel, isLiabilityAccountType } from "@/lib/constants/account-types";
+import { AccountFreshnessIndicator } from "./account-freshness";
+import type { AccountFreshness } from "@/lib/account-freshness";
 
 interface AccountHeaderProps {
   account: Account & {
@@ -17,6 +17,8 @@ interface AccountHeaderProps {
     } | null;
   };
   currency: string;
+  freshness: AccountFreshness;
+  onUploadCsv?: () => void;
 }
 
 function formatCurrency(value: string | null, currency: string): string {
@@ -26,12 +28,9 @@ function formatCurrency(value: string | null, currency: string): string {
   }).format(parseFloat(value || "0"));
 }
 
-export function AccountHeader({ account, currency }: AccountHeaderProps) {
+export function AccountHeader({ account, currency, freshness, onUploadCsv }: AccountHeaderProps) {
   const typeLabel = getAccountTypeLabel(account.accountType);
   const isLiability = isLiabilityAccountType(account.accountType);
-  const lastSyncedText = account.lastSyncedAt
-    ? `Synced ${formatDistanceToNow(new Date(account.lastSyncedAt), { addSuffix: true })}`
-    : "Manual account";
 
   return (
     <Card>
@@ -55,10 +54,7 @@ export function AccountHeader({ account, currency }: AccountHeaderProps) {
                   <span>-</span>
                 </>
               )}
-              <div className="flex items-center gap-1">
-                <RiRefreshLine className="h-3 w-3" />
-                <span>{lastSyncedText}</span>
-              </div>
+              <AccountFreshnessIndicator freshness={freshness} onUploadCsv={onUploadCsv} />
             </div>
             {isLiability && (
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">

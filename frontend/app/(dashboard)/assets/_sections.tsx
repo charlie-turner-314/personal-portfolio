@@ -1,4 +1,4 @@
-import { getAccounts } from "@/lib/actions/accounts";
+import { getAccounts, getAccountsFreshness } from "@/lib/actions/accounts";
 import {
   getProperties,
   getPropertyLiabilityLinks,
@@ -32,11 +32,12 @@ export async function AssetsSection() {
 
   // Batch-fetch owners for all visible entities in parallel — avoids N waterfall
   // requests from <OwnerBadges> on each row.
-  const [accountOwnersMap, propertyOwnersMap, vehicleOwnersMap] =
+  const [accountOwnersMap, propertyOwnersMap, vehicleOwnersMap, accountFreshness] =
     await Promise.all([
       getOwnersForEntities("account", accounts.map((a) => a.id)),
       getOwnersForEntities("property", properties.map((p) => p.id)),
       getOwnersForEntities("vehicle", vehicles.map((v) => v.id)),
+      getAccountsFreshness(accounts.map((account) => account.id)),
     ]);
   const propertyIds = properties.map((property) => property.id);
   const [propertyLiabilityLinks, propertyValuations] = await Promise.all([
@@ -55,6 +56,7 @@ export async function AssetsSection() {
   return (
     <AssetManagement
       initialAccounts={accounts}
+      initialAccountFreshness={accountFreshness}
       initialProperties={properties}
       initialVehicles={vehicles}
       initialPeople={people}
