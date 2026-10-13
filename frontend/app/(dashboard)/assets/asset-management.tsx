@@ -76,6 +76,8 @@ import { AddAssetDialog } from "@/components/assets/add-asset-dialog";
 import { UpdateBalanceDialog } from "@/components/accounts/update-balance-dialog";
 import { PROPERTY_TYPES, VEHICLE_TYPES } from "@/components/assets/types";
 import { AccountLogo } from "@/components/ui/account-logo";
+import { AccountFreshnessIndicator } from "@/components/accounts/account-freshness";
+import type { AccountFreshness } from "@/lib/account-freshness";
 import { OwnersField, type OwnerValue } from "@/components/household/owners-field";
 import { OwnerBadges } from "@/components/household/owner-badges";
 import {
@@ -111,6 +113,7 @@ function formatCurrency(value: string | null, currency: string | null): string {
 
 interface AssetManagementProps {
   initialAccounts: AccountWithLogo[];
+  initialAccountFreshness: Record<string, AccountFreshness>;
   initialProperties: Property[];
   initialVehicles: Vehicle[];
   initialPeople?: Person[];
@@ -131,6 +134,7 @@ type AccountWithLogo = Account & {
 
 export function AssetManagement({
   initialAccounts,
+  initialAccountFreshness,
   initialProperties,
   initialVehicles,
   initialPeople,
@@ -661,7 +665,7 @@ export function AssetManagement({
             <div className="divide-y">
               {initialAccounts.map((account) => (
                 <div key={account.id} className="flex items-center justify-between py-4 first:pt-0 last:pb-0">
-                  <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     <AccountLogo
                       name={account.name}
                       logoUrl={account.logo?.logoUrl}
@@ -683,6 +687,13 @@ export function AssetManagement({
                         {getAccountTypeLabel(account.accountType)}
                         {account.institution && ` • ${account.institution}`}
                       </p>
+                      {initialAccountFreshness[account.id] && (
+                        <AccountFreshnessIndicator
+                          freshness={initialAccountFreshness[account.id]}
+                          compact
+                          onUploadCsv={() => router.push(`/transactions/import?accountId=${encodeURIComponent(account.id)}`)}
+                        />
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
