@@ -13,6 +13,11 @@ spec.loader.exec_module(lab)
 
 
 class LabSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.cipher_patch = patch.object(lab, '_cipher', lab.Fernet(lab.Fernet.generate_key()))
+        self.cipher_patch.start()
+        self.addCleanup(self.cipher_patch.stop)
+
     def config(self):
         return {
             'name': lab.PROJECT,
@@ -47,7 +52,7 @@ class LabSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(lab, 'STATE', Path(directory)):
             config = self.config()
             config['name'] = 'personal-portfolio'
-            lab.save('compose.json', json.dumps(config))
+            lab.save_private('compose.json', json.dumps(config))
             with self.assertRaises(SystemExit):
                 lab.compose('stop')
 
@@ -57,6 +62,18 @@ class LabSafetyTests(unittest.TestCase):
             path.touch(mode=0o644)
             lab.save('private.json', 'secret')
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_private_config_is_encrypted_and_tampering_fails(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(lab, 'STATE', Path(directory)):
+            lab.save_private('compose.json', 'private-value')
+            self.assertEqual(lab.load('compose.json'), 'private-value')
+            path = Path(directory) / 'compose.json.enc'
+            self.assertNotIn(b'private-value', path.read_bytes())
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertFalse((Path(directory) / 'compose.json').exists())
+            with patch.object(lab, '_cipher', lab.Fernet(lab.Fernet.generate_key())):
+                with self.assertRaises(Exception):
+                    lab.load('compose.json')
 
     def test_interrupted_restore_is_not_retried(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(lab, 'STATE', Path(directory)), \

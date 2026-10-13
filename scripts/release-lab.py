@@ -1,16 +1,61 @@
 #!/usr/bin/env python3
 """Isolated source-build UAT and upgrade rehearsal; secrets stay in .release-lab/."""
 import argparse
+import atexit
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
+import tempfile
+
+from cryptography.fernet import Fernet
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / '.release-lab'
 PROJECT = 'syllogic-release-lab-' + hashlib.sha256(str(ROOT).encode()).hexdigest()[:10]
+PRIVATE_FILES = {'.env', 'compose.json', 'bootstrap.json', 'migration-only.json', 'test-accounts.json'}
+_cipher = None
+_temporary_configs = []
+
+
+def cipher(source_app=None):
+    global _cipher
+    if _cipher is None:
+        secret = os.environ.get('RELEASE_LAB_AUTH_SECRET')
+        if not secret:
+            if source_app is None:
+                source_app = json.loads((STATE / 'manifest.json').read_text())['source_app']
+            secret = env_of(source_app).get('BETTER_AUTH_SECRET')
+        if not secret:
+            raise SystemExit('Matching source auth secret is required to unlock the lab.')
+        # Domain-separated key derived from the existing high-entropy auth secret.
+        # It is recovered from the source container, never saved beside ciphertext.
+        key = hashlib.sha256(('syllogic-release-lab-v1:' + PROJECT + ':' + secret).encode()).digest()
+        _cipher = Fernet(base64.urlsafe_b64encode(key))
+    return _cipher
+
+
+def load(name):
+    if name in PRIVATE_FILES:
+        return cipher().decrypt((STATE / (name + '.enc')).read_bytes()).decode()
+    return (STATE / name).read_text()
+
+
+def exists(name):
+    return (STATE / (name + '.enc' if name in PRIVATE_FILES else name)).exists()
+
+
+def temporary_config(name):
+    """Compose needs a file; decrypted configuration exists only during this invocation."""
+    handle = tempfile.NamedTemporaryFile(mode='w+', prefix='syllogic-lab-', suffix='.json')
+    handle.write(load(name))
+    handle.flush()
+    _temporary_configs.append(handle)
+    atexit.register(handle.close)
+    return handle.name
 
 
 def run(args, **kwargs):
@@ -19,6 +64,13 @@ def run(args, **kwargs):
 
 def output(args):
     return subprocess.check_output(args, text=True).strip()
+
+
+def save_private(name, data):
+    path = STATE / (name + '.enc')
+    with open(path, 'wb', opener=lambda p, f: os.open(p, f, 0o600)) as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(cipher().encrypt(data.encode()))
 
 
 def save(name, data):
@@ -35,9 +87,9 @@ def logged(name, args):
 
 
 def compose(*args):
-    config = json.loads((STATE / 'compose.json').read_text())
+    config = json.loads(load('compose.json'))
     validate_config(config)
-    return ['docker', 'compose', '-p', PROJECT, '-f', str(STATE / 'compose.json'), *args]
+    return ['docker', 'compose', '-p', PROJECT, '-f', temporary_config('compose.json'), *args]
 
 
 def validate_config(config):
@@ -97,6 +149,7 @@ def prepare(args):
     source = env_of(args.source_app)
     if not source.get('BETTER_AUTH_SECRET'):
         raise SystemExit('Source BETTER_AUTH_SECRET is required to decrypt restored JWKS signing keys.')
+    cipher(args.source_app)
     password = secrets.token_urlsafe(24)
     env = {'POSTGRES_USER': 'financeuser', 'POSTGRES_DB': 'finance_db',
            'POSTGRES_PASSWORD': password, 'DATABASE_URL': f'postgresql://financeuser:{password}@postgres:5432/finance_db',
@@ -107,8 +160,7 @@ def prepare(args):
            'STORAGE_PROVIDER': 'local', 'LOCAL_STORAGE_PATH': '/data/uploads'}
     for key in ['DATA_ENCRYPTION_KEY_CURRENT', 'DATA_ENCRYPTION_KEY_PREVIOUS', 'DATA_ENCRYPTION_KEY_ID']:
         env[key] = source.get(key, '')
-    save('.env', ''.join(f'{k}={v}\n' for k, v in env.items()))
-    command = ['docker', 'compose', '--env-file', str(STATE / '.env'), '-f', str(ROOT / 'deploy/compose/docker-compose.yml'),
+    command = ['docker', 'compose', '--env-file', os.devnull, '-f', str(ROOT / 'deploy/compose/docker-compose.yml'),
                '-f', str(ROOT / 'deploy/compose/docker-compose.local.yml'), 'config', '--format', 'json']
     # Shell variables normally override --env-file; never inherit production DB/API settings.
     config = json.loads(subprocess.check_output(command, text=True, env={**os.environ, **env}))
@@ -133,7 +185,7 @@ def prepare(args):
     for resource in ['container', 'volume', 'network']:
         if output(['docker', resource, 'ls', '-q', '--filter', f'label=com.docker.compose.project={PROJECT}']):
             raise SystemExit('Existing lab resources found without matching state; refusing to reuse them.')
-    save('compose.json', json.dumps(config, indent=2))
+    save_private('compose.json', json.dumps(config, indent=2))
     before = snapshot(args.source_db)
     save('before.json', json.dumps(before, indent=2))
     dump = STATE / 'source.dump'
@@ -165,14 +217,17 @@ def restore():
 
 def up():
     logged('build.log', compose('build', 'app', 'backend'))
+    # Existing lab sessions can write too. Quiesce only this checkout's writers
+    # before comparing data or changing its schema; retain them on failure.
+    run(compose('stop', 'app', 'backend'))
     restore()
+    if (STATE / 'runtime.json').exists():
+        db = output(compose('ps', '-q', 'postgres'))
+        save('before.json', json.dumps(snapshot(db), indent=2))
     logged('migration-first.log', compose('run', '--rm', 'migrate'))
     logged('migration-second.log', compose('run', '--rm', 'migrate'))
+    verify()
     run(compose('up', '-d', '--wait', 'backend', 'app'))
-    if (STATE / 'test-accounts.json').exists():
-        print('Test accounts already present; retaining the pre-test preservation report. Rehearse from a fresh backup for new release evidence.')
-    else:
-        verify()
     save('runtime.json', json.dumps({'mode': 'source-build',
          'revision': output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'])}, indent=2))
 
@@ -180,13 +235,13 @@ def up():
 def rehearse(cached_image):
     """Exercise candidate SQL with a cached Node runtime when builds are blocked."""
     restore()
-    config = json.loads((STATE / 'compose.json').read_text())
+    config = json.loads(load('compose.json'))
     service = config['services']['migrate']
     service['image'] = cached_image
     service['volumes'] = [f'{ROOT}/frontend/scripts:/app/scripts:ro',
                           f'{ROOT}/frontend/lib/db/migrations:/app/lib/db/migrations:ro']
-    save('migration-only.json', json.dumps(config, indent=2))
-    command = ['docker', 'compose', '-p', PROJECT, '-f', str(STATE / 'migration-only.json'),
+    save_private('migration-only.json', json.dumps(config, indent=2))
+    command = ['docker', 'compose', '-p', PROJECT, '-f', temporary_config('migration-only.json'),
                'run', '--rm', '--no-deps', 'migrate']
     logged('migration-first.log', command)
     logged('migration-second.log', command)
@@ -212,11 +267,10 @@ def verify():
 
 
 def accounts():
-    credentials = STATE / 'test-accounts.json'
-    accounts = json.loads(credentials.read_text()) if credentials.exists() else [
-                {'email': 'demo-uat@example.test', 'name': 'UAT Demo', 'password': secrets.token_urlsafe(20)},
-                {'email': 'fresh-uat@example.test', 'name': 'UAT Fresh', 'password': secrets.token_urlsafe(20)}]
-    save('test-accounts.json', json.dumps(accounts, indent=2))
+    accounts = json.loads(load('test-accounts.json')) if exists('test-accounts.json') else [
+                {'email': f'demo-uat-{PROJECT[-10:]}@example.test', 'name': 'UAT Demo', 'password': secrets.token_urlsafe(20)},
+                {'email': f'fresh-uat-{PROJECT[-10:]}@example.test', 'name': 'UAT Fresh', 'password': secrets.token_urlsafe(20)}]
+    save_private('test-accounts.json', json.dumps(accounts, indent=2))
     # Use the app container to avoid a dependency on host HTTP tooling.
     for account in accounts:
         js = """let s='';for await(const c of process.stdin)s+=c;
@@ -243,12 +297,12 @@ def accounts():
                     '--user-email', accounts[0]['email'], '--mode', 'seed'))
         save('demo-seeded', 'yes\n')
     smoke()
-    print('Prepared populated and fresh accounts. Credentials: .release-lab/test-accounts.json')
+    print('Prepared populated and fresh accounts. Credentials are encrypted in .release-lab/test-accounts.json.enc.')
 
 
 def cached_bootstrap():
     """Prepare accounts only; deliberately not candidate UI acceptance."""
-    config = json.loads((STATE / 'compose.json').read_text())
+    config = json.loads(load('compose.json'))
     validate_config(config)
     for name in ['app', 'migrate']:
         config['services'][name]['image'] = 'syllogic-frontend:local'
@@ -258,8 +312,8 @@ def cached_bootstrap():
             f'{ROOT}/frontend/lib/db/migrations:/app/lib/db/migrations:ro'])
     config['services']['backend']['image'] = 'syllogic-backend:local'
     config['services']['backend'].pop('build', None)
-    save('bootstrap.json', json.dumps(config, indent=2))
-    run(['docker', 'compose', '-p', PROJECT, '-f', str(STATE / 'bootstrap.json'),
+    save_private('bootstrap.json', json.dumps(config, indent=2))
+    run(['docker', 'compose', '-p', PROJECT, '-f', temporary_config('bootstrap.json'),
          'up', '-d', '--wait', '--no-build', 'backend', 'app'])
     save('runtime.json', json.dumps({'mode': 'cached-bootstrap', 'candidate_ui_verified': False}, indent=2))
     print('Cached runtime started for account preparation only. Candidate UI has NOT been built.')
@@ -267,29 +321,26 @@ def cached_bootstrap():
 
 def repair_auth():
     """Preserve encrypted JWKS when repairing labs created with a new auth secret."""
-    validate_config(json.loads((STATE / 'compose.json').read_text()))
+    validate_config(json.loads(load('compose.json')))
     manifest = json.loads((STATE / 'manifest.json').read_text())
     secret = env_of(manifest['source_app']).get('BETTER_AUTH_SECRET')
     if not secret:
         raise SystemExit('Source auth secret unavailable; restore it from the matching backup.')
     for filename in ['compose.json', 'bootstrap.json', 'migration-only.json']:
-        path = STATE / filename
-        if path.exists():
-            config = json.loads(path.read_text())
+        if exists(filename):
+            config = json.loads(load(filename))
             config['services']['app']['environment']['BETTER_AUTH_SECRET'] = secret
-            save(filename, json.dumps(config, indent=2))
-    lines = (STATE / '.env').read_text().splitlines()
-    save('.env', '\n'.join('BETTER_AUTH_SECRET=' + secret if line.startswith('BETTER_AUTH_SECRET=') else line for line in lines) + '\n')
+            save_private(filename, json.dumps(config, indent=2))
     mode = json.loads((STATE / 'runtime.json').read_text())['mode']
     filename = 'bootstrap.json' if mode == 'cached-bootstrap' else 'compose.json'
-    run(['docker', 'compose', '-p', PROJECT, '-f', str(STATE / filename),
+    run(['docker', 'compose', '-p', PROJECT, '-f', temporary_config(filename),
          'up', '-d', '--no-deps', '--no-build', '--wait', 'app'])
     print('Matching auth secret restored. Sign in again if your browser has an old session cookie.')
 
 
 def smoke():
     """Exercise cookie-authenticated rendering, not merely the sign-in API."""
-    accounts = json.loads((STATE / 'test-accounts.json').read_text())
+    accounts = json.loads(load('test-accounts.json'))
     js = """let input='';for await(const c of process.stdin)input+=c;
     const accounts=JSON.parse(input);
     for(const account of accounts){
