@@ -1085,10 +1085,13 @@ class DemoSeedService:
                 if qty <= 0:
                     continue
                 lot_n += 1
+                trade_date = start_date + timedelta(days=day_offset)
                 self.db.add(BrokerTrade(
                     account_id=account.id,
                     symbol=h_spec.symbol,
-                    trade_date=start_date + timedelta(days=day_offset),
+                    trade_date=trade_date,
+                    occurred_at=datetime.combine(trade_date, datetime.min.time()),
+                    acquisition_date=trade_date,
                     side="buy",
                     quantity=qty,
                     price=(Decimal(h_spec.avg_cost) * price_mult).quantize(Decimal("0.0001")),
