@@ -21,6 +21,15 @@ native = importlib.util.module_from_spec(native_spec)
 native_spec.loader.exec_module(native)
 
 
+class ReleaseWorkflowTests(unittest.TestCase):
+    def test_bundle_overrides_skipped_ancestor_but_requires_promoted_images(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/docker-build.yml").read_text()
+        bundle = workflow.split("  release_bundle:\n", 1)[1]
+        condition = next(line.strip() for line in bundle.splitlines() if line.strip().startswith("if:"))
+        self.assertEqual(condition, "if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success' }}")
+        self.assertIn("    needs: [build]", bundle)
+
+
 class NativeAssemblyTests(unittest.TestCase):
     def configs(self, arch, revision=SHA):
         return {f"linux/{arch}": {"architecture": arch, "os": "linux", "config": {"Labels": {"org.opencontainers.image.revision": revision}}}}
