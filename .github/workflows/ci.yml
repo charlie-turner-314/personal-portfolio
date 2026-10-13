@@ -84,6 +84,9 @@ jobs:
     - name: Test release image promotion safety
       run: python3 -m unittest discover -s scripts -p 'test_release_efficiency.py'
 
+    - name: Test local rehearsal isolation
+      run: python3 -m unittest discover -s scripts -p 'test_release_lab.py'
+
     - name: Lint frontend
       # These regressions must run in CI: API smoke tests alone cannot detect
       # a task that is queued by the API but absent from a fresh worker.
