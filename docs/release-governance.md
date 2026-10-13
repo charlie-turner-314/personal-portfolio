@@ -8,7 +8,7 @@ deployment commands, follow [Agent workflow](../deploy/compose/AGENT-WORKFLOW.md
 ## Required promotion path
 
 1. Land feature work in `develop` through a pull request.
-2. Wait for the required checks: `CI / build-and-test`, `CI / Compose Smoke Test`, `Compose End-to-End / compose-e2e`, `Build & Publish Docker Images / build (frontend)`, `Build & Publish Docker Images / build (backend)`, and CodeQL.
+2. Wait for the required PR checks: `build-and-test`, `Compose Smoke Test`, `compose-e2e`, `Build (frontend)`, `Build (backend)`, `Analyze (javascript-typescript)`, and `Analyze (python)`. Both protected branches require an up-to-date head. After merging, also wait for `Build & Publish Docker Images` to publish the exact commit before using its images; publication is a release prerequisite, not a PR check.
 3. Deploy the tested `develop` revision to the separately managed staging environment and perform the user acceptance checklist below.
 4. Create a `develop` to `main` pull request. Merge only after the required checks and acceptance sign-off are complete.
 5. Tag the resulting `main` commit as `vX.Y.Z` to publish images and release artifacts.
