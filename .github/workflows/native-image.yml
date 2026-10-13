@@ -1,0 +1,85 @@
+name: Native image build
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  native:
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    concurrency:
+      group: native-cache-${{ inputs.service }}-${{ inputs.arch }}-${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && 'trusted' || 'experiment' }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ inputs.service }}
+          tags: type=raw,value=sha-${{ github.sha }}-${{ inputs.arch }}
+
+      - name: Build and publish on native CPU
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ inputs.service }}
+          file: ./${{ inputs.service }}/Dockerfile
+          platforms: linux/${{ inputs.arch }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Shared across main/develop, unlike branch-scoped Actions caches.
+          # Experimental/manual feature builds cannot overwrite trusted caches.
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ inputs.service }}:cache-${{ inputs.arch }}
+            ${{ github.event_name == 'workflow_dispatch' && format('type=registry,ref=ghcr.io/{0}/personal-portfolio-{1}:cache-experiment-{2}', github.repository_owner, inputs.service, inputs.arch) || '' }}
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ inputs.service }}:cache-${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && inputs.arch || format('experiment-{0}', inputs.arch) }},mode=max
+          build-contexts: |
+            ${{ inputs.service == 'backend' && 'frontend=./frontend' || '' }}
+          build-args: |
+            NEXT_PUBLIC_DISABLE_SIGN_UPS=${{ vars.NEXT_PUBLIC_DISABLE_SIGN_UPS || 'false' }}
+            NEXT_PUBLIC_DEMO_EMAIL=${{ vars.NEXT_PUBLIC_DEMO_EMAIL || '' }}
+            NEXT_PUBLIC_DEMO_PASSWORD=${{ vars.NEXT_PUBLIC_DEMO_PASSWORD || '' }}
+
+      - name: Test the actual architecture image offline
+        env:
+          SERVICE: ${{ inputs.service }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/personal-portfolio-${{ inputs.service }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: python3 scripts/test-image-runtime.py "$SERVICE" "$IMAGE@$DIGEST"
+
+      - name: Save tested digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          mkdir -p digests
+          printf '%s\n' "$DIGEST" > 'digests/${{ inputs.arch }}.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ inputs.service }}-${{ inputs.arch }}
+          path: digests/*.txt
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true

@@ -5,6 +5,8 @@ umask 077
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tag="${1:?Usage: bash scripts/pi-release.sh vX.Y.Z /absolute/path/to/production.env}"
 env_file="${2:?Supply the existing production environment file}"
+mode="${3:-}"
+[[ "$mode" = '' || "$mode" = --maintenance ]] && [[ $# -le 3 ]] || { echo 'Optional third argument: --maintenance'; exit 1; }
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'An immutable vX.Y.Z release tag is required'; exit 1; }
 [[ "$env_file" = /* && -f "$env_file" ]] || { echo 'Environment file must be an existing absolute path'; exit 1; }
 cd "$root"
@@ -39,6 +41,42 @@ cp "$env_file" "$backup/production.env"
 "${compose[@]}" config > "$backup/resolved-compose.yaml"
 "${compose[@]}" images --format json > "$backup/previous-images.json"
 docker inspect personal-portfolio-app personal-portfolio-backend > "$backup/previous-containers.json"
+# Restart only containers that were running, using their old images/config.
+# Never use compose up for recovery: APP_VERSION already names the candidate.
+running_writers=()
+for service in app backend worker beat mcp; do
+  container="$(docker inspect "personal-portfolio-$service" --format '{{if .State.Running}}{{.Id}}{{end}}')"
+  [[ -z "$container" ]] || running_writers+=("$container")
+done
+writers_stopped=false
+migration_started=false
+release_complete=false
+started=$SECONDS
+phase_started=$SECONDS
+timing() {
+  printf '%s: %ss\n' "$1" "$((SECONDS - phase_started))" | tee -a "$backup/timings.txt"
+  phase_started=$SECONDS
+}
+recover() {
+  status=$?
+  trap - EXIT
+  if [[ "$release_complete" != true ]]; then
+    if [[ "$writers_stopped" = true && "$migration_started" = false && ${#running_writers[@]} -gt 0 ]]; then
+      echo 'Pre-migration failure: restarting the previously running containers.'
+      docker start "${running_writers[@]}" || true
+    fi
+    echo "Release stopped. Backup: $backup. After migration starts, inspect logs before restarting; do not delete volumes."
+  fi
+  exit "$status"
+}
+trap recover EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ "$mode" = --maintenance ]]; then
+  echo 'Maintenance mode: stopping application writers before pulling; database and volumes remain online.'
+  writers_stopped=true
+  "${compose[@]}" stop app backend worker beat mcp
+fi
 # Pull application images only; infrastructure upgrades are a separate operation.
 "${compose[@]}" pull app backend migrate worker beat mcp
 for service in app backend; do
@@ -47,9 +85,10 @@ for service in app backend; do
   [[ "$revision" = "$target" ]] || { echo "Image revision mismatch for $service"; exit 1; }
   docker image inspect "$image" --format '{{json .RepoDigests}}' >> "$backup/release-digests.txt"
 done
+timing pull-and-verify
 # Stop all writers before taking a consistent application backup.
+writers_stopped=true
 "${compose[@]}" stop app backend worker beat mcp
-trap 'echo "Release stopped. Backup: $backup. Inspect migration logs before restarting; do not delete volumes."' ERR
 python3 "$root/scripts/db-evidence.py" > "$backup/data-before.json"
 "${compose[@]}" exec -T postgres sh -c 'exec pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$backup/database.dump"
 test -s "$backup/database.dump"
@@ -61,12 +100,18 @@ rehearsal_db="release_restore_$(date -u +%Y%m%d%H%M%S)"
 "${compose[@]}" exec -T postgres sh -c 'createdb -U "$POSTGRES_USER" "$1"' sh "$rehearsal_db"
 "${compose[@]}" exec -T postgres sh -c 'pg_restore --exit-on-error --no-owner --no-privileges -U "$POSTGRES_USER" -d "$1"' sh "$rehearsal_db" < "$backup/database.dump"
 "${compose[@]}" exec -T postgres sh -c 'dropdb -U "$POSTGRES_USER" "$1"' sh "$rehearsal_db"
+timing backup-and-restore-test
+migration_started=true
 "${compose[@]}" run --rm migrate 2>&1 | tee "$backup/migration.log"
 "${compose[@]}" run --rm migrate > "$backup/migration-repeat.log" 2>&1
 python3 "$root/scripts/db-evidence.py" "$backup/data-before.json" > "$backup/data-after.json"
+timing migrate-and-verify
 "${compose[@]}" up -d --wait
 "${compose[@]}" ps > "$backup/services.txt"
 printf '%s\n' "$target" > "$backup/revision.txt"
 printf '%s\n' "$tag" > "$root/.release-backups/current-version"
+timing restart-and-health
+printf 'total: %ss\n' "$((SECONDS - started))" >> "$backup/timings.txt"
+release_complete=true
 echo "Deployed $tag ($target). Backup and evidence: $backup"
 echo 'Use this same APP_VERSION on subsequent Compose commands. Verify login and existing user data now.'
