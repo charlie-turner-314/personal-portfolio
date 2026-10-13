@@ -24,8 +24,8 @@ ALTER TABLE "broker_trades" ADD COLUMN IF NOT EXISTS "source_activity_id" uuid;
 ALTER TABLE "broker_trades" ADD COLUMN IF NOT EXISTS "event_group_id" varchar(255);
 ALTER TABLE "broker_trades" ADD COLUMN IF NOT EXISTS "source_acquisition_trade_id" uuid;
 UPDATE "broker_trades"
-SET "occurred_at" = "trade_date"::timestamp,
-    "acquisition_date" = "trade_date"
+SET "occurred_at" = COALESCE("occurred_at", "trade_date"::timestamp),
+    "acquisition_date" = COALESCE("acquisition_date", "trade_date")
 WHERE "occurred_at" IS NULL OR "acquisition_date" IS NULL;
 --> statement-breakpoint
 DO $$ BEGIN
