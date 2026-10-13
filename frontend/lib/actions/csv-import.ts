@@ -1,5 +1,7 @@
 "use server";
 
+import { createHash } from "node:crypto";
+import { discoverAccountAliases, routeAccountRow, type AccountRouting } from "@/lib/import/account-routing";
 import { revalidatePath } from "next/cache";
 import { desc, eq, and, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -151,7 +153,7 @@ async function getCsvImportAccess() {
   return { session, userId: session.user.id } as const;
 }
 // Column mapping types
-export interface ColumnMapping {
+export interface ColumnMapping extends AccountRouting {
   mappingSource?: "ai" | "deterministic" | "profile" | "manual";
   date: string | null;
   amount: string | null;
@@ -501,6 +503,7 @@ Use null for columns that don't exist or can't be determined. Australian bank CS
         ...aiMapping.typeConfig,
       },
       }),
+      accountMappings: undefined,
       mappingSource: "ai" as const,
     };
 
@@ -563,6 +566,23 @@ export async function saveColumnMapping(
       ...normalizeColumnMapping(mapping),
       mappingSource: mapping.mappingSource ?? "manual" as const,
     };
+    if (normalizedMapping.sourceAccount || normalizedMapping.destinationAccount) {
+      const filePath = resolveImportFilePath(importSession);
+      if (!filePath) return { success: false, error: "Import file is unavailable" };
+      const content = (await storage.download(filePath)).toString("utf-8");
+      const { headers, rows } = parseDelimitedText(content, detectCsvDelimiter(content));
+      const aliases = discoverAccountAliases(headers, rows, normalizedMapping);
+      const owned = await db.query.accounts.findMany({ where: eq(accounts.userId, userId) });
+      for (const alias of aliases) {
+        if (!Object.hasOwn(normalizedMapping.accountMappings ?? {}, alias)) {
+          return { success: false, error: `Confirm the account mapping for ${alias}` };
+        }
+        const id = normalizedMapping.accountMappings![alias];
+        if (id !== null && !owned.some((account) => account.id === id)) {
+          return { success: false, error: "Mapped account is unavailable" };
+        }
+      }
+    }
     let importProfileId = importSession.importProfileId;
 
     if (options.saveProfile) {
@@ -584,7 +604,7 @@ export async function saveColumnMapping(
           importKind: "transactions",
           provider: "generic",
           name: "Default CSV mapping",
-          columnMapping: normalizedMapping,
+          columnMapping: { ...normalizedMapping, accountMappings: undefined },
           headerSignature,
           lastUsedAt: new Date(),
           updatedAt: new Date(),
@@ -597,7 +617,7 @@ export async function saveColumnMapping(
             csvImportProfiles.provider,
           ],
           set: {
-            columnMapping: normalizedMapping,
+            columnMapping: { ...normalizedMapping, accountMappings: undefined },
             headerSignature,
             lastUsedAt: new Date(),
             updatedAt: new Date(),
@@ -625,6 +645,12 @@ export async function saveColumnMapping(
 }
 
 export interface PreviewTransaction {
+  accountId?: string;
+  accountName?: string;
+  destinationAccountId?: string;
+  destinationAccountName?: string;
+  currency?: string;
+  externalId?: string;
   rowIndex: number;
   date: string;
   amount: number;
@@ -761,6 +787,18 @@ export async function previewImportedTransactions(
     const delimiter = detectCsvDelimiter(fileContent);
     const { headers, rows } = parseDelimitedText(fileContent, delimiter);
 
+    const multiAccount = Boolean(mapping.sourceAccount || mapping.destinationAccount);
+    const ownedAccounts = multiAccount
+      ? await db.query.accounts.findMany({ where: eq(accounts.userId, userId) }) : [];
+    if (multiAccount) {
+      for (const alias of discoverAccountAliases(headers, rows, mapping)) {
+        if (!Object.hasOwn(mapping.accountMappings ?? {}, alias)) return { success: false, error: `Confirm the account mapping for ${alias}` };
+        const id = mapping.accountMappings![alias];
+        if (id !== null && !ownedAccounts.some((account) => account.id === id)) return { success: false, error: "Mapped account is unavailable" };
+      }
+      if (mapping.startingBalance || mapping.endingBalance || mapping.fee) return { success: false, error: "Multi-account imports require separate balance and fee transactions. Unmap balance and fee columns to continue." };
+    }
+
     // Get column indices
     const dateIndex = mapping.date ? headers.indexOf(mapping.date) : -1;
     const amountIndex = mapping.amount ? headers.indexOf(mapping.amount) : -1;
@@ -844,33 +882,54 @@ export async function previewImportedTransactions(
         continue;
       }
 
+      const routing = multiAccount ? routeAccountRow(headers, row, mapping, rowAmount.amount) : undefined;
+      if (multiAccount && !routing) { rowsNeedingAttention += 1; continue; }
+      const routedAccount = ownedAccounts.find((account) => account.id === routing?.accountId);
+      const destination = ownedAccounts.find((account) => account.id === routing?.destinationAccountId);
+      if (destination && destination.currency !== routedAccount?.currency) return { success: false, error: "Internal transfers must use accounts with the same currency" };
+      const bankId = mapping.transactionId ? row[headers.indexOf(mapping.transactionId)]?.trim() : undefined;
+      const identity = bankId || JSON.stringify([row[dateIndex], Math.abs(rowAmount.amount), description, routing?.accountId, routing?.destinationAccountId]);
+      const externalId = multiAccount ? `csv-multi-${createHash("sha256").update(JSON.stringify([routing?.accountId, identity])).digest("hex")}` : undefined;
       previewTransactions.push({
+        ...routing,
+        accountName: routedAccount?.name,
+        destinationAccountName: destination?.name,
+        currency: routedAccount?.currency ?? undefined,
+        externalId,
         rowIndex: i,
         date: parsedDate.toISOString(),
-        amount: rowAmount.amount,
+        amount: routing?.amount ?? rowAmount.amount,
         description,
         merchant,
-        transactionType: rowAmount.transactionType,
+        transactionType: routing?.transactionType ?? rowAmount.transactionType,
       });
     }
 
     // Detect duplicates against existing transactions in the same account
     const existingTransactions = await db.query.transactions.findMany({
       where: and(
-        eq(transactions.accountId, importSession.accountId),
+        multiAccount ? inArray(transactions.accountId, ownedAccounts.map((account) => account.id)) : eq(transactions.accountId, importSession.accountId),
         eq(transactions.userId, userId)
       ),
     });
 
     // Run duplicate detection
-    const duplicateMatches = detectDuplicates(previewTransactions, existingTransactions);
+    const duplicateMatches = multiAccount ? new Map() : detectDuplicates(previewTransactions, existingTransactions);
+    if (multiAccount) {
+      const seen = new Set<string>();
+      for (const tx of previewTransactions) {
+        const existing = existingTransactions.find((item) => item.externalId === tx.externalId);
+        if (existing || seen.has(tx.externalId!)) tx.isDuplicate = true;
+        seen.add(tx.externalId!);
+      }
+    }
     const markedTransactions = markDuplicates(previewTransactions, duplicateMatches);
 
     // Update import session with duplicate count
     await db
       .update(csvImports)
       .set({
-        duplicatesFound: duplicateMatches.size,
+        duplicatesFound: multiAccount ? markedTransactions.filter((tx) => tx.isDuplicate).length : duplicateMatches.size,
         rowsNeedingAttention,
       })
       .where(eq(csvImports.id, importId));
@@ -1195,6 +1254,10 @@ export async function finalizeImport(
       return { success: false, error: "Import session not found" };
     }
 
+    if ((importSession.columnMapping as ColumnMapping)?.sourceAccount || (importSession.columnMapping as ColumnMapping)?.destinationAccount) {
+      return { success: false, error: "Use the background import workflow for multi-account CSV files" };
+    }
+
     // Get account for currency
     const account = await db.query.accounts.findFirst({
       where: eq(accounts.id, importSession.accountId),
@@ -1457,7 +1520,7 @@ export async function enqueueBackgroundImport(
     const transactions = selectedTransactions.map((tx) => {
       const bookedAt = new Date(tx.date).toISOString();
       const baseExternalId = generateCsvImportExternalId(
-        importSession.accountId,
+        tx.accountId ?? importSession.accountId,
         bookedAt,
         tx.amount,
         tx.description || null,
@@ -1467,18 +1530,20 @@ export async function enqueueBackgroundImport(
       const count = externalIdCounts.get(baseExternalId) || 0;
       externalIdCounts.set(baseExternalId, count + 1);
 
-      const externalId = count === 0
+      const externalId = tx.externalId ?? (count === 0
         ? baseExternalId
-        : `${baseExternalId}-${count + 1}`;
+        : `${baseExternalId}-${count + 1}`);
 
       return {
-        account_id: importSession.accountId,
+        account_id: tx.accountId ?? importSession.accountId,
+        destination_account_id: tx.destinationAccountId,
+        multi_account: Boolean(tx.accountId),
         amount: tx.amount,
         description: tx.description || null,
         merchant: tx.merchant || null,
         booked_at: bookedAt,
         transaction_type: tx.transactionType,
-        currency: account.currency || "EUR",
+        currency: tx.currency || account.currency || "EUR",
         external_id: externalId,
         category_id: null,
       };
