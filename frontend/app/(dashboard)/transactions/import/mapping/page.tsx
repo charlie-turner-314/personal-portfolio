@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { RiArrowLeftLine, RiArrowRightLine, RiSparklingLine } from "@remixicon/react";
+import { CsvAccountMapping } from "@/components/transactions/csv-account-mapping";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -257,6 +258,7 @@ function MappingPageContent() {
                 </p>
               </div>
               <div className="flex-1 overflow-y-auto">
+                <CsvAccountMapping data={csvData} mapping={mapping} onChange={setMapping} />
                 <CsvMappingTable
                   headers={csvData.headers}
                   mapping={mapping}

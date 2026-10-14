@@ -141,6 +141,7 @@ export function CsvPreviewTable({
             </td>
             <td className="max-w-xs truncate px-4 py-3" title={tx.description}>
               {tx.description}
+              {tx.accountName && <div className="text-xs text-muted-foreground">{tx.accountName}{tx.destinationAccountName ? ` → ${tx.destinationAccountName} · Internal transfer` : ""}</div>}
             </td>
             <td className="whitespace-nowrap px-4 py-3 text-right font-mono">
               {tx.transactionType === "credit" ? "+" : "-"}

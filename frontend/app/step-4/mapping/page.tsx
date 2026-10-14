@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { OnboardingProgress } from "@/components/onboarding/onboarding-progress";
+import { CsvAccountMapping } from "@/components/transactions/csv-account-mapping";
 import { CsvMappingTable } from "@/components/transactions/csv-mapping-table";
 import { CsvSamplePreview } from "@/components/transactions/csv-sample-preview";
 import {
@@ -233,6 +234,7 @@ function MappingPageContent() {
                   </p>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto pr-2">
+                  <CsvAccountMapping data={csvData} mapping={mapping} onChange={setMapping} />
                   <CsvMappingTable
                     headers={csvData.headers}
                     mapping={mapping}

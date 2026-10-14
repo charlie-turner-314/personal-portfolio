@@ -11,6 +11,8 @@ import {
 
 const { mockPush } = vi.hoisted(() => ({ mockPush: vi.fn() }));
 
+vi.mock("@/lib/actions/accounts", () => ({ getAccounts: vi.fn().mockResolvedValue([{id: "account-1", name: "Everyday", currency: "AUD"}]) }));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
   useSearchParams: () => ({ get: () => "import-1" }),

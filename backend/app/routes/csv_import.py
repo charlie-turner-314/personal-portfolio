@@ -25,6 +25,8 @@ router = APIRouter()
 class TransactionForImport(BaseModel):
     """Transaction data to be imported."""
     account_id: str
+    destination_account_id: Optional[str] = None
+    multi_account: bool = False
     amount: float
     description: Optional[str] = None
     merchant: Optional[str] = None
@@ -141,17 +143,23 @@ def enqueue_csv_import(
         if not csv_import:
             raise HTTPException(status_code=404, detail="CSV import not found")
 
-        # Validate account exists
-        # Get account_id from first transaction
-        if request.transactions:
-            account_id = request.transactions[0].account_id
-            account = db.query(Account).filter(
-                Account.id == account_id,
-                Account.user_id == user_id
-            ).first()
-
-            if not account:
-                raise HTTPException(status_code=404, detail="Account not found")
+        # Validate every account, including the credit side, before publishing work.
+        account_ids = {txn.account_id for txn in request.transactions}
+        account_ids.update(txn.destination_account_id for txn in request.transactions if txn.destination_account_id)
+        owned = db.query(Account).filter(Account.id.in_(account_ids), Account.user_id == user_id).all() if account_ids else []
+        by_id = {str(account.id): account for account in owned}
+        if account_ids - by_id.keys():
+            raise HTTPException(status_code=404, detail="Account not found")
+        for txn in request.transactions:
+            if txn.destination_account_id:
+                if not txn.multi_account or txn.account_id == txn.destination_account_id:
+                    raise HTTPException(status_code=400, detail="Invalid transfer accounts")
+                if by_id[txn.account_id].currency != by_id[txn.destination_account_id].currency:
+                    raise HTTPException(status_code=400, detail="Transfer accounts must use the same currency")
+            if txn.multi_account and (not txn.external_id or not txn.amount):
+                raise HTTPException(status_code=400, detail="Multi-account rows require an identity and nonzero amount")
+        if any(txn.multi_account for txn in request.transactions) and (request.daily_balances or request.starting_balance is not None):
+            raise HTTPException(status_code=400, detail="Shared balances cannot be applied to multiple accounts")
 
         # Update CSV import status
         csv_import.status = "importing"
@@ -167,6 +175,8 @@ def enqueue_csv_import(
         transactions_data = [
             {
                 "account_id": txn.account_id,
+                "destination_account_id": txn.destination_account_id,
+                "multi_account": txn.multi_account,
                 "amount": txn.amount,
                 "description": txn.description,
                 "merchant": txn.merchant,
