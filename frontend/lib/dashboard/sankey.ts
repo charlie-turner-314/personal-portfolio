@@ -46,7 +46,7 @@ export function buildConservativeSankey(
   const incomeCategories = sanitizeCategories(incomeCategoriesInput, "income");
   const expenseCategories = sanitizeCategories(expenseCategoriesInput, "expense");
 
-  if (incomeCategories.length === 0 || expenseCategories.length === 0) {
+  if (incomeCategories.length === 0 && expenseCategories.length === 0) {
     return { nodes: [], links: [] };
   }
 

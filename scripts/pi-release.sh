@@ -5,8 +5,15 @@ umask 077
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tag="${1:?Usage: bash scripts/pi-release.sh vX.Y.Z /absolute/path/to/production.env}"
 env_file="${2:?Supply the existing production environment file}"
-mode="${3:-}"
-[[ "$mode" = '' || "$mode" = --maintenance ]] && [[ $# -le 3 ]] || { echo 'Optional third argument: --maintenance'; exit 1; }
+mode=""
+local_images=false
+for option in "${@:3}"; do
+  case "$option" in
+    --maintenance) mode=--maintenance ;;
+    --local-images) local_images=true ;;
+    *) echo "Unknown option: $option"; exit 1 ;;
+  esac
+done
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'An immutable vX.Y.Z release tag is required'; exit 1; }
 [[ "$env_file" = /* && -f "$env_file" ]] || { echo 'Environment file must be an existing absolute path'; exit 1; }
 cd "$root"
@@ -78,12 +85,14 @@ if [[ "$mode" = --maintenance ]]; then
   "${compose[@]}" stop app backend worker beat mcp
 fi
 # Pull application images only; infrastructure upgrades are a separate operation.
-"${compose[@]}" pull app backend migrate worker beat mcp
+if [[ "$local_images" != true ]]; then
+  "${compose[@]}" pull app backend migrate worker beat mcp
+fi
 for service in app backend; do
   image="ghcr.io/charlie-turner-314/personal-portfolio-${service/app/frontend}:$tag"
   revision="$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
   [[ "$revision" = "$target" ]] || { echo "Image revision mismatch for $service"; exit 1; }
-  docker image inspect "$image" --format '{{json .RepoDigests}}' >> "$backup/release-digests.txt"
+  docker image inspect "$image" --format '{{.Id}} {{json .RepoDigests}}' >> "$backup/release-digests.txt"
 done
 timing pull-and-verify
 # Stop all writers before taking a consistent application backup.
@@ -106,7 +115,7 @@ migration_started=true
 "${compose[@]}" run --rm migrate > "$backup/migration-repeat.log" 2>&1
 python3 "$root/scripts/db-evidence.py" "$backup/data-before.json" > "$backup/data-after.json"
 timing migrate-and-verify
-"${compose[@]}" up -d --wait
+"${compose[@]}" up -d --wait --pull never
 "${compose[@]}" ps > "$backup/services.txt"
 printf '%s\n' "$target" > "$backup/revision.txt"
 printf '%s\n' "$tag" > "$root/.release-backups/current-version"
