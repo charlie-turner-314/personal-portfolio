@@ -117,7 +117,7 @@ function CustomNode(props: CustomNodeProps) {
         y={y + height / 2}
         textAnchor={isLeftSide ? "end" : "start"}
         dominantBaseline="middle"
-        fill="#e7e5e4"
+        fill="var(--foreground)"
         fontSize={12}
         fontWeight={500}
         style={{ fontFamily: "var(--font-mono, monospace)" }}

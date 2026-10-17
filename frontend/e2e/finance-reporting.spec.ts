@@ -20,8 +20,9 @@ async function assertCharts(page: Page) {
   // Non-zero heights prove actual plotted income/expense, rather than an empty SVG.
   await expect.poll(async () => bars.evaluateAll(nodes => nodes.filter(node => node.getBoundingClientRect().height > 1).length)).toBeGreaterThanOrEqual(2);
   const flow = card(page, "Cash Flow");
+  await flow.scrollIntoViewIfNeeded();
   await expect(flow.getByText("No transaction data available for cash flow visualization")).toHaveCount(0);
-  await expect.poll(async () => flow.locator(".recharts-sankey-link").count()).toBeGreaterThan(0);
+  await expect.poll(async () => flow.locator('path[stroke^="url(#sankey-link-"]').count()).toBeGreaterThan(0);
   await expect(flow).toContainText(/Uncategor/i);
 }
 
@@ -98,7 +99,7 @@ test("uncategorised activity, gross property, debt and unequal ownership reconci
   await page.screenshot({ path: testInfo.outputPath("whole-household.png"), fullPage: true });
 
   // Use the visible person controls, not a hard-coded filtered API request.
-  await page.getByRole("button", { name: "UAT Alex", exact: true }).click();
+  await page.getByRole("button", { name: /UAT Alex$/ }).click();
   await expect(page).toHaveURL(new RegExp(`person=${ids.alex}`));
   await money(page, "Total Cash", "A$15,000");
   await money(page, "Total Liabilities", "-A$312,000");
@@ -110,7 +111,7 @@ test("uncategorised activity, gross property, debt and unequal ownership reconci
   await assertCharts(page);
   await page.screenshot({ path: testInfo.outputPath("alex-share.png"), fullPage: true });
 
-  await page.getByRole("button", { name: "UAT Bea", exact: true }).click();
+  await page.getByRole("button", { name: /UAT Bea$/ }).click();
   await money(page, "Total Cash", "A$10,000");
   await money(page, "Total Liabilities", "-A$208,000");
   await expect(netWorth).toContainText("A$177,000");

@@ -25,6 +25,7 @@ interface KpiSparkCardProps {
   isLoading?: boolean;
   showSign?: boolean;
   valueTone?: "default" | "liability";
+  valueFormat?: "currency" | "percentage";
 }
 
 function KpiSparkCardSkeleton() {
@@ -53,6 +54,7 @@ export function KpiSparkCard({
   isLoading = false,
   showSign = false,
   valueTone = "default",
+  valueFormat = "currency",
 }: KpiSparkCardProps) {
   // Generate unique ID for gradient to avoid conflicts with multiple charts
   const gradientId = React.useId();
@@ -61,7 +63,7 @@ export function KpiSparkCard({
     return <KpiSparkCardSkeleton />;
   }
 
-  const formattedValue = formatCurrency(value, currency, { showSign });
+  const formattedValue = valueFormat === "percentage" ? `${value.toFixed(1)}%` : formatCurrency(value, currency, { showSign });
 
   return (
     <Card>

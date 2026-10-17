@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { formatCurrency } from "@/lib/utils";
 import { Header } from "@/components/layout/header";
 import { KpiSparkCard } from "@/components/charts/kpi-spark-card";
 import { ProfitLossChart } from "@/components/charts/profit-loss-chart";
@@ -141,19 +142,11 @@ async function DashboardContent({
           <div data-walkthrough="walkthrough-savings">
           <KpiSparkCard
             title="Savings Rate"
-            value={data.savingsRate.amount}
+            value={data.savingsRate.percentage}
+            valueFormat="percentage"
             currency={data.savingsRate.currency}
-            subtitle={data.periodLabel.subtitle}
+            subtitle={`${formatCurrency(data.savingsRate.amount, data.savingsRate.currency, { showSign: true })} net savings · ${data.periodLabel.subtitle}`}
             sparkData={[]}
-            showSign
-            trend={
-              data.savingsRate.amount !== 0
-                ? {
-                    value: Math.abs(data.savingsRate.percentage),
-                    isPositive: data.savingsRate.amount > 0,
-                  }
-                : undefined
-            }
           />
           </div>
         </div>
