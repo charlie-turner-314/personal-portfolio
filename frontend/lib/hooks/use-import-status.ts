@@ -281,12 +281,17 @@ export function useImportStatus(
           toast.success(
             `Successfully imported ${data.imported_count} transactions`,
             {
-              description: data.skipped_count > 0
-                ? `${data.skipped_count} duplicates skipped`
-                : undefined,
+              description: [
+                data.skipped_count > 0 ? `${data.skipped_count} duplicates skipped.` : null,
+                data.categorization_summary?.uncategorized
+                  ? `${data.categorization_summary.uncategorized} transactions still need a category. Optional AI categorisation may continue in the background; you can review and bulk-edit categories. These transactions still count in your dashboard.`
+                  : null,
+              ].filter(Boolean).join(" ") || undefined,
               action: {
-                label: "View",
-                onClick: () => window.scrollTo(0, 0),
+                label: data.categorization_summary?.uncategorized ? "Review categories" : "View",
+                onClick: () => data.categorization_summary?.uncategorized
+                  ? window.location.assign("/transactions?category=uncategorized")
+                  : window.scrollTo(0, 0),
               },
             }
           );
