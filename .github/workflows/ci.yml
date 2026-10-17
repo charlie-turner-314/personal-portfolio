@@ -128,6 +128,16 @@ jobs:
       working-directory: ./frontend
       run: pnpm exec vitest run lib/actions/csv-import.multi-account.test.ts lib/import/account-routing.test.ts lib/import/csv-presets.test.ts components/transactions/dashboard-import-mapping-page.test.tsx
 
+    - name: Test dashboard accounting and ownership
+      working-directory: ./frontend
+      run: pnpm exec vitest run lib/dashboard/activity.test.ts lib/dashboard/sankey.test.ts lib/actions/dashboard.activity.test.ts lib/actions/dashboard.cash.test.ts lib/actions/dashboard.net-worth.test.ts lib/people/ownership-sql.test.ts lib/net-worth/calculation.test.ts
+
+    - name: Test categorisation and person-level accounting
+      working-directory: ./backend
+      env:
+        DATABASE_URL: postgresql+psycopg://financeuser:financepass@localhost:5432/finance_db
+      run: python -m pytest tests/test_post_import_pipeline.py tests/test_category_matcher_specific_rules.py tests/test_people_filter.py tests/services/test_ownership_service.py tests/services/test_account_ownership_allocation_service.py -q
+
     - name: Build frontend
       working-directory: ./frontend
       env:
