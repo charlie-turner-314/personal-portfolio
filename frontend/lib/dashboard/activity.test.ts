@@ -35,7 +35,7 @@ describe("dashboard activity", () => {
       row(20, { categoryId: "food", categoryType: "expense" }),
     ]);
     expect(result.income).toBe(0);
-    expect(result.expenses).toBe(30);
+    expect(result.expenses).toBe(10);
   });
 
   it.each([
@@ -55,6 +55,38 @@ describe("dashboard activity", () => {
     const chart = activitySankey(result);
     expect(chart.nodes.find((node) => node.name === "Other expenses")?.total).toBe(120);
     expect(chart.links.reduce((sum, link) => sum + link.value, 0)).toBe(300);
+  });
+
+  it("nets categorized refunds and income reversals across every summary", () => {
+    const expense = { categoryId: "food", categoryName: "Food", categoryType: "expense" };
+    const income = { categoryId: "salary", categoryName: "Salary", categoryType: "income" };
+    const result = summarizeActivity([
+      row(-100, expense), row(30, expense), row(1000, income), row(-200, income),
+    ]);
+    expect(result.expenses).toBe(70);
+    expect(result.income).toBe(800);
+    expect(result.dailyData).toEqual([{ date: "2026-10-14", income: 800, expenses: 70 }]);
+    expect(activitySankey(result).nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Food", total: 70 }),
+      expect.objectContaining({ name: "Salary", total: 800 }),
+      expect.objectContaining({ name: "Savings", total: 730 }),
+    ]));
+  });
+
+  it("shows net refunds from earlier periods as cash inflow without negative Sankey links", () => {
+    const result = summarizeActivity([
+      row(80, { categoryId: "food", categoryName: "Food", categoryType: "expense" }),
+      row(-30, { categoryId: "salary", categoryName: "Salary", categoryType: "income" }),
+    ]);
+    expect(result.expenses).toBe(-80);
+    expect(result.income).toBe(-30);
+    const chart = activitySankey(result);
+    expect(chart.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Refunds: Food", total: 80, categoryType: "income" }),
+      expect.objectContaining({ name: "Income reversals: Salary", total: 30, categoryType: "expense" }),
+      expect.objectContaining({ name: "Savings", total: 50 }),
+    ]));
+    expect(chart.links.every((link) => link.value > 0)).toBe(true);
   });
 
   it("excludes missing foreign conversions while retaining available amounts", () => {

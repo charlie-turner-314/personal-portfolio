@@ -25,8 +25,9 @@ export function summarizeActivity(rows: ActivityRow[]) {
     if (!Number.isFinite(signed) || signed === 0 || row.categoryType === "transfer") continue;
     const type = row.categoryType === "income" || row.categoryType === "expense"
       ? row.categoryType : signed > 0 ? "income" : "expense";
-    // Net reimbursement groups cannot turn an expense into additional income.
-    const amount = type === "income" ? Math.max(signed, 0) : Math.max(-signed, 0);
+    // Refunds retain their expense category and reduce net spending; income
+    // reversals similarly reduce income rather than disappearing.
+    const amount = type === "income" ? signed : -signed;
     if (!amount) continue;
     const day = daily.get(row.date) ?? { date: row.date, income: 0, expenses: 0 };
     day[type === "income" ? "income" : "expenses"] += amount;
@@ -55,7 +56,21 @@ export type ActivitySummary = ReturnType<typeof summarizeActivity>;
 
 /** Keep a readable chart without silently dropping the smaller categories. */
 function chartCategories(summary: ActivitySummary, type: "income" | "expense", limit: number): SankeyCategoryInput[] {
-  const all = summary.categories.filter((category) => category.type === type);
+  // A category can be net negative (e.g. a refund for an earlier period).
+  // Display that cash on the opposite side with an explicit reversal label;
+  // Sankey links cannot be negative. Net cash flow remains unchanged.
+  const all = summary.categories.flatMap((category) => {
+    const chartType = category.amount < 0
+      ? category.type === "expense" ? "income" : "expense"
+      : category.type;
+    if (chartType !== type || category.amount === 0) return [];
+    return [{
+      ...category, amount: Math.abs(category.amount),
+      name: category.amount < 0
+        ? `${category.type === "expense" ? "Refunds" : "Income reversals"}: ${category.name}`
+        : category.name,
+    }];
+  }).sort((a, b) => b.amount - a.amount);
   const visible = all.slice(0, limit).map((category) => ({
     categoryId: category.id, categoryName: category.name, total: category.amount, categoryType: type,
   }));
