@@ -79,10 +79,10 @@ async function DashboardContent({
   ]);
 
   const accountSubtitle = !accountIds?.length
-    ? "Across all accounts"
+    ? "Bank and cash accounts · net of overdrafts"
     : accountIds.length === 1
-      ? "Selected account"
-      : "Selected accounts";
+      ? "Selected bank/cash account"
+      : "Selected bank/cash accounts";
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
@@ -94,16 +94,26 @@ async function DashboardContent({
           <SearchButton />
         </div>
         {/* Row 1: KPI Cards */}
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <div data-walkthrough="walkthrough-balance">
             <KpiSparkCard
-              title="Total Balance"
+              title="Total Cash"
             value={data.balance.total}
             currency={data.balance.currency}
             subtitle={accountSubtitle}
             sparkData={data.balanceHistory}
+            showSign
           />
           </div>
+          <KpiSparkCard
+            title="Total Liabilities"
+            value={-Math.abs(data.assetsOverview.totalLiabilities)}
+            currency={data.assetsOverview.currency}
+            subtitle="Balance owed · included in net worth"
+            sparkData={[]}
+            valueTone="liability"
+            showSign
+          />
           <div data-walkthrough="walkthrough-spending">
           <KpiSparkCard
             title={`${data.periodLabel.title} Spending`}

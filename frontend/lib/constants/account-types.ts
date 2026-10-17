@@ -1,3 +1,6 @@
+/** Spendable bank/cash balances, excluding credit facilities and investments. */
+export const CASH_ACCOUNT_TYPE_VALUES = ["checking", "savings", "cash"] as const;
+
 export const LIABILITY_ACCOUNT_TYPE_VALUES = [
   "credit",
   "credit_card",

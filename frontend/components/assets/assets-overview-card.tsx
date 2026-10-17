@@ -54,8 +54,8 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Total liabilities
             </div>
-            <div className="break-words text-lg font-semibold">
-              {formatCurrency(Math.abs(totalLiabilities), data.currency)}
+            <div className="break-words text-lg font-semibold text-red-600 dark:text-red-400">
+              {formatCurrency(-Math.abs(totalLiabilities), data.currency, { showSign: true })}
             </div>
           </div>
         </div>

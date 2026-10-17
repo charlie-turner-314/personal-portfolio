@@ -31,7 +31,7 @@ function AccountRow({
   isLinkable = false,
   categoryKey,
   showWeight = true,
-  displayMagnitude = false,
+  displayAsLiability = false,
   descriptor,
 }: {
   account: AccountRowData;
@@ -40,7 +40,7 @@ function AccountRow({
   isLinkable?: boolean;
   categoryKey?: AssetCategoryKey;
   showWeight?: boolean;
-  displayMagnitude?: boolean;
+  displayAsLiability?: boolean;
   descriptor?: string;
 }) {
   const handleClick = () => {
@@ -51,7 +51,7 @@ function AccountRow({
       window.location.href = `/accounts/${account.id}`;
     }
   };
-  const displayedValue = displayMagnitude ? Math.abs(account.value) : account.value;
+  const displayedValue = displayAsLiability ? -Math.abs(account.value) : account.value;
   const percentage = "percentage" in account ? account.percentage : 0;
 
   return (
@@ -89,8 +89,8 @@ function AccountRow({
         )}
       </div>
       <div className="min-w-0 text-right">
-        <span className="whitespace-nowrap text-sm font-medium tabular-nums">
-          {formatCurrency(displayedValue, currency)}
+        <span className={cn("whitespace-nowrap text-sm font-medium tabular-nums", displayAsLiability && displayedValue !== 0 && "text-red-600 dark:text-red-400")}>
+          {formatCurrency(displayedValue, currency, { showSign: true })}
         </span>
       </div>
     </div>
@@ -205,7 +205,7 @@ function LiabilitiesSection({
           color={LIABILITY_COLOR}
           isLinkable={account.source === "account"}
           showWeight={false}
-          displayMagnitude
+          displayAsLiability
           descriptor="Balance owed"
         />
       ))}

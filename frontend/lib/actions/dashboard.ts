@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, accountBalances, accountOwnershipAllocations, transactionLinks, propertyLiabilityLinks, superAccounts } from "@/lib/db/schema";
+import { accounts, transactions, categories, users, properties, vehicles, accountOwnershipAllocations, transactionLinks, propertyLiabilityLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getCachedUserAccounts } from "@/lib/data/cached";
 import { eq, sql, gte, lte, and, desc, inArray, isNull, type SQL, type SQLWrapper } from "drizzle-orm";
@@ -24,7 +24,7 @@ import {
   getLinkedLiabilityAccountIds,
 } from "@/lib/properties/equity";
 import { getAustralianFinancialYearLabelForDateRange } from "@/lib/dates/australian-financial-year";
-import { getHistoricalSnapshotHistory } from "@/lib/actions/historical-snapshots";
+import { CASH_ACCOUNT_TYPE_VALUES } from "@/lib/constants/account-types";
 
 async function getUserCurrency(userId: string): Promise<string> {
   const result = await db
@@ -134,128 +134,68 @@ export async function getAvailableMonths() {
   }));
 }
 
+/** Cash available in bank/cash accounts; liabilities and investments are separate. */
 export async function getTotalBalance(accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
+  if (!session?.user?.id) return { total: 0, currency: "EUR" };
 
-  if (!session?.user?.id) {
-    return { total: 0, currency: "EUR" };
-  }
-
-  // Get user's active account IDs
-  const accountConditions = [
+  const conditions = [
     eq(accounts.userId, session.user.id),
     eq(accounts.isActive, true),
+    inArray(accounts.accountType, [...CASH_ACCOUNT_TYPE_VALUES]),
   ];
   const normalizedAccountIds = normalizeAccountIds(accountIds);
-  if (normalizedAccountIds?.length) {
-    accountConditions.push(inArray(accounts.id, normalizedAccountIds));
-  }
+  if (normalizedAccountIds?.length) conditions.push(inArray(accounts.id, normalizedAccountIds));
 
-  const userAccounts = await db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(and(...accountConditions));
-
-  if (userAccounts.length === 0) {
-    const currency = await getUserCurrency(session.user.id);
-    return { total: 0, currency };
-  }
-
-  const selectedAccountIds = userAccounts.map((a) => a.id);
-
-  // Get the latest balance for EACH account, then sum them
-  // This ensures accounts with different latest dates are all included
+  // New manual accounts may not have daily snapshots yet. Their current
+  // functional balance is authoritative until a snapshot is available.
+  const balance = sql`COALESCE((
+    SELECT ab.balance_in_functional_currency FROM account_balances ab
+    WHERE ab.account_id = ${accounts.id} AND ab.date::date <= CURRENT_DATE
+    ORDER BY ab.date DESC LIMIT 1
+  ), ${accounts.functionalBalance}, 0)`;
+  const share = ownershipShareSql(personId, accounts.id, sql`CURRENT_DATE`);
   const [result, currency] = await Promise.all([
-    db
-      .select({
-        total: personId
-          ? sql<string>`COALESCE(SUM(ab.balance_in_functional_currency * COALESCE((
-              SELECT aoa.share FROM ${accountOwnershipAllocations} aoa
-              WHERE aoa.account_id = ab.account_id AND aoa.person_id = ${personId}
-                AND aoa.effective_from <= ab.date::date
-              ORDER BY aoa.effective_from DESC LIMIT 1
-            ), 0)), 0)`
-          : sql<string>`COALESCE(SUM(ab.balance_in_functional_currency), 0)`,
-      })
-      .from(sql`(
-        SELECT DISTINCT ON (account_id) account_id, balance_in_functional_currency, date
-        FROM account_balances
-        WHERE account_id IN (${sql.join(selectedAccountIds.map((id) => sql`${id}`), sql`, `)})
-        ORDER BY account_id, date DESC
-      ) AS ab`),
+    db.select({ total: sql<string>`COALESCE(SUM(${balance} * ${share}), 0)` })
+      .from(accounts).where(and(...conditions)),
     getUserCurrency(session.user.id),
   ]);
-
-  return {
-    total: parseFloat(result[0]?.total || "0"),
-    currency,
-  };
+  return { total: parseFloat(result[0]?.total || "0"), currency };
 }
 
 export async function getBalanceHistory(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
+  if (!session?.user?.id) return [];
 
-  if (!session?.user?.id) {
-    return [];
-  }
-
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-
-  // Get user's active account IDs
-  const accountConditions = [
+  const conditions = [
     eq(accounts.userId, session.user.id),
     eq(accounts.isActive, true),
+    inArray(accounts.accountType, [...CASH_ACCOUNT_TYPE_VALUES]),
   ];
-  if (normalizedAccountIds?.length) {
-    accountConditions.push(inArray(accounts.id, normalizedAccountIds));
-  }
+  const normalizedAccountIds = normalizeAccountIds(accountIds);
+  if (normalizedAccountIds?.length) conditions.push(inArray(accounts.id, normalizedAccountIds));
+  const day = sql`cash_days.day`;
+  const share = ownershipShareSql(personId, accounts.id, day);
 
-  const userAccounts = await db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(and(...accountConditions));
+  // Carry each account's latest known balance forward independently, so an
+  // account without a snapshot on a particular day does not disappear. Never
+  // mix whole-portfolio net-worth snapshots into this cash-only series.
+  const result = await db.select({
+    date: sql<string>`TO_CHAR(${day}, 'YYYY-MM-DD')`,
+    value: sql<string>`SUM(COALESCE(cash_balance.value,
+      CASE WHEN ${day}::date = CURRENT_DATE THEN ${accounts.functionalBalance} END, 0) * ${share})`,
+  }).from(accounts)
+    .innerJoin(sql`generate_series(${startDate.toISOString()}::date,
+      LEAST(${endDate.toISOString()}::date, CURRENT_DATE), interval '1 day') AS cash_days(day)`, sql`true`)
+    .leftJoin(sql`LATERAL (
+      SELECT ab.balance_in_functional_currency AS value FROM account_balances ab
+      WHERE ab.account_id = ${accounts.id} AND ab.date::date <= ${day}::date
+      ORDER BY ab.date DESC LIMIT 1
+    ) AS cash_balance`, sql`true`)
+    .where(and(...conditions, sql`(cash_balance.value IS NOT NULL OR ${day}::date = CURRENT_DATE)`))
+    .groupBy(day).orderBy(day);
 
-  if (userAccounts.length === 0) {
-    return normalizedAccountIds?.length || personId ? [] : getHistoricalSnapshotHistory(startDate, endDate);
-  }
-
-  const selectedAccountIds = userAccounts.map((a) => a.id);
-
-  // Query account_balances table - sum across accounts per day
-  const result = await db
-    .select({
-      date: sql<string>`DATE(${accountBalances.date})`,
-      value: personId
-        ? sql<string>`SUM(${accountBalances.balanceInFunctionalCurrency} * COALESCE((
-            SELECT aoa.share FROM ${accountOwnershipAllocations} aoa
-            WHERE aoa.account_id = ${accountBalances.accountId} AND aoa.person_id = ${personId}
-              AND aoa.effective_from <= ${accountBalances.date}::date
-            ORDER BY aoa.effective_from DESC LIMIT 1
-          ), 0))`
-        : sql<string>`SUM(${accountBalances.balanceInFunctionalCurrency})`,
-    })
-    .from(accountBalances)
-    .where(and(
-      inArray(accountBalances.accountId, selectedAccountIds),
-      gte(accountBalances.date, startDate),
-      lte(accountBalances.date, endDate)
-    ))
-    .groupBy(sql`DATE(${accountBalances.date})`)
-    .orderBy(sql`DATE(${accountBalances.date})`);
-
-  const calculated = result.map(row => ({
-    date: row.date,
-    value: parseFloat(row.value || "0"),
-  }));
-  // Imported snapshots are complete reported net-worth points. Prefer them for
-  // matching dates so partial account balances cannot double-count assets.
-  // Imported snapshots describe the whole household and cannot be split
-  // retrospectively without account-level data.
-  if (normalizedAccountIds?.length || personId) return calculated;
-  const imported = await getHistoricalSnapshotHistory(startDate, endDate);
-  const byDate = new Map(calculated.map((point) => [point.date.slice(0, 10), point]));
-  for (const point of imported) byDate.set(point.date, point);
-  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return result.map(row => ({ date: row.date, value: parseFloat(row.value || "0") }));
 }
 
 export async function getPeriodSpending(
