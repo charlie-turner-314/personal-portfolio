@@ -5,7 +5,7 @@ import { accounts, transactions, categories, users, properties, vehicles, accoun
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getCachedUserAccounts } from "@/lib/data/cached";
 import { eq, sql, gte, lte, and, desc, inArray, isNull, type SQL, type SQLWrapper } from "drizzle-orm";
-import { buildConservativeSankey } from "@/lib/dashboard/sankey";
+import { summarizeActivity, activitySankey } from "@/lib/dashboard/activity";
 import {
   buildIncomeExpenseBuckets,
   resolveIncomeExpenseGrouping,
@@ -62,24 +62,6 @@ function ownershipShareSql(
 
 const t2AccountId = sql.raw("t2.account_id");
 const t2BookedAt = sql.raw("t2.booked_at");
-
-function errorToLogContext(error: unknown): {
-  message: string;
-  cause?: unknown;
-  stack?: string;
-} {
-  if (error instanceof Error) {
-    return {
-      message: error.message,
-      cause: "cause" in error ? (error as Error & { cause?: unknown }).cause : undefined,
-      stack: error.stack,
-    };
-  }
-
-  return {
-    message: String(error),
-  };
-}
 
 async function getLatestTransactionDate(userId: string, accountIds?: string[]): Promise<Date> {
   const normalizedAccountIds = normalizeAccountIds(accountIds);
@@ -258,557 +240,92 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export async function getPeriodSpending(
-  startDate: Date,
-  endDate: Date,
-  accountIds?: string[],
-  personId?: string,
-) {
+// All activity widgets share classification and linked-transaction semantics.
+// A LEFT JOIN is essential: categorization enriches activity, never gates it.
+async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
-
-  if (!session?.user?.id) {
-    return { total: 0, currency: "EUR" };
-  }
-
+  if (!session?.user?.id) return summarizeActivity([]);
   const normalizedAccountIds = normalizeAccountIds(accountIds);
-
   const conditions = [
     eq(transactions.userId, session.user.id),
-    eq(transactions.transactionType, "debit"),
     eq(transactions.includeInAnalytics, true),
+    isNull(transactions.internalTransferId),
     gte(transactions.bookedAt, startDate),
     lte(transactions.bookedAt, endDate),
   ];
-  if (normalizedAccountIds?.length) {
-    conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  }
-
-  // For linked transactions, use net amount (sum of all in group) for primary
-  // Subquery calculates net for each link group
-  try {
-    const [result, currency] = await Promise.all([
-      db
-        .select({
-          total: sql<string>`COALESCE(SUM(
-            CASE
-              WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-                COALESCE((
-                  SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
-                    ELSE 0
-                  END
-                  FROM ${transactions} t2
-                  JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-                  WHERE tl2.group_id = ${transactionLinks.groupId}
-                    AND tl2.group_id IS NOT NULL
-                ), 0)
-              WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
-            END
-          ), 0)`,
-        })
-        .from(transactions)
-        .innerJoin(
-          categories,
-          sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
+  if (normalizedAccountIds?.length) conditions.push(inArray(transactions.accountId, normalizedAccountIds));
+  const userCurrency = sql`COALESCE((SELECT functional_currency FROM ${users} WHERE id = ${session.user.id}), 'EUR')`;
+  const amountInCurrency = sql`COALESCE(${transactions.functionalAmount}, CASE WHEN ${transactions.currency} = ${userCurrency} THEN ${transactions.amount} END)`;
+  const linkedAmountInCurrency = sql`COALESCE(t2.functional_amount, CASE WHEN t2.currency = ${userCurrency} THEN t2.amount END)`;
+  const rows = await db.select({
+    date: sql<string>`DATE(${transactions.bookedAt})`,
+    categoryId: categories.id,
+    categoryName: categories.name,
+    categoryType: categories.categoryType,
+    icon: categories.icon,
+    color: categories.color,
+    amount: sql<string | null>`CASE
+      WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
+        (
+          SELECT CASE WHEN COUNT(*) FILTER (WHERE ${linkedAmountInCurrency} IS NULL) > 0 THEN NULL
+            ELSE SUM(${linkedAmountInCurrency} * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}) END
+          FROM ${transactions} t2
+          JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
+          WHERE tl2.group_id = ${transactionLinks.groupId}
+            AND t2.user_id = ${session.user.id}
+            AND t2.include_in_analytics = true
+            AND t2.internal_transfer_id IS NULL
         )
-        .leftJoin(
-          transactionLinks,
-          eq(transactions.id, transactionLinks.transactionId)
-        )
-        .where(and(...conditions, eq(categories.categoryType, "expense"))),
-      getUserCurrency(session.user.id),
-    ]);
-
-    return {
-      total: parseFloat(result[0]?.total || "0"),
-      currency,
-    };
-  } catch (error: unknown) {
-    const normalizedError = errorToLogContext(error);
-    console.error("[getPeriodSpending] Query failed:", {
-      error: normalizedError.message,
-      cause: normalizedError.cause,
-      stack: normalizedError.stack,
-      userId: session.user.id,
-    });
-    // Return default on error to prevent app crash
-    return {
-      total: 0,
-      currency: await getUserCurrency(session.user.id),
-    };
-  }
+      WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
+      ELSE ${amountInCurrency} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}
+    END`,
+  }).from(transactions)
+    .leftJoin(categories, sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`)
+    .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))
+    .where(and(...conditions));
+  return summarizeActivity(rows);
 }
 
-export async function getPeriodIncome(
-  startDate: Date,
-  endDate: Date,
-  accountIds?: string[],
-  personId?: string,
-) {
+export async function getPeriodSpending(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
-
-  if (!session?.user?.id) {
-    return { total: 0, currency: "EUR" };
-  }
-
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-
-  const conditions = [
-    eq(transactions.userId, session.user.id),
-    eq(transactions.transactionType, "credit"),
-    eq(transactions.includeInAnalytics, true),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-  if (normalizedAccountIds?.length) {
-    conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  }
-
-  // For linked transactions, use net amount (sum of all in group) for primary
-  // Subquery calculates net for each link group
-  try {
-    const [result, currency] = await Promise.all([
-      db
-        .select({
-          total: sql<string>`COALESCE(SUM(
-            CASE
-              WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-                COALESCE((
-                  SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) > 0 THEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0)
-                    ELSE 0
-                  END
-                  FROM ${transactions} t2
-                  JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-                  WHERE tl2.group_id = ${transactionLinks.groupId}
-                    AND tl2.group_id IS NOT NULL
-                ), 0)
-              WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}
-            END
-          ), 0)`,
-        })
-        .from(transactions)
-        .innerJoin(
-          categories,
-          sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-        )
-        .leftJoin(
-          transactionLinks,
-          eq(transactions.id, transactionLinks.transactionId)
-        )
-        .where(and(...conditions, eq(categories.categoryType, "income"))),
-      getUserCurrency(session.user.id),
-    ]);
-
-    return {
-      total: parseFloat(result[0]?.total || "0"),
-      currency,
-    };
-  } catch (error: unknown) {
-    const normalizedError = errorToLogContext(error);
-    console.error("[getPeriodIncome] Query failed:", {
-      error: normalizedError.message,
-      cause: normalizedError.cause,
-      stack: normalizedError.stack,
-      userId: session.user.id,
-    });
-    // Return default on error to prevent app crash
-    return {
-      total: 0,
-      currency: await getUserCurrency(session.user.id),
-    };
-  }
+  const [activity, currency] = await Promise.all([
+    getActivitySummary(startDate, endDate, accountIds, personId),
+    session?.user?.id ? getUserCurrency(session.user.id) : Promise.resolve("EUR"),
+  ]);
+  return { total: activity.expenses, currency };
 }
 
-export async function getSpendingHistory(
-  startDate: Date,
-  endDate: Date,
-  accountIds?: string[],
-  personId?: string,
-) {
+export async function getPeriodIncome(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
-
-  if (!session?.user?.id) {
-    return [];
-  }
-
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-
-  const conditions = [
-    eq(transactions.userId, session.user.id),
-    eq(transactions.transactionType, "debit"),
-    eq(transactions.includeInAnalytics, true),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-  if (normalizedAccountIds?.length) {
-    conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  }
-
-  // Only count transactions categorized as 'expense' (excludes transfers)
-  const result = await db
-    .select({
-      date: sql<string>`DATE(${transactions.bookedAt})`,
-      value: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .where(and(...conditions, eq(categories.categoryType, "expense")))
-    .groupBy(sql`DATE(${transactions.bookedAt})`)
-    .orderBy(sql`DATE(${transactions.bookedAt})`);
-
-  return result.map((row) => ({
-    date: row.date,
-    value: parseFloat(row.value),
-  }));
+  const [activity, currency] = await Promise.all([
+    getActivitySummary(startDate, endDate, accountIds, personId),
+    session?.user?.id ? getUserCurrency(session.user.id) : Promise.resolve("EUR"),
+  ]);
+  return { total: activity.income, currency };
 }
 
-export async function getIncomeHistory(
-  startDate: Date,
-  endDate: Date,
-  accountIds?: string[],
-  personId?: string,
-) {
-  const session = await getAuthenticatedSession();
-
-  if (!session?.user?.id) {
-    return [];
-  }
-
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-
-  const conditions = [
-    eq(transactions.userId, session.user.id),
-    eq(transactions.transactionType, "credit"),
-    eq(transactions.includeInAnalytics, true),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-  if (normalizedAccountIds?.length) {
-    conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  }
-
-  // Only count transactions categorized as 'income' (excludes transfers)
-  const result = await db
-    .select({
-      date: sql<string>`DATE(${transactions.bookedAt})`,
-      value: sql<string>`COALESCE(SUM(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .where(and(...conditions, eq(categories.categoryType, "income")))
-    .groupBy(sql`DATE(${transactions.bookedAt})`)
-    .orderBy(sql`DATE(${transactions.bookedAt})`);
-
-  return result.map((row) => ({
-    date: row.date,
-    value: parseFloat(row.value),
-  }));
+export async function getSpendingHistory(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
+  return (await getActivitySummary(startDate, endDate, accountIds, personId)).dailyData
+    .map((day) => ({ date: day.date, value: day.expenses }));
 }
 
-export async function getIncomeExpenseData(
-  startDate: Date,
-  endDate: Date,
-  accountIds?: string[],
-  grouping?: IncomeExpenseGrouping,
-  personId?: string,
-) {
-  const session = await getAuthenticatedSession();
-
-  if (!session?.user?.id) {
-    return [];
-  }
-
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-
-  const conditions = [
-    eq(transactions.userId, session.user.id),
-    eq(transactions.includeInAnalytics, true),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-  if (normalizedAccountIds?.length) {
-    conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  }
-
-  // Get daily income and expenses in the selected range,
-  // then bucket at day/week/month granularity in JS.
-  // Filter by category type to exclude transfers
-  // For linked transactions: use net amount via subquery
-  try {
-    const result = await db
-    .select({
-      date: sql<string>`DATE(${transactions.bookedAt})`,
-      income: sql<string>`COALESCE(SUM(
-        CASE
-          WHEN ${categories.categoryType} = 'income' THEN
-            CASE
-              WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-                COALESCE((
-                  SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) > 0 THEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0)
-                    ELSE 0
-                  END
-                  FROM ${transactions} t2
-                  JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-                  WHERE tl2.group_id = ${transactionLinks.groupId}
-                    AND tl2.group_id IS NOT NULL
-                ), 0)
-              WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
-            END
-          ELSE 0
-        END
-      ), 0)`,
-      expenses: sql<string>`COALESCE(SUM(
-        CASE
-          WHEN ${categories.categoryType} = 'expense' THEN
-            CASE
-              WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-                COALESCE((
-                  SELECT CASE 
-                    WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
-                    ELSE 0
-                  END
-                  FROM ${transactions} t2
-                  JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-                  WHERE tl2.group_id = ${transactionLinks.groupId}
-                    AND tl2.group_id IS NOT NULL
-                ), 0)
-              WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-              ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
-            END
-          ELSE 0
-        END
-      ), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .leftJoin(
-      transactionLinks,
-      eq(transactions.id, transactionLinks.transactionId)
-    )
-    .where(and(...conditions))
-    .groupBy(
-      sql`DATE(${transactions.bookedAt})`
-    )
-    .orderBy(
-      sql`DATE(${transactions.bookedAt})`
-    );
-
-    return buildIncomeExpenseBuckets({
-      startDate,
-      endDate,
-      grouping,
-      dailyData: result.map((row) => ({
-        date: row.date,
-        income: parseFloat(row.income),
-        expenses: parseFloat(row.expenses),
-      })),
-    });
-  } catch (error: unknown) {
-    const normalizedError = errorToLogContext(error);
-    console.error("[getIncomeExpenseData] Query failed:", {
-      error: normalizedError.message,
-      cause: normalizedError.cause,
-      stack: normalizedError.stack,
-      userId: session.user.id,
-    });
-    // Return empty array on error to prevent app crash
-    return [];
-  }
+export async function getIncomeHistory(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
+  return (await getActivitySummary(startDate, endDate, accountIds, personId)).dailyData
+    .map((day) => ({ date: day.date, value: day.income }));
 }
 
-export async function getSpendingByCategory(
-  startDate: Date,
-  endDate: Date,
-  accountIds?: string[],
-  limit: number = 5,
-  personId?: string,
-) {
-  const session = await getAuthenticatedSession();
-
-  if (!session?.user?.id) {
-    return { categories: [], total: 0 };
-  }
-
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-
-  // Build base conditions
-  const baseConditions = [
-    eq(transactions.userId, session.user.id),
-    eq(transactions.transactionType, "debit"),
-    eq(transactions.includeInAnalytics, true),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-  if (normalizedAccountIds?.length) {
-    baseConditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  }
-
-  // Get spending by category using net amounts for linked transactions via subquery
-  try {
-    const categorizedResult = await db
-      .select({
-        id: categories.id,
-        name: categories.name,
-        icon: categories.icon,
-        color: categories.color,
-        amount: sql<string>`COALESCE(SUM(
-          CASE
-            WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-              COALESCE((
-                SELECT CASE 
-                  WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
-                  ELSE 0
-                END
-                FROM ${transactions} t2
-                JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-                WHERE tl2.group_id = ${transactionLinks.groupId}
-                  AND tl2.group_id IS NOT NULL
-              ), 0)
-            WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-            ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
-          END
-        ), 0)`,
-      })
-      .from(transactions)
-      .innerJoin(
-        categories,
-        sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-      )
-      .leftJoin(
-        transactionLinks,
-        eq(transactions.id, transactionLinks.transactionId)
-      )
-      .where(and(...baseConditions, eq(categories.categoryType, "expense")))
-      .groupBy(categories.id, categories.name, categories.icon, categories.color)
-      .orderBy(desc(sql`COALESCE(SUM(
-        CASE
-          WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-            COALESCE((
-              SELECT CASE 
-                WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
-                ELSE 0
-              END
-              FROM ${transactions} t2
-              JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-              WHERE tl2.group_id = ${transactionLinks.groupId}
-                AND tl2.group_id IS NOT NULL
-            ), 0)
-          WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-          ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
-        END
-      ), 0)`))
-      .limit(limit);
-
-  // Get uncategorized spending (non-linked only)
-  const uncategorizedResult = await db
-    .select({
-      amount: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
-    })
-    .from(transactions)
-    .leftJoin(
-      transactionLinks,
-      eq(transactions.id, transactionLinks.transactionId)
-    )
-    .where(
-      and(
-        ...baseConditions,
-        isNull(transactions.categoryId),
-        isNull(transactions.categorySystemId),
-        isNull(transactionLinks.linkRole)
-      )
-    );
-
-  // Get total spending using net amounts
-  const totalResult = await db
-    .select({
-      total: sql<string>`COALESCE(SUM(
-        CASE
-        WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-          COALESCE((
-            SELECT CASE 
-              WHEN COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0) < 0 THEN ABS(COALESCE(SUM(t2.amount * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}), 0))
-              ELSE 0
-            END
-            FROM ${transactions} t2
-            JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-            WHERE tl2.group_id = ${transactionLinks.groupId}
-              AND tl2.group_id IS NOT NULL
-          ), 0)
-        WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-        ELSE ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})
-      END
-    ), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .leftJoin(
-      transactionLinks,
-      eq(transactions.id, transactionLinks.transactionId)
-    )
-    .where(and(...baseConditions, eq(categories.categoryType, "expense")));
-
-    const categorizedCategories = categorizedResult.map((row) => ({
-      id: row.id,
-      name: row.name,
-      icon: row.icon,
-      color: row.color,
-      amount: parseFloat(row.amount),
-    }));
-
-    // Add uncategorized if there's any amount
-    const uncategorizedAmount = parseFloat(uncategorizedResult[0]?.amount || "0");
-    if (uncategorizedAmount > 0) {
-      categorizedCategories.push({
-        id: "uncategorized",
-        name: "Uncategorized",
-        icon: null,
-        color: null,
-        amount: uncategorizedAmount,
-      });
-    }
-
-    // Sort by amount and limit
-    const sortedCategories = categorizedCategories
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, limit);
-
-    return {
-      categories: sortedCategories,
-      total: parseFloat(totalResult[0]?.total || "0"),
-    };
-  } catch (error: unknown) {
-    const normalizedError = errorToLogContext(error);
-    console.error("[getSpendingByCategory] Query failed:", {
-      error: normalizedError.message,
-      cause: normalizedError.cause,
-      stack: normalizedError.stack,
-      userId: session.user.id,
-    });
-    // Return empty result on error to prevent app crash
-    return {
-      categories: [],
-      total: 0,
-    };
-  }
+export async function getIncomeExpenseData(startDate: Date, endDate: Date, accountIds?: string[], grouping?: IncomeExpenseGrouping, personId?: string) {
+  const activity = await getActivitySummary(startDate, endDate, accountIds, personId);
+  return buildIncomeExpenseBuckets({ startDate, endDate, grouping, dailyData: activity.dailyData });
 }
 
+export async function getSpendingByCategory(startDate: Date, endDate: Date, accountIds?: string[], limit: number = 5, personId?: string) {
+  const activity = await getActivitySummary(startDate, endDate, accountIds, personId);
+  return {
+    categories: activity.categories.filter((category) => category.type === "expense").slice(0, limit),
+    total: activity.expenses,
+  };
+}
 
 export async function getAssetsOverview(): Promise<NetWorthOverview> {
   const session = await getAuthenticatedSession();
@@ -938,118 +455,19 @@ export interface SankeyData {
   links: { source: number; target: number; value: number }[];
 }
 
-export async function getSankeyData(
-  startDate?: Date,
-  endDate?: Date,
-  accountIds?: string[],
-  personId?: string,
-): Promise<SankeyData> {
+export async function getSankeyData(startDate?: Date, endDate?: Date, accountIds?: string[], personId?: string): Promise<SankeyData> {
   const session = await getAuthenticatedSession();
-
-  if (!session?.user?.id) {
-    return { nodes: [], links: [] };
+  if (!session?.user?.id) return { nodes: [], links: [] };
+  let rangeStart = startDate;
+  let rangeEnd = endDate;
+  if (!rangeStart || !rangeEnd) {
+    rangeEnd = new Date(await getLatestTransactionDate(session.user.id, accountIds));
+    rangeEnd.setHours(23, 59, 59, 999);
+    rangeStart = new Date(rangeEnd);
+    rangeStart.setDate(rangeStart.getDate() - 29);
+    rangeStart.setHours(0, 0, 0, 0);
   }
-
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-
-  let resolvedStartDate = startDate;
-  let resolvedEndDate = endDate;
-  if (!resolvedStartDate || !resolvedEndDate) {
-    const fallbackRefDate = await getLatestTransactionDate(session.user.id, normalizedAccountIds);
-    resolvedEndDate = new Date(fallbackRefDate);
-    resolvedEndDate.setHours(23, 59, 59, 999);
-    resolvedStartDate = new Date(resolvedEndDate);
-    resolvedStartDate.setDate(resolvedStartDate.getDate() - 29);
-    resolvedStartDate.setHours(0, 0, 0, 0);
-  }
-  const rangeStart = resolvedStartDate ?? new Date(0);
-  const rangeEnd = resolvedEndDate ?? new Date();
-
-  const conditions = [
-    eq(transactions.userId, session.user.id),
-    eq(transactions.includeInAnalytics, true),
-    gte(transactions.bookedAt, rangeStart),
-    lte(transactions.bookedAt, rangeEnd),
-  ];
-  if (normalizedAccountIds?.length) {
-    conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  }
-
-  // Get income by category (categories with type 'income' only, excludes transfers)
-  const incomeByCategory = await db
-    .select({
-      categoryId: sql<string>`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
-      categoryName: categories.name,
-      total: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .where(
-      and(
-        ...conditions,
-        eq(categories.categoryType, "income")
-      )
-    )
-    .groupBy(
-      sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
-      categories.name
-    )
-    .orderBy(desc(sql`SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}))`));
-
-  // Get expenses by category (categories with type 'expense' only, excludes transfers)
-  const expensesByCategory = await db
-    .select({
-      categoryId: sql<string>`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
-      categoryName: categories.name,
-      total: sql<string>`COALESCE(SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)})), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .where(
-      and(
-        ...conditions,
-        eq(categories.categoryType, "expense")
-      )
-    )
-    .groupBy(
-      sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
-      categories.name
-    )
-    .orderBy(desc(sql`SUM(ABS(${transactions.amount} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}))`));
-
-  // Filter and limit categories
-  const incomeCategories = incomeByCategory
-    .filter(c => parseFloat(c.total) > 0)
-    .slice(0, 6);
-
-  const expenseCategories = expensesByCategory
-    .filter(c => parseFloat(c.total) > 0)
-    .slice(0, 8);
-
-  if (incomeCategories.length === 0 || expenseCategories.length === 0) {
-    return { nodes: [], links: [] };
-  }
-
-  return buildConservativeSankey(
-    incomeCategories.map((category) => ({
-      categoryId: category.categoryId,
-      categoryName: category.categoryName || "Other Income",
-      total: parseFloat(category.total),
-      categoryType: "income" as const,
-    })),
-    expenseCategories.map((category) => ({
-      categoryId: category.categoryId,
-      categoryName: category.categoryName || "Other Expenses",
-      total: parseFloat(category.total),
-      categoryType: "expense" as const,
-    }))
-  );
+  return activitySankey(await getActivitySummary(rangeStart, rangeEnd, accountIds, personId));
 }
 
 export interface DashboardFilters {
@@ -1070,6 +488,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   if (!session?.user?.id) {
     return {
+      activityMissingConversions: 0,
       balance: { total: 0, currency: "EUR" },
       balanceHistory: [],
       periodSpending: { total: 0, currency: "EUR" },
@@ -1132,31 +551,25 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   const currency = await getUserCurrency(session.user.id);
 
-  const [
-    balance,
-    balanceHistory,
-    periodSpending,
-    periodIncome,
-    spendingHistory,
-    incomeHistory,
-    incomeExpense,
-    spendingByCategory,
-    assetsOverview,
-    sankeyData,
-    upcomingPlannedExpenses,
-  ] = await Promise.all([
+  const [balance, balanceHistory, activity, assetsOverview, upcomingPlannedExpenses] = await Promise.all([
     getTotalBalance(normalizedAccountIds, filters.personId),
     getBalanceHistory(startDate, endDate, normalizedAccountIds, filters.personId),
-    getPeriodSpending(startDate, endDate, normalizedAccountIds, filters.personId),
-    getPeriodIncome(startDate, endDate, normalizedAccountIds, filters.personId),
-    getSpendingHistory(startDate, endDate, normalizedAccountIds, filters.personId),
-    getIncomeHistory(startDate, endDate, normalizedAccountIds, filters.personId),
-    getIncomeExpenseData(startDate, endDate, normalizedAccountIds, incomeExpenseGrouping, filters.personId),
-    getSpendingByCategory(startDate, endDate, normalizedAccountIds, 5, filters.personId),
+    getActivitySummary(startDate, endDate, normalizedAccountIds, filters.personId),
     getAssetsOverview(),
-    getSankeyData(startDate, endDate, normalizedAccountIds, filters.personId),
     getUpcomingPlannedExpenses({ days: 90, accountIds: normalizedAccountIds }),
   ]);
+  const periodSpending = { total: activity.expenses, currency };
+  const periodIncome = { total: activity.income, currency };
+  const spendingHistory = activity.dailyData.map((day) => ({ date: day.date, value: day.expenses }));
+  const incomeHistory = activity.dailyData.map((day) => ({ date: day.date, value: day.income }));
+  const incomeExpense = buildIncomeExpenseBuckets({
+    startDate, endDate, grouping: incomeExpenseGrouping, dailyData: activity.dailyData,
+  });
+  const spendingByCategory = {
+    categories: activity.categories.filter((category) => category.type === "expense").slice(0, 5),
+    total: activity.expenses,
+  };
+  const sankeyData = activitySankey(activity);
 
   // Calculate savings rate (income - expenses = potential savings)
   const savingsAmount = periodIncome.total - periodSpending.total;
@@ -1258,6 +671,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     : getHorizonPeriodLabel(horizonDays);
 
   return {
+    activityMissingConversions: activity.missingConversions,
     balance,
     balanceHistory,
     periodSpending,
