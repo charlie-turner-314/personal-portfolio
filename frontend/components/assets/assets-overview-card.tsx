@@ -39,6 +39,9 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
             </div>
           </div>
         </div>
+        <p className="text-sm text-muted-foreground">
+          {data.scope || "Whole household"} · Current values{data.accountFiltered ? " · Selected accounts only" : ""}
+        </p>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2">

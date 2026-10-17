@@ -1,16 +1,19 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, accountBalances, accountOwnershipAllocations, transactionLinks, propertyLiabilityLinks, superAccounts } from "@/lib/db/schema";
+import { accounts, transactions, categories, users, properties, vehicles, accountBalances, accountOwnershipAllocations, transactionLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getCachedUserAccounts } from "@/lib/data/cached";
-import { eq, sql, gte, lte, and, desc, inArray, isNull, type SQL, type SQLWrapper } from "drizzle-orm";
+import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
 import { buildConservativeSankey } from "@/lib/dashboard/sankey";
 import {
   buildIncomeExpenseBuckets,
   resolveIncomeExpenseGrouping,
   type IncomeExpenseGrouping,
 } from "@/lib/dashboard/income-expense-buckets";
+import { ownershipShareSql } from "@/lib/people/ownership-sql";
+import { getOwnersForEntities } from "@/lib/people/queries";
+import { attributeAmount } from "@/lib/people/attribution";
 import { getPortfolio } from "@/lib/api/investments";
 import { getUpcomingPlannedExpenses } from "@/lib/actions/planned-expenses";
 import {
@@ -19,10 +22,6 @@ import {
   type NetWorthEntry,
   type NetWorthOverview,
 } from "@/lib/net-worth/calculation";
-import {
-  calculatePropertyEquity,
-  getLinkedLiabilityAccountIds,
-} from "@/lib/properties/equity";
 import { getAustralianFinancialYearLabelForDateRange } from "@/lib/dates/australian-financial-year";
 import { getHistoricalSnapshotHistory } from "@/lib/actions/historical-snapshots";
 
@@ -40,24 +39,6 @@ function normalizeAccountIds(accountIds?: string[]): string[] | undefined {
   if (!accountIds?.length) return undefined;
   const uniqueIds = Array.from(new Set(accountIds.map((id) => id.trim()).filter(Boolean)));
   return uniqueIds.length > 0 ? uniqueIds : undefined;
-}
-
-function ownershipShareSql(
-  personId: string | undefined,
-  accountId: SQLWrapper,
-  bookedAt: SQLWrapper,
-): SQL<unknown> {
-  if (!personId) return sql`1`;
-
-  return sql`COALESCE((
-    SELECT aoa.share
-    FROM ${accountOwnershipAllocations} aoa
-    WHERE aoa.account_id = ${accountId}
-      AND aoa.person_id = ${personId}
-      AND aoa.effective_from <= (${bookedAt})::date
-    ORDER BY aoa.effective_from DESC
-    LIMIT 1
-  ), 0)`;
 }
 
 const t2AccountId = sql.raw("t2.account_id");
@@ -810,14 +791,14 @@ export async function getSpendingByCategory(
 }
 
 
-export async function getAssetsOverview(): Promise<NetWorthOverview> {
+export async function getAssetsOverview(accountIds?: string[], personId?: string): Promise<NetWorthOverview> {
   const session = await getAuthenticatedSession();
 
   if (!session?.user?.id) {
     return emptyNetWorthOverview();
   }
 
-  const [userAccounts, userProperties, userVehicles, userPropertyLiabilityLinks, currency, portfolio] = await Promise.all([
+  const [userAccounts, userProperties, userVehicles, currency, portfolio] = await Promise.all([
     db
       .select({
         id: accounts.id,
@@ -829,6 +810,7 @@ export async function getAssetsOverview(): Promise<NetWorthOverview> {
         currency: accounts.currency,
         superAccountId: superAccounts.id,
         includeSuperInNetWorth: superAccounts.includeInNetWorth,
+        ownershipShare: ownershipShareSql(personId, accounts.id, sql`CURRENT_DATE`),
       })
       .from(accounts)
       .leftJoin(
@@ -863,69 +845,54 @@ export async function getAssetsOverview(): Promise<NetWorthOverview> {
       })
       .from(vehicles)
       .where(and(eq(vehicles.userId, session.user.id), eq(vehicles.isActive, true))),
-    db
-      .select({
-        propertyId: propertyLiabilityLinks.propertyId,
-        accountId: propertyLiabilityLinks.accountId,
-      })
-      .from(propertyLiabilityLinks)
-      .where(eq(propertyLiabilityLinks.userId, session.user.id)),
     getUserCurrency(session.user.id),
     getPortfolio().catch(() => null),
   ]);
 
-  const linkedLiabilityAccountIds = getLinkedLiabilityAccountIds(userPropertyLiabilityLinks);
+  const [propertyOwners, vehicleOwners] = personId ? await Promise.all([
+    getOwnersForEntities("property", userProperties.map((property) => property.id)),
+    getOwnersForEntities("vehicle", userVehicles.map((vehicle) => vehicle.id)),
+  ]) : [new Map(), new Map()];
+  const selectedIds = normalizeAccountIds(accountIds);
+  const portfolioById = new Map((portfolio?.accounts || []).map((account) => [account.id, account]));
   const entries: NetWorthEntry[] = [
     ...userAccounts
-      .filter((account) => !linkedLiabilityAccountIds.has(account.id))
+      .filter((account) => !selectedIds || selectedIds.includes(account.id))
       .map((account) => ({
         id: account.id,
         name: account.name,
         institution: account.institution,
-        value: account.functionalBalance,
-        currency: account.currency || currency,
+        // Portfolio holdings replace, rather than duplicate, the same account balance.
+        value: Number(portfolioById.get(account.id)?.value ?? account.functionalBalance ?? 0) * Number(account.ownershipShare),
+        currency,
         source: "account" as const,
         accountType: account.accountType,
         isSuperannuation: account.superAccountId !== null,
         includeInNetWorth: account.includeSuperInNetWorth,
       })),
-    ...userProperties.map((property) => {
-      const addressParts = property.address?.split(",").map((part) => part.trim()) || [];
-      const location = addressParts.length > 1 ? addressParts.slice(-2).join(", ") : property.address;
-      const equity = calculatePropertyEquity(
-        property,
-        userAccounts,
-        userPropertyLiabilityLinks,
-      );
-
-      return {
-        id: property.id,
-        name: property.name,
-        institution: location || null,
-        value: equity.equity,
-        currency: property.currency || currency,
-        source: "property" as const,
-      };
-    }),
-    ...userVehicles.map((vehicle) => ({
+    ...(selectedIds ? [] : userProperties.map((property) => ({
+      id: property.id,
+      name: property.name,
+      institution: property.address,
+      value: attributeAmount(Number(property.currentValue || 0), propertyOwners.get(property.id) || [], personId || null),
+      currency: property.currency || currency,
+      source: "property" as const,
+    }))),
+    ...(selectedIds ? [] : userVehicles.map((vehicle) => ({
       id: vehicle.id,
       name: vehicle.name,
       institution: [vehicle.make, vehicle.model].filter(Boolean).join(" ") || null,
-      value: vehicle.currentValue,
+      value: attributeAmount(Number(vehicle.currentValue || 0), vehicleOwners.get(vehicle.id) || [], personId || null),
       currency: vehicle.currency || currency,
       source: "vehicle" as const,
-    })),
-    ...(portfolio?.accounts || []).map((account) => ({
-      id: account.id,
-      name: account.name,
-      institution: account.type || null,
-      value: account.value,
-      currency: portfolio?.currency || currency,
-      source: "portfolio" as const,
-    })),
+    }))),
   ];
 
-  return calculateNetWorthOverview(entries, currency);
+  return {
+    ...calculateNetWorthOverview(entries, currency),
+    scope: personId ? "Selected person’s share" : "Whole household",
+    accountFiltered: Boolean(selectedIds),
+  };
 }
 
 export interface SankeyData {
@@ -1153,7 +1120,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     getIncomeHistory(startDate, endDate, normalizedAccountIds, filters.personId),
     getIncomeExpenseData(startDate, endDate, normalizedAccountIds, incomeExpenseGrouping, filters.personId),
     getSpendingByCategory(startDate, endDate, normalizedAccountIds, 5, filters.personId),
-    getAssetsOverview(),
+    getAssetsOverview(normalizedAccountIds, filters.personId),
     getSankeyData(startDate, endDate, normalizedAccountIds, filters.personId),
     getUpcomingPlannedExpenses({ days: 90, accountIds: normalizedAccountIds }),
   ]);
