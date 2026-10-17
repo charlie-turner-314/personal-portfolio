@@ -198,6 +198,9 @@ def entity_ids_for_people(
             .filter(
                 Person.id.in_(pids),
                 Person.kind == "self",
+                ~db.query(AccountOwner.account_id)
+                .filter(AccountOwner.account_id == Account.id)
+                .exists(),
                 ~db.query(AccountOwnershipAllocation.id)
                 .filter(AccountOwnershipAllocation.account_id == Account.id)
                 .exists(),

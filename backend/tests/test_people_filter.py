@@ -252,7 +252,7 @@ def test_household_summary_filter_by_person_ids(seeded_household):
     assert summary["people"][0]["total_liabilities"] == pytest.approx(1650.0)
 
 
-def test_household_summary_uses_property_equity_for_linked_mortgage(seeded_household, db_session):
+def test_household_summary_reports_gross_property_and_linked_mortgage_separately(seeded_household, db_session):
     user_id, self_id, partner_id, seeded_accounts = seeded_household
     self_person = db_session.query(Person).filter(Person.id == self_id).one()
     partner_person = db_session.query(Person).filter(Person.id == partner_id).one()
@@ -280,14 +280,14 @@ def test_household_summary_uses_property_equity_for_linked_mortgage(seeded_house
     summary = get_household_summary(user_id=user_id)
     by_person = {p["person_id"]: p for p in summary["people"]}
 
-    # Property value is split 50/50, but the linked joint loan keeps its 25/75
-    # debt ownership and is no longer reported as a standalone liability.
-    assert by_person[self_id]["properties"] == pytest.approx(350.0)
-    assert by_person[self_id]["total_liabilities"] == pytest.approx(1550.0)
+    # Gross property is split 50/50; the linked loan independently keeps its 25/75
+    # debt ownership and remains visible exactly once as a liability.
+    assert by_person[self_id]["properties"] == pytest.approx(450.0)
+    assert by_person[self_id]["total_liabilities"] == pytest.approx(1650.0)
     assert by_person[self_id]["net_worth"] == pytest.approx(-600.0)
 
-    assert by_person[partner_id]["properties"] == pytest.approx(150.0)
-    assert by_person[partner_id]["total_liabilities"] == pytest.approx(0.0)
+    assert by_person[partner_id]["properties"] == pytest.approx(450.0)
+    assert by_person[partner_id]["total_liabilities"] == pytest.approx(300.0)
     assert by_person[partner_id]["net_worth"] == pytest.approx(850.0)
 
 
@@ -299,3 +299,20 @@ def test_financial_summary_reports_account_net_worth_for_person(seeded_household
     assert summary["total_liabilities"] == pytest.approx(1650.0)
     assert summary["net_worth"] == pytest.approx(-1050.0)
     assert summary["total_balance"] == pytest.approx(2150.0)
+
+
+def test_household_summary_keeps_linked_debt_for_person_without_property_share(seeded_household, db_session):
+    user_id, self_id, partner_id, seeded_accounts = seeded_household
+    home = Property(user_id=user_id, name="Partner home", property_type="residential",
+                    current_value=Decimal("900"), currency="EUR", is_active=True)
+    db_session.add(home)
+    db_session.flush()
+    db_session.add(PropertyOwner(property_id=home.id, person_id=partner_id, share=Decimal("1")))
+    db_session.add(PropertyLiabilityLink(property_id=home.id, account_id=seeded_accounts["joint_loan"], user_id=user_id))
+    db_session.commit()
+    by_person = {row["person_id"]: row for row in get_household_summary(user_id)["people"]}
+    assert by_person[self_id]["properties"] == 0
+    assert by_person[self_id]["total_liabilities"] == pytest.approx(1650)
+    assert by_person[self_id]["net_worth"] == pytest.approx(-1050)
+    assert by_person[partner_id]["properties"] == pytest.approx(900)
+    assert by_person[partner_id]["total_liabilities"] == pytest.approx(300)
