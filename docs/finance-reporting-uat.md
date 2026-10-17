@@ -50,3 +50,7 @@ forms. In particular, confirm an uncategorised import is usable before any AI
 categorisation completes, and verify transfer rows stay excluded. Run existing
 Compose happy-path tests, the unit/PostgreSQL regression suites, and the release
 lab's preserved-data comparison before promotion.
+
+## Manual release exception (2026-10-18)
+
+The owner authorized bypassing unavailable GitHub Actions for this release. Required checks remain unreported, including CodeQL; local tests are not represented as successful GitHub checks. Preserve PR promotion through develop/main and restore administrator enforcement immediately after each exceptional merge. Build exact-release ARM64 images locally, test their runtime, transfer over SSH, and compare image IDs before deployment. Use `pi-release.sh --local-images` with the tag and existing environment path to skip registry pulls while retaining revision, configuration, backup, restore, migration and health gates. This release is Pi-only until normal multi-platform registry publishing is restored.

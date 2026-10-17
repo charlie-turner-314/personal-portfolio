@@ -115,6 +115,13 @@ elif name == "python3":
             result = subprocess.run(["bash", str(script), "v0.1.3", str(env_file), *mode], env={**os.environ, "PATH": str(bin_dir) + ":" + os.environ["PATH"], "CALL_LOG": str(log), "FAIL_PHASE": failure}, capture_output=True, text=True)
             return result, log.read_text()
 
+    def test_local_images_skip_registry_but_verify_revision_before_stop(self):
+        result, calls = self.run_release(["--local-images"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(" pull ", calls)
+        self.assertLess(calls.index("org.opencontainers.image.revision"), calls.index(" stop "))
+        self.assertIn("up -d --wait --pull never", calls)
+
     def test_normal_pull_precedes_stop(self):
         result, calls = self.run_release([])
         self.assertEqual(result.returncode, 0, result.stderr)
