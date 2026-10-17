@@ -698,7 +698,12 @@ export function AssetManagement({
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="text-right">
-                      <p className="font-medium">{formatCurrency(account.functionalBalance, account.currency)}</p>
+                      <p className={isLiabilityAccountType(account.accountType) ? "font-medium text-red-600 dark:text-red-400" : "font-medium"}>
+                        {formatCurrency(isLiabilityAccountType(account.accountType)
+                          ? (-getLiabilityMagnitude(account)).toString()
+                          : account.functionalBalance, account.currency)}
+                      </p>
+                      {isLiabilityAccountType(account.accountType) && <p className="text-xs text-red-600 dark:text-red-400">Balance owed</p>}
                       <p className="text-xs text-muted-foreground">{account.currency}</p>
                     </div>
                     <Button
