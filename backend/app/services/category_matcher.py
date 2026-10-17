@@ -676,6 +676,47 @@ class CategoryMatcher:
             return 0.0
         return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
 
+    def _match_high_confidence_rule(
+        self, search_text: str, is_income: bool, categories: Dict[str, Category]
+    ) -> Optional[CategoryMatchResult]:
+        """Recognize specific alternatives without treating synonyms as required evidence.
+
+        Broad legacy keywords ("food", "income", "market") retain their existing
+        threshold. These narrow rules use token boundaries and reject ambiguous
+        brand products/payment purposes; they never override a user's choice.
+        """
+        confidence = 95.0
+        if confidence < self.MIN_CONFIDENCE_THRESHOLD:
+            return None
+
+        salary_words = re.findall(r"\b(?:salary|payroll|wages)\b", search_text)
+        if is_income:
+            ambiguous = re.search(
+                r"\b(?:reimbursement|reimbursements|reimbursed|advance|advances|repayment|repayments|refund|refunds|reversal|reversed|loan|loans)\b",
+                search_text,
+            )
+            category_name = "salary"
+            matched = salary_words if not ambiguous else []
+        else:
+            merchants = re.findall(r"\b(?:aldi|coles|woolworths)\b", search_text)
+            ambiguous = re.search(
+                r"\b(?:mobile|insurance|express|fuel|petrol|financial|credit|loan|loans|gift|voucher|vouchers|rewards|refund|refunds|reversal|reversed)\b",
+                search_text,
+            )
+            category_name = "groceries"
+            matched = merchants if len(set(merchants)) == 1 and not ambiguous and not salary_words else []
+
+        category = categories.get(category_name)
+        expected_type = "income" if is_income else "expense"
+        if not matched or not category or category.category_type != expected_type:
+            return None
+        return CategoryMatchResult(
+            category=category,
+            method="deterministic",
+            confidence_score=confidence,
+            matched_keywords=list(dict.fromkeys(matched)),
+        )
+
     def match_category_deterministic(
         self,
         description: Optional[str],
@@ -733,6 +774,10 @@ class CategoryMatcher:
                 logger.info(f"Matched transfer transaction to category '{transfer_cat.name}'")
                 return transfer_cat
         
+        specific_match = self._match_high_confidence_rule(search_text, is_income, categories)
+        if specific_match:
+            return specific_match.category
+
         # Match against keyword rules using exact matching only
         best_match = None
         best_confidence = 0.0
@@ -1305,6 +1350,10 @@ Category name:"""
                     confidence_score=100.0,
                     matched_keywords=["transfer"]
                 )
+
+        specific_match = self._match_high_confidence_rule(search_text, is_income, categories)
+        if specific_match:
+            return specific_match
 
         # Match against keyword rules using exact matching only
         best_match = None
