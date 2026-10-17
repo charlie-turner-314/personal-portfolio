@@ -5,11 +5,14 @@ from uuid import UUID
 
 from sqlalchemy import text, or_
 
-from app.models import Account, InternalTransfer, Transaction
+from app.models import Account, Category, InternalTransfer, Transaction
+from app.services.category_matcher import CategoryMatcher
 
 
 def import_routed_rows(db, user_id, rows, csv_import_id):
     inserted = []
+    matcher = CategoryMatcher(db, user_id=str(user_id))
+    deterministic = 0
     skipped = 0
     # Serialize imports for this user, including overlapping files and worker retries.
     db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"csv:{user_id}"})
@@ -44,7 +47,14 @@ def import_routed_rows(db, user_id, rows, csv_import_id):
             skipped += 1
             continue
 
+        category_id = row.get("category_id")
+        if category_id and not destination_id:
+            category = db.query(Category).filter(Category.id == category_id, Category.user_id == user_id).first()
+            if not category:
+                raise ValueError("Mapped category is unavailable")
+
         def make_transaction(account_id, value, identity):
+            nonlocal deterministic
             transaction = Transaction(
                 user_id=user_id, account_id=account_id, external_id=identity,
                 amount=value, currency=currency, booked_at=booked_at,
@@ -53,6 +63,17 @@ def import_routed_rows(db, user_id, rows, csv_import_id):
                 include_in_analytics=not bool(destination_id), pending=False,
                 csv_import_id=UUID(csv_import_id),
             )
+            if not destination_id:
+                if category_id:
+                    transaction.category_id = category_id
+                else:
+                    category = matcher.match_category(
+                        description=transaction.description, merchant=transaction.merchant,
+                        amount=value, transaction_type=transaction.transaction_type, use_llm=False,
+                    )
+                    if category:
+                        transaction.category_system_id = category.id
+                        deterministic += 1
             db.add(transaction)
             db.flush()
             inserted.append(transaction)
@@ -86,5 +107,10 @@ def import_routed_rows(db, user_id, rows, csv_import_id):
             source.internal_transfer_id = link.id
             destination.internal_transfer_id = link.id
     db.commit()
+    eligible = [txn for txn in inserted if txn.include_in_analytics]
+    categorized = sum(bool(txn.category_id or txn.category_system_id) for txn in eligible)
+    summary = {"total": len(eligible), "categorized": categorized,
+               "deterministic": deterministic, "llm": 0,
+               "uncategorized": len(eligible) - categorized, "tokens_used": 0, "cost_usd": 0.0}
     return {"inserted_count": len(inserted), "skipped_count": skipped,
-            "inserted_transactions": inserted, "categorization_summary": None}
+            "inserted_transactions": inserted, "categorization_summary": summary}

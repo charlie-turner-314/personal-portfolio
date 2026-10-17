@@ -119,3 +119,73 @@ def test_enqueue_checks_destination_ownership_before_publishing(scenario, monkey
     with pytest.raises(HTTPException) as failure:
         csv_import.enqueue_csv_import(request, db)
     assert failure.value.status_code == 404
+
+
+def test_routed_external_rows_match_categories_without_ai(scenario, monkeypatch):
+    from app.models import Category
+    from app.services.category_matcher import CategoryMatcher
+    db, user_id, _, import_id, row = scenario
+    category = Category(user_id=user_id, name="Groceries", category_type="expense")
+    db.add(category)
+    db.flush()
+    calls = []
+
+    def match(_self, **kwargs):
+        calls.append(kwargs)
+        assert kwargs["use_llm"] is False
+        return category
+
+    monkeypatch.setattr(CategoryMatcher, "match_category", match)
+    result = import_routed_rows(db, user_id, [{**row, "destination_account_id": None}], import_id)
+    assert result["inserted_transactions"][0].category_system_id == category.id
+    assert result["categorization_summary"]["deterministic"] == 1
+    assert result["categorization_summary"]["uncategorized"] == 0
+    assert len(calls) == 1
+
+
+def test_routed_category_preserved_and_transfers_not_categorized(scenario, monkeypatch):
+    from app.models import Category
+    from app.services.category_matcher import CategoryMatcher
+    db, user_id, _, import_id, row = scenario
+    category = Category(user_id=user_id, name="Chosen", category_type="expense")
+    db.add(category)
+    db.flush()
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Explicit categories and transfers must not be auto-categorized")
+
+    monkeypatch.setattr(CategoryMatcher, "match_category", unexpected)
+    rows = [row, {**row, "destination_account_id": None, "external_id": "csv-multi-explicit", "category_id": str(category.id)}]
+    result = import_routed_rows(db, user_id, rows, import_id)
+    external = next(txn for txn in result["inserted_transactions"] if txn.include_in_analytics)
+    assert str(external.category_id) == str(category.id)
+    assert result["categorization_summary"]["total"] == 1
+    assert result["categorization_summary"]["categorized"] == 1
+
+
+def test_routed_unmatched_rows_report_review_count(scenario, monkeypatch):
+    from app.services.category_matcher import CategoryMatcher
+    db, user_id, _, import_id, row = scenario
+    monkeypatch.setattr(CategoryMatcher, "match_category", lambda *args, **kwargs: None)
+    result = import_routed_rows(db, user_id, [{**row, "destination_account_id": None}], import_id)
+    assert result["categorization_summary"]["uncategorized"] == 1
+    assert result["inserted_transactions"][0].include_in_analytics
+
+
+def test_post_import_fallback_categorizes_existing_unmatched_rows_without_ai(scenario, monkeypatch):
+    from app.models import Category
+    from app.services.category_matcher import CategoryMatcher
+    from tasks.post_import_pipeline import _batch_categorize_transactions
+    db, user_id, _, import_id, row = scenario
+    monkeypatch.setattr(CategoryMatcher, "match_category", lambda *args, **kwargs: None)
+    result = import_routed_rows(db, user_id, [{**row, "destination_account_id": None}], import_id)
+    txn = result["inserted_transactions"][0]
+    category = Category(user_id=user_id, name="Groceries", category_type="expense")
+    db.add(category)
+    db.commit()
+    monkeypatch.setattr(CategoryMatcher, "match_category", lambda *args, **kwargs: category)
+    monkeypatch.setattr(CategoryMatcher, "match_categories_batch_llm", lambda *args, **kwargs: ({}, 0, 0.0))
+    _batch_categorize_transactions(db, user_id, [str(txn.id)])
+    db.refresh(txn)
+    assert txn.category_system_id == category.id
+    assert txn.category_id is None
