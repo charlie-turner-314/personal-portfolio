@@ -189,3 +189,12 @@ def test_post_import_fallback_categorizes_existing_unmatched_rows_without_ai(sce
     db.refresh(txn)
     assert txn.category_system_id == category.id
     assert txn.category_id is None
+
+
+def test_routed_missing_category_rejected_atomically(scenario):
+    db, user_id, _, import_id, row = scenario
+    invalid = {**row, "destination_account_id": None, "external_id": "csv-multi-bad-category", "category_id": str(uuid.uuid4())}
+    with pytest.raises(ValueError, match="Mapped category is unavailable"):
+        import_routed_rows(db, user_id, [row, invalid], import_id)
+    db.rollback()
+    assert db.query(Transaction).filter(Transaction.user_id == user_id).count() == 0
