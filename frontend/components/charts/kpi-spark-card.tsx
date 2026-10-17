@@ -24,6 +24,8 @@ interface KpiSparkCardProps {
   icon?: React.ReactNode;
   isLoading?: boolean;
   showSign?: boolean;
+  valueTone?: "default" | "liability";
+  valueFormat?: "currency" | "percentage";
 }
 
 function KpiSparkCardSkeleton() {
@@ -51,6 +53,8 @@ export function KpiSparkCard({
   icon,
   isLoading = false,
   showSign = false,
+  valueTone = "default",
+  valueFormat = "currency",
 }: KpiSparkCardProps) {
   // Generate unique ID for gradient to avoid conflicts with multiple charts
   const gradientId = React.useId();
@@ -59,7 +63,7 @@ export function KpiSparkCard({
     return <KpiSparkCardSkeleton />;
   }
 
-  const formattedValue = formatCurrency(value, currency, { showSign });
+  const formattedValue = valueFormat === "percentage" ? `${value.toFixed(1)}%` : formatCurrency(value, currency, { showSign });
 
   return (
     <Card>
@@ -73,7 +77,7 @@ export function KpiSparkCard({
               {title}
             </p>
           </div>
-          <p className="font-mono text-2xl font-semibold tracking-tight">
+          <p className={cn("font-mono text-2xl font-semibold tracking-tight", valueTone === "liability" && value !== 0 && "text-red-600 dark:text-red-400")}>
             {formattedValue}
           </p>
           <div className="flex items-center gap-2">
