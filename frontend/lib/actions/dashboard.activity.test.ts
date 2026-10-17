@@ -53,7 +53,7 @@ describe("dashboard activity queries", () => {
     const amount = dialect.sqlToQuery((query.select as { amount: SQL }).amount);
     expect(amount.sql).toContain("t2.user_id =");
     expect(amount.sql).toContain("t2.include_in_analytics = true");
-    expect(amount.sql).toContain("aoa.share");
+    expect(amount.sql).toContain("account_ownership_allocations");
     expect(amount.sql).toContain('COALESCE("transactions"."functional_amount", CASE WHEN "transactions"."currency"');
     expect(amount.sql).toContain('THEN "transactions"."amount" END)');
     expect(amount.sql).toContain("t2.functional_amount");
