@@ -93,6 +93,12 @@ async function DashboardContent({
           </Suspense>
           <SearchButton />
         </div>
+        {data.activityMissingConversions > 0 && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Income and spending totals exclude {data.activityMissingConversions} transaction(s) or linked groups
+            awaiting currency conversion.
+          </p>
+        )}
         {/* Row 1: KPI Cards */}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <div data-walkthrough="walkthrough-balance">

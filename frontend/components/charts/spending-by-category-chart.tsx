@@ -98,7 +98,7 @@ export function SpendingByCategoryChart({
   }
 
   const displayData = data.slice(0, limit);
-  const maxAmount = Math.max(...displayData.map((d) => d.amount), 1);
+  const maxAmount = Math.max(...displayData.map((d) => Math.abs(d.amount)), 1);
 
   return (
     <Card className="col-span-2">
@@ -117,7 +117,7 @@ export function SpendingByCategoryChart({
           </p>
         ) : (
           displayData.map((category, index) => {
-            const percentage = (category.amount / maxAmount) * 100;
+            const percentage = (Math.abs(category.amount) / maxAmount) * 100;
             const opacity = OPACITY_LEVELS[index % OPACITY_LEVELS.length];
             const categoryKey = category.id ?? "uncategorized";
 
@@ -130,7 +130,7 @@ export function SpendingByCategoryChart({
                 }}
               >
                 <div className="flex items-center justify-between text-sm">
-                  <span className="truncate font-medium">{category.name || "Unknown"}</span>
+                  <span className="truncate font-medium">{category.name || "Unknown"}{category.amount < 0 ? " (net refund)" : ""}</span>
                   <span className="font-mono text-muted-foreground">
                     {formatCurrency(category.amount, currency)}
                   </span>
