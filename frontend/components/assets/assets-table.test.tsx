@@ -40,3 +40,14 @@ describe("AssetsTable", () => {
     expect(screen.getByText("Hostplus")).toBeInTheDocument();
   });
 });
+
+describe("Liability disclosure", () => {
+  it.each([12500, -12500])("shows stored liability %s as negative and red", (value) => {
+    render(<AssetsTable categories={[]} currency="AUD" superannuation={{ includedValue: 0, excludedValue: 0, includedAccounts: [], excludedAccounts: [] }} liabilities={[{
+      id: "mortgage", name: "Home loan", institution: null, value,
+      currency: "AUD", initial: "H", source: "account", accountType: "mortgage",
+    }]} />);
+    expect(screen.getByText(/-.*12,500/)).toHaveClass("text-red-600");
+    expect(screen.getByText("Balance owed")).toBeInTheDocument();
+  });
+});

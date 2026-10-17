@@ -1,5 +1,7 @@
 "use client";
 
+import { getLiabilityMagnitude } from "@/lib/properties/equity";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { AccountLogo } from "@/components/ui/account-logo";
@@ -80,8 +82,8 @@ export function AccountHeader({ account, currency, freshness, onUploadCsv }: Acc
           </div>
         </div>
         <div className="text-right">
-          <p className="font-mono text-2xl font-semibold">
-            {formatCurrency(account.functionalBalance, currency)}
+          <p className={cn("font-mono text-2xl font-semibold", isLiability && "text-red-600 dark:text-red-400")}>
+            {formatCurrency(isLiability ? (-getLiabilityMagnitude(account)).toString() : account.functionalBalance, currency)}
           </p>
           <p className="text-sm text-muted-foreground">
             {isLiability ? "Balance owed" : currency}
