@@ -36,7 +36,7 @@ interface SankeyFlowChartProps {
 }
 
 const getCategoryKey = (node?: SankeyNode | null) =>
-  node?.categoryId ?? node?.name ?? "uncategorized";
+  `${node?.categoryType ?? ""}:${node?.categoryId || node?.name || "uncategorized"}`;
 
 interface SelectedCategory {
   key: string;
@@ -357,7 +357,7 @@ export function SankeyFlowChart({
         </CardHeader>
         <CardContent className="flex h-[400px] items-center justify-center">
           <p className="text-muted-foreground text-sm">
-            No transaction data available for cash flow visualization
+            No included income or expenses in this period
           </p>
         </CardContent>
       </Card>
