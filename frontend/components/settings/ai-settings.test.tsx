@@ -35,6 +35,17 @@ describe("AI settings", () => {
     expect(screen.getByRole("button", { name: "Categorisation in progress…" })).toBeDisabled();
     unmount();
   });
+  it("loads the existing job when another tab already started categorisation", async () => {
+    mocks.get.mockResolvedValue({ success: true, data: { ...state, configured: true } });
+    mocks.categorize.mockResolvedValue({ success: false, error: "Categorisation is already running." });
+    const { unmount } = render(<AiSettings />);
+    const start = await screen.findByRole("button", { name: "Categorise uncategorised transactions" });
+    mocks.get.mockResolvedValue({ success: true, data: { ...state, configured: true, job: { id: "job", status: "running", total: 4, processed: 1, categorized: 1, skipped: 0, error: null } } });
+    fireEvent.click(start);
+    expect(await screen.findByText(/1 of 4 processed/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Categorisation in progress…" })).toBeDisabled();
+    unmount();
+  });
   it("offers retry after a failed job while retaining completed counts", async () => {
     mocks.get.mockResolvedValue({ success: true, data: { ...state, configured: true, job: { id: "job", status: "failed", total: 50, processed: 25, categorized: 20, skipped: 0, error: "Check API billing and retry." } } });
     render(<AiSettings />);
