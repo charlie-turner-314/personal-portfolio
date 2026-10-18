@@ -1,15 +1,15 @@
 """Settings and durable categorisation progress scoped to the authenticated user."""
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.db_helpers import get_user_id
 from app.models import UserAiSettings, AiCategorizationJob, Transaction
 from app.security.data_encryption import encrypt_value, is_data_encryption_enabled
-from app.services.ai_settings import MODEL, user_api_key, test_key, safe_ai_error
+from app.services.ai_settings import MODEL, user_api_key, test_key, safe_ai_error, ai_config, ollama_models, test_ollama
 
 router = APIRouter()
 
@@ -43,13 +43,16 @@ def get_settings(user_id: str = Depends(get_user_id), db: Session = Depends(get_
     expire_stalled(db, user_id)
     settings = db.get(UserAiSettings, user_id)
     job = db.query(AiCategorizationJob).filter(AiCategorizationJob.user_id == user_id).order_by(AiCategorizationJob.created_at.desc()).first()
-    return {'configured': bool(settings and settings.api_key_encrypted),
-            'automatic': bool(settings and settings.automatic), 'model': MODEL,
+    return {'configured': bool(settings and (settings.model if settings.provider == 'ollama' else settings.api_key_encrypted)),
+            'automatic': bool(settings and settings.automatic), 'model': settings.model if settings and settings.provider == 'ollama' else MODEL,
+            'provider': settings.provider if settings else 'openai',
             'encryption_available': is_data_encryption_enabled(),
             'uncategorized_count': eligible(db, user_id).count(), 'job': job_summary(job)}
 
 
 class KeyRequest(BaseModel):
+    provider: Literal["openai", "ollama"] = "openai"
+    model: Optional[str] = Field(default=None, max_length=256)
     api_key: Optional[SecretStr] = None
     automatic: bool = True
 
@@ -64,7 +67,10 @@ def request_key(body):
 @router.post('/test')
 def test_connection(body: KeyRequest, user_id: str = Depends(get_user_id), db: Session = Depends(get_db)):
     try:
-        test_key(request_key(body) or user_api_key(db, user_id, manual=True))
+        if body.provider == 'ollama':
+            test_ollama(body.model)
+        else:
+            test_key(request_key(body) or user_api_key(db, user_id, manual=True))
     except HTTPException:
         raise
     except Exception as exc:
@@ -76,7 +82,16 @@ def test_connection(body: KeyRequest, user_id: str = Depends(get_user_id), db: S
 def save_settings(body: KeyRequest, user_id: str = Depends(get_user_id), db: Session = Depends(get_db)):
     key = request_key(body)
     settings = db.get(UserAiSettings, user_id)
-    if key:
+    if body.provider == 'ollama':
+        try:
+            test_ollama(body.model)
+        except Exception as exc:
+            raise HTTPException(400, safe_ai_error(exc)) from None
+        if settings is None:
+            settings = UserAiSettings(user_id=user_id)
+            db.add(settings)
+        settings.model = body.model
+    elif key:
         encrypted = encrypt_value(key)
         if not encrypted:
             raise HTTPException(503, 'Server encryption is not configured. The key was not saved.')
@@ -90,6 +105,7 @@ def save_settings(body: KeyRequest, user_id: str = Depends(get_user_id), db: Ses
         settings.api_key_encrypted = encrypted
     elif settings is None or not settings.api_key_encrypted:
         raise HTTPException(400, 'Enter an OpenAI API key first.')
+    settings.provider = body.provider
     settings.automatic = body.automatic
     settings.updated_at = datetime.utcnow()
     db.commit()
@@ -103,6 +119,7 @@ def remove_key(user_id: str = Depends(get_user_id), db: Session = Depends(get_db
         settings = UserAiSettings(user_id=user_id)
         db.add(settings)
     settings.api_key_encrypted = None
+    settings.model = None
     settings.automatic = False
     db.commit()
     return {'success': True}
@@ -113,8 +130,8 @@ def start_categorization(user_id: str = Depends(get_user_id), db: Session = Depe
     from tasks.ai_categorization import categorize_uncategorized
     expire_stalled(db, user_id)
     try:
-        if not user_api_key(db, user_id, manual=True):
-            raise HTTPException(400, 'Save an OpenAI API key first.')
+        if not ai_config(db, user_id, manual=True):
+            raise HTTPException(400, 'Configure an AI provider first.')
     except HTTPException:
         raise
     except Exception as exc:
@@ -136,3 +153,11 @@ def start_categorization(user_id: str = Depends(get_user_id), db: Session = Depe
             db.commit()
             raise HTTPException(503, job.error) from None
     return {'success': True, 'job': job_summary(job)}
+
+
+@router.get('/models')
+def list_models(user_id: str = Depends(get_user_id)):
+    try:
+        return {'models': ollama_models()}
+    except Exception as exc:
+        raise HTTPException(400, safe_ai_error(exc)) from None

@@ -2117,6 +2117,8 @@ export type NewReportRun = typeof reportRuns.$inferInsert;
 export const userAiSettings = pgTable("user_ai_settings", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   apiKeyEncrypted: text("api_key_encrypted"),
+  provider: text("provider").notNull().default("openai"),
+  model: text("model"),
   automatic: boolean("automatic").notNull().default(true),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

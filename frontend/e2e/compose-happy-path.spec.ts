@@ -29,7 +29,9 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
     await page.getByRole("dialog").getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
   }
-  await page.getByRole("button", { name: "Create Account" }).click();
+  // Submit by keyboard after the currency popup closes; its pointer-dismissal
+  // transition can otherwise swallow the immediately following click.
+  await page.getByRole("button", { name: "Create Account" }).press("Enter");
   await expect(page.getByText("E2E Savings", { exact: true })).toBeVisible();
   if (multiAccount) {
     await page.getByRole("button", { name: "Add another account" }).click();
@@ -38,7 +40,9 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
     await page.getByRole("option", { name: "Savings Account" }).click();
     await page.getByRole("dialog").getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
-    await page.getByRole("button", { name: "Create Account" }).click();
+    // Submit by keyboard after the currency popup closes; its pointer-dismissal
+    // transition can otherwise swallow the immediately following click.
+    await page.getByRole("button", { name: "Create Account" }).press("Enter");
     await expect(page.getByText("E2E Spending", { exact: true })).toBeVisible();
   }
   await page.getByRole("button", { name: "Continue" }).click();

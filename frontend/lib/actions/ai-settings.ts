@@ -12,7 +12,7 @@ export type AiJob = {
 };
 export type AiSettings = {
   configured: boolean; automatic: boolean; encryption_available: boolean;
-  model: string; uncategorized_count: number; job: AiJob | null;
+  provider: "openai" | "ollama"; model: string | null; uncategorized_count: number; job: AiJob | null;
 };
 type Result<T> = { success: true; data: T } | { success: false; error: string };
 
@@ -23,7 +23,7 @@ async function request<T>(method: string, suffix = "", body?: object): Promise<R
   const path = `/api/ai-settings${suffix}`;
   try {
     const response = await fetch(`${getBackendBaseUrl().replace(/\/+$/, "")}${path}`, {
-      method, cache: "no-store", signal: AbortSignal.timeout(40_000),
+      method, cache: "no-store", signal: AbortSignal.timeout(150_000),
       headers: { "Content-Type": "application/json", ...createInternalAuthHeaders({ method, pathWithQuery: path, userId: session.user.id }) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
@@ -43,11 +43,13 @@ export async function getAiSettings() {
   }
   return result;
 }
-export async function saveAiSettings(apiKey: string, automatic: boolean) {
-  return request<{ success: boolean }>("PUT", "", { api_key: apiKey.trim() || null, automatic });
+export async function saveAiSettings(apiKey: string, automatic: boolean, provider: "openai" | "ollama" = "openai", model?: string) {
+  return request<{ success: boolean }>("PUT", "", { api_key: apiKey.trim() || null, automatic, provider, model });
 }
-export async function testAiConnection(apiKey: string) {
-  return request<{ success: boolean }>("POST", "/test", { api_key: apiKey.trim() || null });
+export async function testAiConnection(apiKey: string, provider: "openai" | "ollama" = "openai", model?: string) {
+  return request<{ success: boolean }>("POST", "/test", { api_key: apiKey.trim() || null, provider, model });
 }
 export async function removeAiKey() { return request<{ success: boolean }>("DELETE"); }
 export async function categorizeUncategorized() { return request<{ job: AiJob }>("POST", "/categorize"); }
+
+export async function getOllamaModels() { return request<{ models: string[] }>("GET", "/models"); }

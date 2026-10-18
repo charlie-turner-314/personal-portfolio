@@ -1755,6 +1755,8 @@ class UserAiSettings(Base):
     __tablename__ = "user_ai_settings"
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     api_key_encrypted = Column(Text)
+    provider = Column(Text, nullable=False, default="openai")
+    model = Column(Text)
     automatic = Column(Boolean, nullable=False, default=True)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
