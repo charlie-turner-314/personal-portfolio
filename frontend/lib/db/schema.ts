@@ -2112,3 +2112,24 @@ export type NewReport = typeof reports.$inferInsert;
 
 export type ReportRun = typeof reportRuns.$inferSelect;
 export type NewReportRun = typeof reportRuns.$inferInsert;
+
+// Credentials are returned only as a configured flag by the backend settings API.
+export const userAiSettings = pgTable("user_ai_settings", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  apiKeyEncrypted: text("api_key_encrypted"),
+  automatic: boolean("automatic").notNull().default(true),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+export const aiCategorizationJobs = pgTable("ai_categorization_jobs", {
+  id: uuid("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("queued"),
+  transactionIds: jsonb("transaction_ids").notNull().default([]),
+  total: integer("total").notNull().default(0),
+  processed: integer("processed").notNull().default(0),
+  categorized: integer("categorized").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  error: text("error"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [uniqueIndex("ai_jobs_one_active_user").on(t.userId).where(sql`${t.status} IN ('queued', 'running')`)]);

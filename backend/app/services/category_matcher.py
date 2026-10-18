@@ -118,7 +118,9 @@ class CategoryMatcher:
         user_id: Optional[str] = None,
         user_overrides: Optional[List[Dict]] = None,
         additional_instructions: Optional[List[str]] = None,
-        auto_load_from_db: bool = True
+        auto_load_from_db: bool = True,
+        manual_ai: bool = False,
+        strict_ai_errors: bool = False
     ):
         """
         Initialize the CategoryMatcher.
@@ -136,6 +138,8 @@ class CategoryMatcher:
         self._category_cache: Optional[Dict[str, Category]] = None
         self._keyword_rules: Optional[Dict[str, List[str]]] = None
         self._openai_client = None
+        self.manual_ai = manual_ai
+        self.strict_ai_errors = strict_ai_errors
         self._category_instructions_cache: Optional[List[str]] = None
         self._account_cache: Optional[list] = None
 
@@ -445,18 +449,24 @@ class CategoryMatcher:
         """
         if self._openai_client is None:
             try:
-                from openai import OpenAI
-                api_key = os.getenv("OPENAI_API_KEY")
+                from app.services.ai_settings import user_api_key, openai_client, MODEL, AiConfigurationError
+                from app.models import UserAiSettings
+                api_key = user_api_key(self.db, self.user_id, manual=self.manual_ai)
                 if not api_key:
-                    logger.warning("OPENAI_API_KEY not set, LLM categorization will be unavailable")
+                    if self.strict_ai_errors:
+                        raise AiConfigurationError("Save an OpenAI API key before categorising transactions.")
                     return None
-                self._openai_client = OpenAI(api_key=api_key)
+                if self.db.get(UserAiSettings, self.user_id) is not None:
+                    self.LLM_MODEL = MODEL
+                self._openai_client = openai_client(api_key)
                 logger.info("OpenAI client initialized successfully")
             except ImportError:
                 logger.warning("OpenAI library not installed, LLM categorization will be unavailable")
                 return None
             except Exception as e:
-                logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+                logger.error("Failed to initialize OpenAI client: %s", type(e).__name__)
+                if self.strict_ai_errors:
+                    raise
                 return None
         return self._openai_client
 
@@ -989,7 +999,7 @@ Category name:"""
             except Exception as e:
                 last_error = e
                 error_type = type(e).__name__
-                error_msg = str(e)
+                error_msg = type(e).__name__
                 logger.warning(f"LLM categorization attempt {attempt + 1} failed: {error_type}: {error_msg}")
 
                 # Provide diagnostics for common error types
@@ -1011,7 +1021,7 @@ Category name:"""
                 else:
                     logger.error(f"LLM categorization failed after {self.LLM_MAX_RETRIES} attempts: {error_type}: {error_msg}")
                     import traceback
-                    logger.debug(f"[LLM] Final error traceback:\n{traceback.format_exc()}")
+                    logger.debug("[LLM] Final error type: %s", type(e).__name__)
                     return None
 
         return None
@@ -1190,7 +1200,7 @@ Category name:"""
             except Exception as e:
                 last_error = e
                 error_type = type(e).__name__
-                error_msg = str(e)
+                error_msg = type(e).__name__
                 logger.warning(f"LLM categorization attempt {attempt + 1} failed: {error_type}: {error_msg}")
 
                 # Provide diagnostics for common error types
@@ -1212,7 +1222,7 @@ Category name:"""
                 else:
                     logger.error(f"LLM categorization failed after {self.LLM_MAX_RETRIES} attempts: {error_type}: {error_msg}")
                     import traceback
-                    logger.debug(f"[LLM] Final error traceback:\n{traceback.format_exc()}")
+                    logger.debug("[LLM] Final error type: %s", type(e).__name__)
                     return None, 0, 0.0
 
         return None, 0, 0.0
@@ -1595,7 +1605,6 @@ Example response format:
 Response:"""
 
             # Log the full prompt for debugging (truncated to avoid log spam)
-            logger.info(f"[BATCH LLM] Full prompt (first 1000 chars):\n{prompt[:1000]}...")
             logger.info(f"[BATCH LLM] Sending request to OpenAI API (model: {self.LLM_MODEL})...")
 
             try:
@@ -1628,7 +1637,6 @@ Response:"""
 
                 # Parse response
                 response_text = response.choices[0].message.content.strip()
-                logger.info(f"[BATCH LLM] Response text:\n{response_text}")
 
                 unknown_count = 0
                 parsed_count = 0
@@ -1677,7 +1685,9 @@ Response:"""
                 if unknown_count > 0:
                     logger.info(f"[BATCH LLM] LLM returned UNKNOWN for {unknown_count} out of {parsed_count} transactions (this is normal for vague/unclear transactions)")
                 if parsed_count == 0:
-                    logger.warning(f"[BATCH LLM] No valid response lines parsed from LLM response. Response was: {response_text[:200]}")
+                    logger.warning("[BATCH LLM] No valid response lines parsed")
+                    if self.strict_ai_errors:
+                        raise ValueError("Invalid categorisation response")
 
                 logger.info(
                     f"Batch LLM categorized {len(results)} transactions "
@@ -1685,35 +1695,9 @@ Response:"""
                 )
 
             except Exception as e:
-                error_type = type(e).__name__
-                error_msg = str(e)
-                logger.error(f"[BATCH LLM] API call failed with error: {error_type}: {error_msg}")
-                
-                # Provide detailed diagnostics based on error type
-                error_lower = error_msg.lower()
-                if "401" in error_msg or "authentication" in error_lower or "api key" in error_lower:
-                    logger.error("[BATCH LLM] DIAGNOSIS: Authentication error - API key may be invalid, expired, or missing")
-                elif "429" in error_msg or "rate limit" in error_lower:
-                    logger.error("[BATCH LLM] DIAGNOSIS: Rate limit exceeded - API quota may be exceeded, wait and retry")
-                elif "timeout" in error_lower:
-                    logger.error(f"[BATCH LLM] DIAGNOSIS: Request timeout - API call took longer than 30 seconds")
-                    logger.error(f"[BATCH LLM] Consider reducing batch size (current: {len(batch)} transactions)")
-                elif "network" in error_lower or "connection" in error_lower or "dns" in error_lower:
-                    logger.error("[BATCH LLM] DIAGNOSIS: Network connectivity issue - check internet connection")
-                elif "invalid" in error_lower and "model" in error_lower:
-                    logger.error(f"[BATCH LLM] DIAGNOSIS: Invalid model - check that {self.LLM_MODEL} is available")
-                elif "context length" in error_lower or "token" in error_lower:
-                    logger.error(f"[BATCH LLM] DIAGNOSIS: Context length exceeded - batch too large, reduce max_batch_size")
-                else:
-                    logger.error(f"[BATCH LLM] DIAGNOSIS: Unknown error type - see traceback for details")
-                
-                import traceback
-                logger.error(f"[BATCH LLM] Traceback:\n{traceback.format_exc()}")
-                
-                # Log request details for debugging (without sensitive data)
-                logger.debug(f"[BATCH LLM] Request details - Model: {self.LLM_MODEL}, Batch size: {len(batch)}, "
-                           f"Max tokens: {max(150, len(batch) * 25)}, Temperature: {self.LLM_TEMPERATURE}")
-                
+                logger.error("[BATCH LLM] API call failed: %s", type(e).__name__)
+                if self.strict_ai_errors:
+                    raise
                 continue
 
         logger.info(f"[BATCH LLM] Completed. Total results: {len(results)}, tokens: {total_tokens}, cost: ${total_cost:.6f}")
