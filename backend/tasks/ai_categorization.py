@@ -4,7 +4,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from app.database import SessionLocal
 from app.models import AiCategorizationJob, Transaction, Category
-from app.services.ai_settings import user_api_key, safe_ai_error, AiConfigurationError
+from app.services.ai_settings import ai_config, safe_ai_error, AiConfigurationError
 from app.services.category_matcher import CategoryMatcher
 
 
@@ -19,13 +19,15 @@ def categorize_uncategorized(job_id):
             return
         job = db.get(AiCategorizationJob, job_id)
         try:
-            for offset in range(0, len(job.transaction_ids), 50):
+            config = ai_config(db, job.user_id, manual=True)
+            batch_size = 10 if config and config['provider'] == 'ollama' else 50
+            for offset in range(0, len(job.transaction_ids), batch_size):
                 db.refresh(job)
                 if job.status != 'running':
                     return
-                if not user_api_key(db, job.user_id, manual=True):
-                    raise AiConfigurationError('The API key was removed. Save a key and retry the remaining transactions.')
-                ids = job.transaction_ids[offset:offset + 50]
+                if not ai_config(db, job.user_id, manual=True):
+                    raise AiConfigurationError('AI was disconnected. Configure a provider and retry the remaining transactions.')
+                ids = job.transaction_ids[offset:offset + batch_size]
                 rows = db.query(Transaction).filter(
                     Transaction.id.in_(ids), Transaction.user_id == job.user_id,
                     Transaction.category_id.is_(None), Transaction.category_system_id.is_(None),

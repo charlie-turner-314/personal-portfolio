@@ -108,6 +108,9 @@ jobs:
         REDIS_URL: redis://localhost:6379/0
       run: python -m pytest tests/test_celery_task_registration.py tests/test_up_adapter.py tests/test_up_sync.py tests/test_demo_trade_dates.py -q
 
+    - name: Test private Ollama gateway
+      run: python -m unittest discover -s scripts/tests -p test_ollama_lan_proxy.py
+
     - name: Test bank sync waiting states
       working-directory: ./frontend
       run: pnpm exec vitest run components/settings/bank-connections-manager.test.tsx
