@@ -36,7 +36,11 @@ export function AiSettings() {
       const result = action === "save" ? await saveAiSettings(key, automatic)
         : action === "test" ? await testAiConnection(key)
         : action === "remove" ? await removeAiKey() : await categorizeUncategorized();
-      if (!result.success) { setError(result.error); return; }
+      if (!result.success) {
+        setError(result.error);
+        if (action === "categorize") await refresh();
+        return;
+      }
       if (action === "save" || action === "remove") setKey("");
       setMessage(action === "test" ? "Connection successful. OpenAI accepted a small test request."
         : action === "save" ? "AI settings saved." : action === "remove" ? "API key removed. Future AI requests are disabled; an in-flight request may finish." : "Categorisation queued. You can leave this page and return to check progress.");
