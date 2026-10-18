@@ -520,7 +520,7 @@ class CategoryMatcher:
                 categories = self._load_categories()
                 category = categories.get(override_category.lower())
                 if category:
-                    logger.info(f"User override matched: '{description}' -> '{category.name}'")
+                    logger.info("User override matched a transaction")
                     return category
         
         return None
@@ -1525,39 +1525,32 @@ Category name:"""
 
             # Build transaction list for prompt
             txn_lines = []
-            logger.info(f"[BATCH LLM] Processing {len(batch)} transactions. First transaction keys: {list(batch[0].keys()) if batch else 'empty'}")
             for txn in batch:
                 # Log raw transaction data
-                logger.info(f"[BATCH LLM] Raw transaction {txn['index']}: {txn}")
                 
                 # Use transaction_type if provided, otherwise infer from amount sign
                 if txn.get("transaction_type"):
                     transaction_type_lower = str(txn["transaction_type"]).lower()
-                    logger.info(f"[BATCH LLM] Transaction {txn['index']} has transaction_type: '{txn.get('transaction_type')}' (lowercase: '{transaction_type_lower}')")
                     # Handle aliases
                     if transaction_type_lower in ["expense", "expenses", "debit"]:
                         txn_type = "EXPENSE"
-                        logger.info(f"[BATCH LLM] Transaction {txn['index']}: Mapped '{transaction_type_lower}' -> EXPENSE")
                     elif transaction_type_lower in ["income", "revenue", "credit"]:
                         txn_type = "INCOME"
-                        logger.info(f"[BATCH LLM] Transaction {txn['index']}: Mapped '{transaction_type_lower}' -> INCOME")
                     else:
                         # Fallback to amount sign if transaction_type is invalid
                         txn_type = "INCOME" if txn["amount"] > 0 else "EXPENSE"
-                        logger.warning(f"[BATCH LLM] Transaction {txn['index']}: Invalid transaction_type '{txn.get('transaction_type')}', inferred '{txn_type}' from amount {txn['amount']}")
+                        logger.debug("[BATCH LLM] Inferred transaction type from amount")
                 else:
                     # Infer from amount sign if transaction_type not provided
                     txn_type = "INCOME" if txn["amount"] > 0 else "EXPENSE"
-                    logger.warning(f"[BATCH LLM] Transaction {txn['index']}: No transaction_type provided, inferred '{txn_type}' from amount {txn['amount']}")
+                    logger.debug("[BATCH LLM] Inferred transaction type from amount")
                 
-                logger.info(f"[BATCH LLM] Transaction {txn['index']}: Final determined_type='{txn_type}'")
                 
                 txn_lines.append(
                     f"{txn['index']}|{txn.get('description', 'N/A')}|{txn.get('merchant', 'N/A')}|{abs(txn['amount'])}|{txn_type}"
                 )
 
             transactions_text = "\n".join(txn_lines)
-            logger.info(f"[BATCH LLM] Transactions text (first 500 chars):\n{transactions_text[:500]}...")
 
             # Build instructions text if provided
             instructions_text = ""
@@ -1678,7 +1671,7 @@ Response:"""
                             logger.warning(f"Batch LLM suggested '{cat_name}' for index {idx} but category not found")
 
                     except (ValueError, IndexError) as e:
-                        logger.warning(f"Failed to parse batch LLM response line '{line}': {e}")
+                        logger.warning("Failed to parse a batch categorisation response line")
                         continue
                 
                 # Log summary of parsing

@@ -1,0 +1,47 @@
+import { test, expect } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+const dbContainer = process.env.AI_UAT_DB_CONTAINER;
+test.skip(!dbContainer || process.env.AI_UAT_PROVIDER_MOCK !== "1", "Requires isolated lab with synthetic provider transport");
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+test("AI settings encrypt a key, test errors, categorise with persisted progress, and remove the key", async ({ page, baseURL }, testInfo) => {
+  test.setTimeout(120_000);
+  expect(["localhost", "127.0.0.1"]).toContain(new URL(baseURL!).hostname);
+  const project=execFileSync("docker",["inspect",dbContainer!,"--format",'{{index .Config.Labels "com.docker.compose.project"}}'],{encoding:"utf8"}).trim();
+  expect(project).toMatch(/^syllogic-release-lab-/);
+  const sql=(input: string)=>execFileSync("docker",["exec","-i",dbContainer!,"psql","-U","financeuser","-d","finance_db","-Atq","-v","ON_ERROR_STOP=1"],{input,encoding:"utf8"}).trim();
+  const email=`ai-e2e-${randomUUID()}@example.test`;
+  const signup=await page.request.post("/api/auth/sign-up/email",{headers:{Origin:baseURL!},data:{email,password:`Synthetic!${randomUUID()}`,name:"AI UAT"}});
+  expect(signup.ok()).toBeTruthy();
+  const {user}=await signup.json();const u=literal(user.id), account=randomUUID(), cat=randomUUID();
+  sql(`BEGIN; UPDATE users SET onboarding_status='completed',onboarding_completed_at=now() WHERE id=${u} AND email=${literal(email)};
+  INSERT INTO accounts(id,user_id,name,account_type,currency) VALUES ('${account}',${u},'AI fixture','checking','AUD');
+  INSERT INTO categories(id,user_id,name,category_type) VALUES ('${cat}',${u},'AI Groceries','expense');
+  INSERT INTO transactions(user_id,account_id,description,amount,currency,booked_at) VALUES (${u},'${account}','Synthetic merchant',-10,'AUD',now()),(${u},'${account}','Synthetic merchant two',-20,'AUD',now());COMMIT;`);
+  await page.addInitScript((userId) => {
+    localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["settings"], userId }, version: 0 }));
+  }, user.id);
+  await page.goto("/settings?tab=ai");
+  const tour=page.getByRole("button",{name:"Close walkthrough"});if(await tour.isVisible())await tour.click();
+  await expect(page.getByText("2 eligible uncategorised transactions")).toBeVisible();
+  const input=page.getByLabel("OpenAI API key");
+  await input.fill("sk-synthetic-invalid");await page.getByRole("button",{name:"Test connection"}).click();
+  await expect(page.getByText("OpenAI rejected this API key. Replace it with a valid key.", { exact: true })).toBeVisible();
+  await input.fill("sk-synthetic-ai-uat");await page.getByRole("button",{name:"Save settings"}).click();
+  await expect(page.getByText("AI settings saved.",{exact:true})).toBeVisible();
+  await expect(input).toHaveValue("");
+  expect(sql(`SELECT api_key_encrypted LIKE 'enc:v1:%' AND api_key_encrypted NOT LIKE '%sk-synthetic%' FROM user_ai_settings WHERE user_id=${u};`)).toBe("t");
+  await page.reload();await expect(page.getByText(/An API key is saved/)).toBeVisible();await expect(page.getByLabel("OpenAI API key")).toHaveValue("");
+  await page.getByRole("button",{name:"Test connection"}).click();
+  await expect(page.getByText(/Connection successful/)).toBeVisible();
+  await page.getByRole("button",{name:"Categorise uncategorised transactions"}).click();
+  await page.reload();
+  await expect(page.getByText("Categorisation complete",{exact:true})).toBeVisible({timeout:60000});
+  await expect(page.getByText(/2 of 2 processed · 2 categorised/)).toBeVisible();
+  expect(sql(`SELECT count(*) FROM transactions WHERE user_id=${u} AND category_system_id='${cat}' AND category_id IS NULL;`)).toBe("2");
+  await page.screenshot({path:testInfo.outputPath("ai-settings.png"),fullPage:true});
+  await page.getByRole("button",{name:"Remove key"}).click();
+  await expect(page.getByText(/No API key saved/)).toBeVisible();
+  expect(sql(`SELECT api_key_encrypted IS NULL AND automatic=false FROM user_ai_settings WHERE user_id=${u};`)).toBe("t");
+});

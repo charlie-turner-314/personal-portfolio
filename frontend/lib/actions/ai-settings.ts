@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
 import { getBackendBaseUrl } from "@/lib/backend-url";
@@ -34,7 +35,14 @@ async function request<T>(method: string, suffix = "", body?: object): Promise<R
   }
 }
 
-export async function getAiSettings() { return request<AiSettings>("GET"); }
+export async function getAiSettings() {
+  const result = await request<AiSettings>("GET");
+  if (result.success && ["completed", "failed"].includes(result.data.job?.status ?? "")) {
+    revalidatePath("/transactions");
+    revalidatePath("/");
+  }
+  return result;
+}
 export async function saveAiSettings(apiKey: string, automatic: boolean) {
   return request<{ success: boolean }>("PUT", "", { api_key: apiKey.trim() || null, automatic });
 }
