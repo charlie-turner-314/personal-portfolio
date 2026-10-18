@@ -439,6 +439,11 @@ class CategoryMatcher:
             }
         return self._keyword_rules
 
+    def _provider_options(self):
+        if getattr(self, '_ai_provider', 'openai') == 'ollama':
+            return {'timeout': 120.0, 'reasoning_effort': 'none'}
+        return {'timeout': 30.0}
+
     def _get_openai_client(self) -> Optional[object]:
         """
         Get or create OpenAI client instance (cached).
@@ -449,16 +454,15 @@ class CategoryMatcher:
         """
         if self._openai_client is None:
             try:
-                from app.services.ai_settings import user_api_key, openai_client, MODEL, AiConfigurationError
-                from app.models import UserAiSettings
-                api_key = user_api_key(self.db, self.user_id, manual=self.manual_ai)
-                if not api_key:
+                from app.services.ai_settings import ai_config, openai_client, ollama_client, AiConfigurationError
+                config = ai_config(self.db, self.user_id, manual=self.manual_ai)
+                if not config:
                     if self.strict_ai_errors:
-                        raise AiConfigurationError("Save an OpenAI API key before categorising transactions.")
+                        raise AiConfigurationError("Configure an AI provider before categorising transactions.")
                     return None
-                if self.db.get(UserAiSettings, self.user_id) is not None:
-                    self.LLM_MODEL = MODEL
-                self._openai_client = openai_client(api_key)
+                self.LLM_MODEL = config['model']
+                self._ai_provider = config['provider']
+                self._openai_client = ollama_client() if self._ai_provider == 'ollama' else openai_client(config['key'])
                 logger.info("OpenAI client initialized successfully")
             except ImportError:
                 logger.warning("OpenAI library not installed, LLM categorization will be unavailable")
@@ -466,6 +470,9 @@ class CategoryMatcher:
             except Exception as e:
                 logger.error("Failed to initialize OpenAI client: %s", type(e).__name__)
                 if self.strict_ai_errors:
+                    if getattr(self, '_ai_provider', 'openai') == 'ollama':
+                        from app.services.ai_settings import AiConfigurationError
+                        raise AiConfigurationError('Mac/Ollama unavailable or the model request failed. Check the Mac and retry remaining transactions. No cloud fallback was used.') from None
                     raise
                 return None
         return self._openai_client
@@ -665,6 +672,9 @@ class CategoryMatcher:
         Returns:
             Cost in USD
         """
+        if getattr(self, '_ai_provider', 'openai') == 'ollama':
+            return 0.0
+
         pricing = self.PRICING.get(model, {"input": 0, "output": 0})
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
         output_cost = (output_tokens / 1_000_000) * pricing["output"]
@@ -976,6 +986,7 @@ Category name:"""
                         {"role": "user", "content": prompt}
                     ],
                     temperature=self.LLM_TEMPERATURE,
+                    **self._provider_options(),
                     max_tokens=self.LLM_MAX_TOKENS
                 )
 
@@ -1163,6 +1174,7 @@ Category name:"""
                         {"role": "user", "content": prompt}
                     ],
                     temperature=self.LLM_TEMPERATURE,
+                    **self._provider_options(),
                     max_tokens=self.LLM_MAX_TOKENS
                 )
 
@@ -1475,6 +1487,9 @@ Category name:"""
             logger.warning("[BATCH LLM] OpenAI client not available")
             return {}, 0, 0.0
 
+        if getattr(self, '_ai_provider', 'openai') == 'ollama':
+            max_batch_size = min(max_batch_size, 10)
+
         if not transactions:
             logger.info("[BATCH LLM] No transactions to process")
             return {}, 0, 0.0
@@ -1612,7 +1627,7 @@ Response:"""
                     ],
                     temperature=self.LLM_TEMPERATURE,
                     max_tokens=max(150, len(batch) * 25),  # ~25 tokens per response line (includes confidence)
-                    timeout=30.0  # 30 second timeout
+                    **self._provider_options()
                 )
 
                 logger.info("[BATCH LLM] Received response from OpenAI API")
@@ -1690,6 +1705,9 @@ Response:"""
             except Exception as e:
                 logger.error("[BATCH LLM] API call failed: %s", type(e).__name__)
                 if self.strict_ai_errors:
+                    if getattr(self, '_ai_provider', 'openai') == 'ollama':
+                        from app.services.ai_settings import AiConfigurationError
+                        raise AiConfigurationError('Mac/Ollama unavailable or the model request failed. Check the Mac and retry remaining transactions. No cloud fallback was used.') from None
                     raise
                 continue
 

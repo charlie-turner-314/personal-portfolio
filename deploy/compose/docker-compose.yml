@@ -65,6 +65,8 @@ services:
       DATA_ENCRYPTION_KEY_ID: ${DATA_ENCRYPTION_KEY_ID:-k1}
       # Optional integrations / features
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,6 +102,8 @@ services:
       DATA_ENCRYPTION_KEY_ID: ${DATA_ENCRYPTION_KEY_ID:-k1}
       # Optional integrations / features
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,6 +128,8 @@ services:
       DATA_ENCRYPTION_KEY_ID: ${DATA_ENCRYPTION_KEY_ID:-k1}
       # Optional integrations / features
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -148,6 +154,8 @@ services:
       DATA_ENCRYPTION_KEY_ID: ${DATA_ENCRYPTION_KEY_ID:-k1}
       # Optional integrations / features
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,6 +187,8 @@ services:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/data/uploads}
       # Optional features
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       LOGO_DEV_API_KEY: ${LOGO_DEV_API_KEY:-}
     volumes:
       - uploads_data:/data/uploads

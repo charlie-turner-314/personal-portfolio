@@ -41,7 +41,7 @@ test("AI settings encrypt a key, test errors, categorise with persisted progress
   await expect(page.getByText(/2 of 2 processed · 2 categorised/)).toBeVisible();
   expect(sql(`SELECT count(*) FROM transactions WHERE user_id=${u} AND category_system_id='${cat}' AND category_id IS NULL;`)).toBe("2");
   await page.screenshot({path:testInfo.outputPath("ai-settings.png"),fullPage:true});
-  await page.getByRole("button",{name:"Remove key"}).click();
-  await expect(page.getByText(/No API key saved/)).toBeVisible();
+  await page.getByRole("button",{name:"Disconnect AI"}).click();
+  await expect(page.getByText(/Enter an OpenAI key to connect/)).toBeVisible();
   expect(sql(`SELECT api_key_encrypted IS NULL AND automatic=false FROM user_ai_settings WHERE user_id=${u};`)).toBe("t");
 });

@@ -214,3 +214,58 @@ def test_internal_transfer_is_excluded_even_when_analytics_is_true(setup):
     s.db.add(transfer);s.db.commit()
     row.internal_transfer_id=transfer.id;s.db.commit()
     assert run(s).total==0
+
+
+def test_ollama_save_test_cleanup_and_disconnect(setup, monkeypatch):
+    s = setup
+    monkeypatch.setattr(service, 'ollama_models', lambda: ['qwen3:8b'])
+    monkeypatch.setattr(service, 'ollama_client', lambda: s.provider)
+    response = s.client.put('/api/ai-settings', json={'provider': 'ollama', 'model': 'qwen3:8b'})
+    assert response.status_code == 200, response.text
+    info = s.client.get('/api/ai-settings').json()
+    assert info['provider'] == 'ollama' and info['model'] == 'qwen3:8b' and info['configured']
+    assert s.db.get(UserAiSettings, s.users[0]).api_key_encrypted is None
+    transaction(s)
+    job = run(s)
+    assert job.status == 'completed' and job.categorized == 1
+    kwargs = s.provider.chat.completions.create.call_args.kwargs
+    assert kwargs['reasoning_effort'] == 'none' and kwargs['timeout'] == 120
+    assert kwargs['model'] == 'qwen3:8b'
+    s.client.delete('/api/ai-settings')
+    assert not s.client.get('/api/ai-settings').json()['configured']
+    assert service.ai_config(s.db, s.users[0], manual=True) is None
+
+
+def test_ollama_offline_does_not_fallback_and_retry_preserves_progress(setup, monkeypatch):
+    s = setup
+    monkeypatch.setenv('OPENAI_API_KEY', 'must-not-be-used')
+    monkeypatch.setattr(service, 'ollama_models', lambda: ['qwen3:8b'])
+    monkeypatch.setattr(service, 'ollama_client', lambda: s.provider)
+    assert s.client.put('/api/ai-settings', json={'provider': 'ollama', 'model': 'qwen3:8b'}).status_code == 200
+    transaction(s)
+    s.provider.chat.completions.create.side_effect = ConnectionError('private failure')
+    job = run(s)
+    assert job.status == 'failed' and job.processed == 0
+    assert 'Mac/Ollama' in job.error and 'No cloud fallback' in job.error
+    s.provider.chat.completions.create.side_effect = None
+    retry = run(s)
+    assert retry.status == 'completed' and retry.categorized == 1
+
+
+def test_ollama_rejects_uninstalled_model_and_does_not_replace_openai(setup, monkeypatch):
+    s = setup; save(s)
+    monkeypatch.setattr(service, 'ollama_models', lambda: ['qwen3:8b'])
+    response = s.client.put('/api/ai-settings', json={'provider': 'ollama', 'model': 'cloud:cloud', 'base_url': 'http://untrusted'})
+    assert response.status_code == 400
+    assert s.client.get('/api/ai-settings').json()['provider'] == 'openai'
+    assert service.user_api_key(s.db, s.users[0], manual=True) == KEY
+
+
+def test_ollama_automatic_optout_and_user_isolation(setup, monkeypatch):
+    s = setup
+    monkeypatch.setattr(service, 'ollama_models', lambda: ['qwen3:8b'])
+    monkeypatch.setattr(service, 'ollama_client', lambda: s.provider)
+    assert s.client.put('/api/ai-settings', json={'provider': 'ollama', 'model': 'qwen3:8b', 'automatic': False}).status_code == 200
+    assert service.ai_config(s.db, s.users[0]) is None
+    assert service.ai_config(s.db, s.users[0], manual=True)['provider'] == 'ollama'
+    assert service.ai_config(s.db, s.users[1], manual=True) is None
