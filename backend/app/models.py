@@ -1749,3 +1749,29 @@ class VehicleOwner(Base):
     person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="CASCADE"), primary_key=True)
     share = Column(Numeric(5, 4), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class UserAiSettings(Base):
+    __tablename__ = "user_ai_settings"
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    api_key_encrypted = Column(Text)
+    automatic = Column(Boolean, nullable=False, default=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AiCategorizationJob(Base):
+    __tablename__ = "ai_categorization_jobs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status = Column(Text, nullable=False, default="queued")
+    transaction_ids = Column(JSONB, nullable=False, default=list)
+    total = Column(Integer, nullable=False, default=0)
+    processed = Column(Integer, nullable=False, default=0)
+    categorized = Column(Integer, nullable=False, default=0)
+    skipped = Column(Integer, nullable=False, default=0)
+    error = Column(Text)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (
+        Index("ai_jobs_one_active_user", "user_id", unique=True, postgresql_where=text("status IN ('queued','running')")),
+    )

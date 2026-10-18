@@ -2,6 +2,7 @@
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RiUserLine, RiFolderLine, RiKeyLine, RiUploadLine, RiBankLine, RiGroupLine } from "@remixicon/react";
+import { AiSettings } from "./ai-settings";
 import { ProfileEditor } from "./profile-editor";
 import { CategoryManager } from "./category-manager";
 import { ApiKeysManager } from "./api-keys-manager";
@@ -75,6 +76,7 @@ export function SettingsTabs({
           <RiFolderLine className="mr-1.5 h-4 w-4" />
           Categories
         </TabsTrigger>
+        {!isDemoUser && <TabsTrigger value="ai">AI</TabsTrigger>}
         <TabsTrigger value="api-keys" data-walkthrough="walkthrough-api-keys">
           <RiKeyLine className="mr-1.5 h-4 w-4" />
           API Keys
@@ -102,6 +104,8 @@ export function SettingsTabs({
       <TabsContent value="categories">
         <CategoryManager initialCategories={categories} />
       </TabsContent>
+
+      {!isDemoUser && <TabsContent value="ai"><AiSettings /></TabsContent>}
 
       <TabsContent value="api-keys">
         <ApiKeysManager
