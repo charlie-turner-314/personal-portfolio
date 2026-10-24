@@ -32,7 +32,8 @@ export default function ReportRunsPage() {
         // loaded, still-valid run history behind an error message.
         <p className="text-sm text-destructive">Failed to load runs. Please try again.</p>
       ) : runs && runs.length > 0 ? (
-        <table className="w-full text-sm border border-border rounded-lg overflow-hidden">
+        <div className="w-full overflow-x-auto" role="region" aria-label="Report run history" tabIndex={0}>
+        <table className="w-full min-w-[640px] text-sm border border-border rounded-lg overflow-hidden">
           <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
             <tr>
               <th className="px-4 py-2">Scheduled for</th>
@@ -60,6 +61,7 @@ export default function ReportRunsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       ) : (
         <p className="text-sm text-muted-foreground">No runs yet.</p>
       )}

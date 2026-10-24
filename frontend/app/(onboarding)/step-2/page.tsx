@@ -170,7 +170,7 @@ export default function OnboardingStep2Page() {
 
       <Card className="min-h-[640px] h-[640px] flex flex-col">
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <CardTitle>Set up your categories</CardTitle>
               <CardDescription>

@@ -18,7 +18,7 @@ export function SearchButton() {
   return (
     <Button
       variant="outline"
-      className="h-9 w-[200px] justify-between px-3 bg-transparent"
+      className="h-9 w-full sm:w-[200px] justify-between px-3 bg-transparent"
       onClick={handleClick}
     >
       <span className="text-xs text-muted-foreground">Search...</span>

@@ -90,7 +90,7 @@ export default function OnboardingStep3Page() {
     return (
       <div className="space-y-8">
         <OnboardingProgress currentStep={3} />
-        <Card className="min-h-[640px] h-[640px] flex flex-col">
+        <Card className="min-h-[640px] md:h-[640px] flex flex-col">
           <CardContent className="flex items-center justify-center py-12">
             <RiLoader4Line className="h-8 w-8 animate-spin text-muted-foreground" />
           </CardContent>
@@ -103,7 +103,7 @@ export default function OnboardingStep3Page() {
     <div className="space-y-8">
       <OnboardingProgress currentStep={3} />
 
-      <Card className="min-h-[640px] h-[640px] flex flex-col">
+      <Card className="min-h-[640px] md:h-[640px] flex flex-col">
         <CardHeader>
           <CardTitle>Set up your first bank account</CardTitle>
           <CardDescription>
@@ -112,7 +112,7 @@ export default function OnboardingStep3Page() {
             be added from Assets after setup.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex-1 min-h-0">
+        <CardContent className="flex-1 md:min-h-0">
           <div className="space-y-6">
             {accounts.length > 0 ? (
               <div className="space-y-3">

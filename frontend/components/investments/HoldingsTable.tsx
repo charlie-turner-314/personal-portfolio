@@ -9,7 +9,8 @@ export function HoldingsTable({
   onDelete?: (id: string) => void;
 }) {
   return (
-    <table className="w-full text-sm">
+    <div className="w-full overflow-x-auto" role="region" aria-label="Account holdings" tabIndex={0}>
+    <table className="w-full min-w-[640px] text-sm">
       <thead className="text-left text-muted-foreground">
         <tr>
           <th>Symbol</th>
@@ -52,5 +53,6 @@ export function HoldingsTable({
         ))}
       </tbody>
     </table>
+    </div>
   );
 }

@@ -241,7 +241,7 @@ export function HoldingDetailView({
       </Card>
 
       <Tabs defaultValue="overview">
-        <TabsList>
+        <TabsList className="max-sm:grid max-sm:h-auto max-sm:w-full max-sm:grid-cols-2 max-sm:gap-2 max-sm:[&>button]:h-11">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
           <TabsTrigger value="income">Income</TabsTrigger>

@@ -48,7 +48,7 @@ const EXPENSE_HIGHLIGHT = "#EF4444";
 
 function SankeyFlowChartSkeleton() {
   return (
-    <Card className="col-span-full">
+    <Card className="col-span-full min-w-0">
       <CardHeader>
         <Skeleton className="h-5 w-32" />
       </CardHeader>
@@ -348,7 +348,7 @@ export function SankeyFlowChart({
 
   if (!data.nodes.length || !data.links.length) {
     return (
-      <Card className="col-span-full">
+      <Card className="col-span-full min-w-0">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium">Cash Flow</CardTitle>
           {subtitle && (
@@ -365,7 +365,7 @@ export function SankeyFlowChart({
   }
 
   return (
-    <Card className="col-span-full">
+    <Card className="col-span-full min-w-0">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium">Cash Flow</CardTitle>
         {subtitle && (
@@ -383,8 +383,10 @@ export function SankeyFlowChart({
           </p>
         )}
       </CardHeader>
-      <CardContent className="pt-0">
-        <div className="h-[400px] w-full">
+      <CardContent className="min-w-0 pt-0">
+        <p className="mb-2 text-xs text-muted-foreground md:hidden">Scroll horizontally to explore cash flow.</p>
+        <div className="w-full min-w-0 overflow-x-auto" tabIndex={0} role="region" aria-label="Cash flow diagram">
+        <div className="h-[400px] w-full min-w-[640px] md:min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <Sankey
               data={data}
@@ -402,6 +404,7 @@ export function SankeyFlowChart({
               />
             </Sankey>
           </ResponsiveContainer>
+        </div>
         </div>
       </CardContent>
     </Card>
