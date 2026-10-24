@@ -46,7 +46,7 @@ describe("SubscriptionsGroupedList", () => {
 
     const subscriptionRow = screen
       .getByText("Netflix")
-      .closest("div.flex.items-center.gap-4");
+      .closest("[data-subscription-id]");
 
     expect(subscriptionRow).not.toBeNull();
     expect(within(subscriptionRow!).getByText(expected)).toBeInTheDocument();

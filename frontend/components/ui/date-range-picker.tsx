@@ -135,8 +135,8 @@ export function DateRangePicker({
         />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto p-0">
-        <div className="flex">
-          <div className="border-r p-2 space-y-0.5 w-32">
+        <div className="flex flex-col sm:flex-row">
+          <div className="grid grid-cols-2 border-b p-2 gap-0.5 sm:block sm:border-b-0 sm:border-r sm:space-y-0.5 sm:w-32">
             <button
               type="button"
               onClick={() => {

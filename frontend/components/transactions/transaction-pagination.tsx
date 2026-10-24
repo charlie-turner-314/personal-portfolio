@@ -67,7 +67,7 @@ export function TransactionPagination({
   };
 
   return (
-    <div className="flex items-center justify-between py-4">
+    <div className="flex flex-col items-start gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-4">
         <p className="text-xs text-muted-foreground">
           {selectedRows > 0 ? (
@@ -82,14 +82,14 @@ export function TransactionPagination({
         </p>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-3 sm:gap-4">
         <div className="flex items-center gap-2">
-          <p className="text-xs text-muted-foreground">Rows per page</p>
+          <label htmlFor="transaction-page-size" className="text-xs text-muted-foreground">Rows per page</label>
           <Select
             value={resolvedPageSize.toString()}
             onValueChange={(value) => setRowsPerPage(Number(value))}
           >
-            <SelectTrigger className="w-[70px]" size="sm">
+            <SelectTrigger id="transaction-page-size" className="w-[70px]" size="sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -112,7 +112,8 @@ export function TransactionPagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-7 w-7"
+            className="size-11 sm:size-7"
+            aria-label="First page"
             onClick={() => goToPage(1)}
             disabled={!canPrevious}
           >
@@ -121,7 +122,8 @@ export function TransactionPagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-7 w-7"
+            className="size-11 sm:size-7"
+            aria-label="Previous page"
             onClick={() => goToPage(resolvedPage - 1)}
             disabled={!canPrevious}
           >
@@ -130,7 +132,8 @@ export function TransactionPagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-7 w-7"
+            className="size-11 sm:size-7"
+            aria-label="Next page"
             onClick={() => goToPage(resolvedPage + 1)}
             disabled={!canNext}
           >
@@ -139,7 +142,8 @@ export function TransactionPagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-7 w-7"
+            className="size-11 sm:size-7"
+            aria-label="Last page"
             onClick={() => goToPage(pageCount)}
             disabled={!canNext}
           >

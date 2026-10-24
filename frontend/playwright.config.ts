@@ -13,5 +13,5 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], ...(process.env.E2E_MOBILE === "1" ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } : {}) } }],
 });

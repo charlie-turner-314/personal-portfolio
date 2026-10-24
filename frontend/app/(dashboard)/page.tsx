@@ -89,7 +89,7 @@ async function DashboardContent({
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
       {/* Filters Row */}
-        <div className="flex items-center justify-between" data-walkthrough="walkthrough-filters">
+        <div className="flex flex-wrap items-center justify-between gap-2" data-walkthrough="walkthrough-filters">
           <Suspense fallback={null}>
             <DashboardFilters accounts={accounts} />
           </Suspense>
@@ -154,13 +154,13 @@ async function DashboardContent({
 
         {/* Row 2: Charts */}
         <div className="grid gap-4 md:grid-cols-5">
-          <div data-walkthrough="walkthrough-profit-loss" className="col-span-3">
+          <div data-walkthrough="walkthrough-profit-loss" className="min-w-0 md:col-span-3">
           <ProfitLossChart
             data={data.incomeExpense}
             currency={data.balance.currency}
           />
           </div>
-          <div data-walkthrough="walkthrough-category" className="col-span-2">
+          <div data-walkthrough="walkthrough-category" className="min-w-0 md:col-span-2">
           <SpendingByCategoryChart
             data={data.spendingByCategory.categories}
             total={data.spendingByCategory.total}
@@ -176,7 +176,7 @@ async function DashboardContent({
         </div>
 
         {/* Row 3: Cash Flow Sankey */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <div data-walkthrough="walkthrough-cash-flow">
           <SankeyFlowChart
             data={data.sankeyData}
@@ -191,18 +191,18 @@ async function DashboardContent({
         </div>
 
         {/* Row 4: Upcoming Irregular Expenses */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <UpcomingPlannedExpensesCard data={data.upcomingPlannedExpenses} />
         </div>
 
         {/* Row 5: Assets Overview */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <NetWorthTotals />
           <AssetsOverviewCard data={data.assetsOverview} />
         </div>
 
         {/* Row 6: Investments Summary */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <PortfolioSummaryCard />
         </div>
     </div>

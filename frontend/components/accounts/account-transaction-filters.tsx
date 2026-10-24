@@ -249,7 +249,7 @@ function DateRangeFilter({ dateRange, onDateRangeChange }: DateRangeFilterProps)
           <RiArrowDownSLine className="h-4 w-4 shrink-0 text-muted-foreground" />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-auto p-0">
-          <div className="flex">
+          <div className="flex flex-col sm:flex-row">
             <div className="border-r p-2 space-y-0.5 w-28">
               <button
                 type="button"
@@ -491,8 +491,8 @@ export function AccountTransactionFilters({ table, categories }: AccountTransact
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <div className="relative w-64">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-64">
           <RiSearchLine className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search transactions..."
