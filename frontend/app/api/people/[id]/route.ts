@@ -76,6 +76,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     // Capture the avatar path before deletion to clean up.
     const all = await getPeople(userId);
     const existing = all.find((p) => p.id === id);
+    if (!existing) return NextResponse.json({ error: "not found" }, { status: 404 });
     await deletePerson({ userId, id });
     if (existing?.avatarPath) await deletePersonAvatar(existing.avatarPath);
     return NextResponse.json({ ok: true });

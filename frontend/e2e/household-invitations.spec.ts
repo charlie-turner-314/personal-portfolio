@@ -1,0 +1,106 @@
+import { expect, test } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+
+const dbContainer = process.env.HOUSEHOLD_UAT_DB_CONTAINER;
+test.skip(!dbContainer, "Requires an explicitly selected isolated release-lab database");
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+test("placeholder gains an independent login; revocation and leaving preserve both datasets", async ({ page: owner, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const origin = new URL(baseURL!).origin;
+  expect(["localhost", "127.0.0.1"]).toContain(new URL(origin).hostname);
+  const project = execFileSync("docker", ["inspect", dbContainer!, "--format", '{{ index .Config.Labels "com.docker.compose.project" }}'], { encoding: "utf8" }).trim();
+  expect(project).toMatch(/^syllogic-release-lab-/);
+  const psql = (input: string) => execFileSync("docker", ["exec", "-i", dbContainer!, "psql", "-U", "financeuser", "-d", "finance_db", "-Atq", "-v", "ON_ERROR_STOP=1"], { input, encoding: "utf8" });
+  const password = `SyntheticUat!${randomUUID()}`;
+  const ownerEmail = `household-owner-${randomUUID()}@example.test`;
+  const memberEmail = `household-member-${randomUUID()}@example.test`;
+  const signup = await owner.request.post("/api/auth/sign-up/email", { headers: { Origin: origin }, data: { name: "Household Owner", email: ownerEmail, password } });
+  expect(signup.ok()).toBeTruthy();
+  const ownerId = (await signup.json()).user.id as string;
+  const sharedId = randomUUID();
+  psql(`BEGIN; UPDATE users SET onboarding_status='completed', functional_currency='AUD' WHERE id=${literal(ownerId)} AND email=${literal(ownerEmail)};
+    INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${sharedId}',${literal(ownerId)},'Household Shared Savings','savings','AUD','manual',1000,1000); COMMIT;`);
+  await owner.addInitScript(({ userId }) => {
+    localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["home", "settings"], userId }, version: 0 }));
+  }, { userId: ownerId });
+  await owner.goto("/settings?tab=household");
+  await owner.getByRole("button", { name: "Add household person", exact: true }).click();
+  const personForm = owner.locator("form").filter({ has: owner.getByRole("button", { name: "Add person", exact: true }) });
+  await personForm.locator('input:not([type="file"])').fill("Existing Partner");
+  await personForm.getByRole("button", { name: "Add person", exact: true }).click();
+  await expect(owner.getByText("Existing Partner", { exact: true })).toBeVisible();
+  const people = (await (await owner.request.get("/api/people")).json()).people;
+  const personId = people.find((p: { name: string }) => p.name === "Existing Partner").id as string;
+  psql(`INSERT INTO account_owners(account_id,person_id,share) VALUES ('${sharedId}','${personId}',1);`);
+  const ownershipBefore = psql(`SELECT row_to_json(o) FROM account_owners o WHERE account_id='${sharedId}';`);
+  async function invite() {
+    await owner.getByLabel("Household person", { exact: true }).selectOption(personId);
+    await owner.getByLabel("Their login email").fill(memberEmail);
+    await owner.getByRole("button", { name: "Create invitation link" }).click();
+    await expect(owner.getByLabel("Invitation link")).toBeVisible();
+    return owner.getByLabel("Invitation link").inputValue();
+  }
+  const link = await invite();
+  const memberContext = await browser.newContext();
+  const member = await memberContext.newPage();
+  try {
+    await member.goto(link);
+    await member.getByRole("link", { name: "Create an account" }).click();
+    await member.getByLabel("Name", { exact: true }).fill("Partner Login");
+    await member.getByLabel("Email", { exact: true }).fill(memberEmail);
+    await member.getByLabel("Password", { exact: true }).fill(password);
+    await member.getByLabel("Confirm Password").fill(password);
+    const registered = member.waitForResponse((r) => r.url().includes("/api/auth/sign-up/email") && r.request().method() === "POST");
+    await member.getByRole("button", { name: "Sign up" }).click();
+    const memberId = (await (await registered).json()).user.id as string;
+    await expect(member.getByRole("button", { name: "Accept invitation" })).toBeVisible();
+    const privateId = randomUUID();
+    psql(`INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${privateId}',${literal(memberId)},'Preserved Personal Savings','savings','AUD','manual',200,200);`);
+    await member.addInitScript(({ userId }) => {
+      localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["home", "settings"], userId }, version: 0 }));
+    }, { userId: memberId });
+    await member.getByRole("button", { name: "Accept invitation" }).click();
+    await expect(member.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+    const loginIdentity = await (await member.request.get("/api/auth/get-session")).json();
+    expect(loginIdentity.user.id).toBe(memberId);
+    expect(loginIdentity.user.email).toBe(memberEmail);
+    const shared = await (await member.request.get("/api/accounts")).json();
+    expect(JSON.stringify(shared)).toContain(sharedId);
+    expect(JSON.stringify(shared)).not.toContain(privateId);
+    const forbidden = await member.request.post("/api/household", { data: { action: "invite", personId, email: "other@example.test" }, headers: { Origin: origin } });
+    expect(forbidden.status()).toBe(409);
+    const mutatePerson = await member.request.patch(`/api/people/${personId}`, { multipart: { name: "Not permitted" } });
+    expect(mutatePerson.status()).toBe(403);
+    await member.goto("/settings?tab=household");
+    await expect(member.getByRole("button", { name: "Leave household" })).toBeVisible();
+    await expect(member.getByRole("button", { name: "Add household person" })).toHaveCount(0);
+    expect(psql(`SELECT row_to_json(o) FROM account_owners o WHERE account_id='${sharedId}';`)).toBe(ownershipBefore);
+    await owner.reload();
+    await owner.getByRole("button", { name: "Revoke access" }).click();
+    await expect(owner.getByText("Linked login", { exact: true })).toHaveCount(0);
+    const afterRevoke = await (await member.request.get("/api/accounts")).json();
+    expect(JSON.stringify(afterRevoke)).not.toContain(sharedId);
+    expect(JSON.stringify(afterRevoke)).toContain(privateId);
+    const replay = await member.request.post("/api/household", { headers: { Origin: origin }, data: { action: "accept", token: new URL(link).searchParams.get("token") } });
+    expect(replay.status()).toBe(409);
+    const nextLink = await invite();
+    await member.request.post("/api/auth/sign-out", { headers: { Origin: origin } });
+    await member.goto(nextLink);
+    await member.getByRole("link", { name: "Sign in", exact: true }).click();
+    await member.getByLabel("Email", { exact: true }).fill(memberEmail);
+    await member.getByLabel("Password", { exact: true }).fill(password);
+    await member.getByRole("button", { name: "Login", exact: true }).click();
+    await expect(member.getByRole("button", { name: "Accept invitation" })).toBeVisible();
+    await member.getByRole("button", { name: "Accept invitation" }).click();
+    await expect(member.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+    await member.goto("/settings?tab=household");
+    await member.getByRole("button", { name: "Leave household" }).click();
+    await expect.poll(async () => JSON.stringify(await (await member.request.get("/api/accounts")).json())).not.toContain(sharedId);
+    expect(JSON.stringify(await (await member.request.get("/api/accounts")).json())).toContain(privateId);
+    expect(psql(`SELECT row_to_json(o) FROM account_owners o WHERE account_id='${sharedId}';`)).toBe(ownershipBefore);
+    expect(psql(`SELECT name FROM people WHERE id='${personId}';`).trim()).toBe("Existing Partner");
+    expect(psql(`SELECT name FROM users WHERE id=${literal(ownerId)};`).trim()).toBe("Household Owner");
+  } finally { await memberContext.close(); }
+});
