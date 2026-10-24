@@ -94,7 +94,7 @@ export default function StepFourImportPage() {
   return (
     <div className="space-y-8">
       <OnboardingProgress currentStep={4} />
-      <Card className="min-h-[640px] h-[640px] flex flex-col">
+      <Card className="min-h-[640px] md:h-[640px] flex flex-col">
         <CardHeader>
           <CardTitle>Import your transactions</CardTitle>
           <CardDescription>
@@ -103,7 +103,7 @@ export default function StepFourImportPage() {
             fields when you&apos;re ready.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex-1 min-h-0 space-y-6">
+        <CardContent className="flex-1 md:min-h-0 space-y-6">
           <div className="space-y-2">
             <Label>Select Account</Label>
             {accounts.length === 0 ? (
@@ -141,7 +141,7 @@ export default function StepFourImportPage() {
             <CsvUploadDropzone onFileSelect={handleFileSelect} isUploading={isLoading} />
           </div>
         </CardContent>
-        <CardFooter className="justify-between gap-2">
+        <CardFooter className="flex-wrap justify-between gap-2">
           <Button type="button" variant="outline" onClick={handleBack}>
             <RiArrowLeftLine className="mr-2 h-4 w-4" />
             Back
