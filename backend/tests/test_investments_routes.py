@@ -96,7 +96,7 @@ def test_create_manual_account_and_holding(client, db):
         provider.search_symbols.return_value = [
             type("S", (), {"symbol": "AAPL", "name": "Apple", "exchange": "NASDAQ", "currency": "USD"})()
         ]
-        with patch("app.routes.investments.sync_investment_account"):
+        with patch("app.routes.investments._run_sync_in_process"):
             r = client.post(
                 f"/api/investments/manual-accounts/{account_id}/holdings",
                 json={"symbol": "AAPL", "quantity": "10", "instrument_type": "equity",
@@ -109,7 +109,7 @@ def test_create_manual_account_and_holding(client, db):
 
 
 def test_create_broker_connection_encrypts_credentials(client, db):
-    with patch("app.routes.investments.sync_investment_account") as task:
+    with patch("app.routes.investments._run_sync_in_process") as task:
         r = client.post("/api/investments/broker-connections", json={
             "provider": "ibkr_flex", "flex_token": "TOKEN_X",
             "query_id_positions": "111", "query_id_trades": "222",
@@ -120,7 +120,7 @@ def test_create_broker_connection_encrypts_credentials(client, db):
     assert "connection_id" in body and "account_id" in body
     conn = db.query(BrokerConnection).one()
     assert "TOKEN_X" not in conn.credentials_encrypted
-    task.delay.assert_called_once()
+    task.assert_called_once()
 
 
 def test_delete_holding_only_for_manual(client, db):
