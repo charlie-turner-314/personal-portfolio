@@ -105,7 +105,13 @@ test("phone overlays, date presets, transaction details and bulk actions stay re
   await page.screenshot({ path: "test-results/phone-bulk-actions.png", fullPage: true });
 
   await page.getByRole("checkbox", { name: "Select row", exact: true }).first().click();
-  await page.locator('tbody tr').first().locator('td').nth(2).click();
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  await expect(page.getByRole("table")).toBeVisible();
+  await page.getByRole("button", { name: "Cards", exact: true }).click();
+  const firstCard = page.getByRole("article").first();
+  await expect(firstCard.getByText("Account", { exact: true })).toBeVisible();
+  await expect(firstCard.getByText("Category", { exact: true })).toBeVisible();
+  await firstCard.getByRole("button", { name: /^View transaction:/ }).click();
   await expectFits(page.getByRole("dialog"));
   await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();

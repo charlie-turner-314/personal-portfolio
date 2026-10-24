@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { type DateRange } from "react-day-picker";
 import { type ColumnFiltersState } from "@tanstack/react-table";
+import { MobileTransactionCard, transactionFieldLabels } from "@/components/transactions/mobile-transaction-card";
 import { DataTable } from "@/components/ui/data-table";
 import type { TransactionWithRelations } from "@/lib/actions/transactions";
 import type { CategoryDisplay } from "@/types";
@@ -126,6 +127,10 @@ export function AccountTransactions({
   return (
     <>
       <DataTable
+        getRowId={(transaction) => transaction.id}
+        mobileSortColumns={["bookedAt", "description", "merchant", "amount"]}
+        mobileColumnLabels={transactionFieldLabels}
+        mobileRow={(row) => <MobileTransactionCard row={row} onOpen={setSelectedTransaction} />}
         key={tableKey}
         columns={accountTransactionColumns}
         data={transactions}

@@ -8,6 +8,7 @@ import {
   type PaginationState,
   type SortingState,
 } from "@tanstack/react-table";
+import { MobileTransactionCard, transactionFieldLabels } from "@/components/transactions/mobile-transaction-card";
 import { DataTable } from "@/components/ui/data-table";
 import type {
   FilteredTransactionTotals,
@@ -244,6 +245,10 @@ export function TransactionTable({
   return (
     <>
       <DataTable
+        getRowId={(transaction) => transaction.id}
+        mobileSortColumns={["bookedAt", "description", "merchant", "amount"]}
+        mobileColumnLabels={transactionFieldLabels}
+        mobileRow={(row) => <MobileTransactionCard row={row} onOpen={setSelectedTransaction} />}
         columns={columns ?? transactionColumns}
         data={transactions}
         onRowClick={handleRowClick}
