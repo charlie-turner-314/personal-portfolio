@@ -1777,3 +1777,25 @@ class AiCategorizationJob(Base):
     __table_args__ = (
         Index("ai_jobs_one_active_user", "user_id", unique=True, postgresql_where=text("status IN ('queued','running')")),
     )
+
+
+class HouseholdMembership(Base):
+    __tablename__ = "household_memberships"
+
+    member_user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    owner_user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class HouseholdInvitation(Base):
+    __tablename__ = "household_invitations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="CASCADE"), nullable=False)
+    email = Column(Text, nullable=False)
+    token_hash = Column(Text, nullable=False, unique=True)
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

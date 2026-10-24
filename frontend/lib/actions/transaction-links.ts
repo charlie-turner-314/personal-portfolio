@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq, and, inArray, sql, ne, desc, gte, lte, ilike, or, count } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { transactions, transactionLinks, accounts } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import crypto from "crypto";
 
 export type LinkRole = "primary" | "reimbursement" | "expense";

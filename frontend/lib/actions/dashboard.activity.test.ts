@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => {
   }) } };
 });
 vi.mock("@/lib/db", () => ({ db: mocks.db }));
-vi.mock("@/lib/auth-helpers", () => ({ getAuthenticatedSession: async () => ({ user: { id: "user-1" } }) }));
+vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: async () => ({ user: { id: "user-1" } }) }));
 vi.mock("@/lib/data/cached", () => ({ getCachedUserAccounts: vi.fn() }));
 vi.mock("@/lib/api/investments", () => ({ getPortfolio: vi.fn() }));
 vi.mock("@/lib/actions/planned-expenses", () => ({ getUpcomingPlannedExpenses: vi.fn() }));

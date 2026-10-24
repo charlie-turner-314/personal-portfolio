@@ -1,6 +1,6 @@
 "use server";
 
-import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
+import { getAuthenticatedSession, requireAuth } from "@/lib/household/financial-auth";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
 import {

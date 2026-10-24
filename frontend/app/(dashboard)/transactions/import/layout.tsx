@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getAuthenticatedSession } from "@/lib/auth-helpers";
+import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail } from "@/lib/demo-access";
 
 export default async function TransactionsImportLayout({

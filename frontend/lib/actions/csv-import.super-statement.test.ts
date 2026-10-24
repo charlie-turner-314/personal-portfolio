@@ -52,7 +52,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/db", () => ({ db: mocks.db }));
-vi.mock("@/lib/auth-helpers", () => ({
+vi.mock("@/lib/household/financial-auth", () => ({
   getAuthenticatedSession: mocks.getAuthenticatedSession,
   requireAuth: vi.fn(),
 }));

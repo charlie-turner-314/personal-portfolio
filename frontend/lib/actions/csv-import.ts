@@ -14,7 +14,7 @@ import {
   superContributions,
   transactions,
 } from "@/lib/db/schema";
-import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
+import { getAuthenticatedSession, requireAuth } from "@/lib/household/financial-auth";
 import { deleteTransactions } from "@/lib/actions/transactions";
 import { storage } from "@/lib/storage";
 import { getBackendBaseUrl } from "@/lib/backend-url";

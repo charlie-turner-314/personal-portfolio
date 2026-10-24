@@ -21,7 +21,7 @@ import {
   type SQLWrapper,
 } from "drizzle-orm";
 import type { SupportedHorizon } from "@/lib/dashboard/query-params";
-import { getAuthenticatedSession } from "@/lib/auth-helpers";
+import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { db } from "@/lib/db";
 import { categories, transactions, users } from "@/lib/db/schema";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";

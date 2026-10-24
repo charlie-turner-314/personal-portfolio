@@ -8,7 +8,7 @@ vi.mock("@/lib/db", () => ({ db: {
   query: { csvImports: { findFirst: mocks.session }, accounts: { findMany: mocks.accounts }, transactions: { findMany: mocks.existing } },
   update: () => ({ set: mocks.update.mockImplementation(() => ({ where: async () => undefined })) }),
 } }));
-vi.mock("@/lib/auth-helpers", () => ({ getAuthenticatedSession: async () => ({ user: { id: "u", email: "test@example.test" } }), requireAuth: async () => "u" }));
+vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: async () => ({ user: { id: "u", email: "test@example.test" } }), requireAuth: async () => "u" }));
 vi.mock("@/lib/storage", () => ({ storage: { download: mocks.download } }));
 vi.mock("@/lib/security/data-encryption", () => ({ decryptWithFallback: (_cipher: unknown, plain: string) => plain, encryptValue: (value: string) => value }));
 vi.mock("@/lib/actions/transactions", () => ({ deleteTransactions: vi.fn() }));
