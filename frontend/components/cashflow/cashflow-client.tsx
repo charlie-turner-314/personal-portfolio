@@ -518,7 +518,7 @@ export function CashflowClient({ forecast, formOptions }: CashflowClientProps) {
           </Card>
         </div>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           <Card>
             <CardHeader className="border-b">
               <div className="flex items-center gap-2">

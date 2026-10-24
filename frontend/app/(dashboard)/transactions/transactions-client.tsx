@@ -305,7 +305,7 @@ export function TransactionsClient({
           }
           canDelete={canDelete}
           action={
-            <div className="flex flex-row items-center gap-3">
+            <div className="flex flex-row flex-wrap items-center gap-3">
               {importStatus === "importing" && (
                 <div className="flex flex-col gap-1 min-w-[180px]">
                   <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">

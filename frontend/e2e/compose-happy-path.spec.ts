@@ -91,7 +91,11 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await expect(page.getByRole("button", { name: "Close walkthrough" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
 
-  await page.getByRole("button", { name: "Expand sidebar" }).click();
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  } else {
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+  }
   await page.getByRole("button", { name: /Compose E2E/ }).click();
   await page.getByRole("menuitem", { name: "Log out" }).click();
   await expect(page.getByText("Login to your account", { exact: true })).toBeVisible();
