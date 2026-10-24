@@ -93,7 +93,21 @@ export function DataTable<TData, TValue>({
   tableContainerProps,
 }: DataTableProps<TData, TValue>) {
   const isMobile = useIsMobile();
-  const [mobileView, setMobileView] = React.useState<"cards" | "table">("cards");
+  const [mobileView, setMobileView] = React.useState<"cards" | "table">(() => {
+    try {
+      return typeof window !== "undefined" && window.sessionStorage.getItem("transactions.mobile-view") === "table" ? "table" : "cards";
+    } catch {
+      return "cards";
+    }
+  });
+  const changeMobileView = (view: "cards" | "table") => {
+    setMobileView(view);
+    try {
+      window.sessionStorage.setItem("transactions.mobile-view", view);
+    } catch {
+      // The view still works when browser storage is unavailable.
+    }
+  };
   const showMobileCards = isMobile && mobileRow && mobileView === "cards";
   const [uncontrolledSorting, setUncontrolledSorting] = React.useState<SortingState>([]);
   const resolvedSorting = sortingState ?? uncontrolledSorting;
@@ -181,7 +195,7 @@ export function DataTable<TData, TValue>({
           {(["cards", "table"] as const).map((view) => (
             <Button key={view} variant={mobileView === view ? "default" : "outline"}
               className="min-h-11" aria-pressed={mobileView === view}
-              onClick={() => setMobileView(view)}>
+              onClick={() => changeMobileView(view)}>
               {view === "cards" ? "Cards" : "Table"}
             </Button>
           ))}

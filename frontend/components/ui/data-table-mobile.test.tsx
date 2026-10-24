@@ -1,6 +1,6 @@
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ColumnDef } from "@tanstack/react-table";
 const viewport = vi.hoisted(() => ({ mobile: true }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => viewport.mobile }));
@@ -14,6 +14,7 @@ const columns: ColumnDef<Entry>[] = [
 const entries = [{ description: "Groceries", amount: 42 }];
 
 describe("DataTable mobile presentation", () => {
+  beforeEach(() => window.sessionStorage.clear());
   it("offers cards, sorting and the complete table while retaining table state", () => {
     viewport.mobile = true;
     const sort = vi.fn();
@@ -27,6 +28,17 @@ describe("DataTable mobile presentation", () => {
     expect(screen.getByRole("table")).toHaveTextContent("Groceries");
     fireEvent.click(screen.getByRole("button", { name: "Cards", exact: true }));
     expect(screen.getByRole("button", { name: "Selected entry" })).toBeVisible();
+  });
+
+  it("restores the chosen table view after a route remount", () => {
+    viewport.mobile = true;
+    const props = { columns, data: entries, mobileRow: () => <article>Mobile card</article> };
+    const view = render(<DataTable {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Table", exact: true }));
+    view.unmount();
+    render(<DataTable {...props} />);
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
   });
 
   it("keeps a selection attached to the same transaction when server order changes", () => {
