@@ -135,7 +135,7 @@ export function ReportForm({
         />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
           <label className="block text-sm font-medium mb-1">Mode</label>
           <select
@@ -172,7 +172,7 @@ export function ReportForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className="block text-sm font-medium mb-1">Frequency</label>
           <select

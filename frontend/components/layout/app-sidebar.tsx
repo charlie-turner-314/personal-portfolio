@@ -107,10 +107,10 @@ export function AppSidebar({ initialUser }: AppSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
-  const { isMobile, state, setOpen } = useSidebar();
+  const { isMobile, state, setOpen, setOpenMobile } = useSidebar();
   const [hasMarkError, setHasMarkError] = useState(false);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
-  const isCollapsed = state === "collapsed";
+  const isCollapsed = !isMobile && state === "collapsed";
   const brandImageSrc =
     isCollapsed && !hasMarkError
       ? "/brand/personal-portfolio-mark.png"
@@ -169,7 +169,10 @@ export function AppSidebar({ initialUser }: AppSidebarProps) {
             <div className="flex items-center gap-1">
               <SidebarMenuButton
                 size="lg"
-                onClick={() => router.push(getHomePathWithFilters())}
+                onClick={() => {
+                  setOpenMobile(false);
+                  router.push(getHomePathWithFilters());
+                }}
                 className={isCollapsed ? "justify-center" : "w-full"}
               >
                 <div className="bg-sidebar-accent border-sidebar-border flex aspect-square size-8 items-center justify-center overflow-hidden border shrink-0">
@@ -216,6 +219,8 @@ export function AppSidebar({ initialUser }: AppSidebarProps) {
                             : item.href
                         }
                         prefetch
+                        onClick={() => setOpenMobile(false)}
+                        aria-current={isActive ? "page" : undefined}
                         title={isCollapsed ? item.title : undefined}
                       />
                     }
@@ -298,7 +303,7 @@ export function AppSidebar({ initialUser }: AppSidebarProps) {
                 align="end"
                 sideOffset={4}
               >
-                <DropdownMenuItem onClick={() => router.push("/settings")}>
+                <DropdownMenuItem onClick={() => { setOpenMobile(false); router.push("/settings"); }}>
                   <RiSettings3Line className="mr-2" />
                   Settings
                 </DropdownMenuItem>
