@@ -115,6 +115,9 @@ test("household logins preserve privacy, explicit shared edits and aggregate-onl
     expect(JSON.stringify(afterRevoke)).not.toContain(sharedId);
     expect(JSON.stringify(afterRevoke)).toContain(privateId);
     expect((await (await member.request.get("/api/household/net-worth")).json()).totals).toHaveLength(1);
+    const historyDeletion = await owner.request.delete(`/api/people/${personId}`);
+    expect(historyDeletion.status()).toBe(409);
+    expect(JSON.stringify(await historyDeletion.json())).not.toContain(privateId);
     const replay = await member.request.post("/api/household", { headers: { Origin: origin }, data: { action: "accept", token: new URL(link).searchParams.get("token") } });
     expect(replay.status()).toBe(409);
     const nextLink = await invite();

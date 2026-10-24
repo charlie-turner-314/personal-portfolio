@@ -20,6 +20,10 @@ export async function createHouseholdInvitation(actorUserId: string, personId: s
     if (member) throw new Error("Only the household owner can invite members");
     const [person] = await tx.select().from(people).where(and(eq(people.id, personId), eq(people.userId, actorUserId)));
     if (!person || person.kind !== "member") throw new Error("Choose a household placeholder");
+    if (person.linkedUserId) {
+      const [identity] = await tx.select({ email: users.email }).from(users).where(eq(users.id, person.linkedUserId));
+      if (!identity || normalizeInvitationEmail(identity.email) !== normalizedEmail) throw new Error("This person already has a login identity. Invite their current email or create a different household person");
+    }
     const [linked] = await tx.select().from(householdMemberships).where(eq(householdMemberships.personId, personId));
     if (linked) throw new Error("This person already has a linked login");
     const [actor] = await tx.select().from(users).where(eq(users.id, actorUserId));
@@ -49,6 +53,7 @@ export async function acceptHouseholdInvitation(actorUserId: string, token: stri
     if (memberships.some((m) => m.personId === invitation.personId)) throw new Error("This person already has a linked login");
     const [person] = await tx.select().from(people).where(and(eq(people.id, invitation.personId), eq(people.userId, invitation.ownerUserId), eq(people.kind, "member")));
     if (!person) throw new Error("This household person is no longer available");
+    if (person.linkedUserId && person.linkedUserId !== actorUserId) throw new Error("This household person is already linked to another login");
     await tx.update(people).set({ linkedUserId: actorUserId }).where(eq(people.id, person.id));
     await tx.insert(householdMemberships).values({ memberUserId: actorUserId, ownerUserId: invitation.ownerUserId, personId: invitation.personId });
     await tx.update(householdInvitations).set({ consumedAt: new Date() }).where(eq(householdInvitations.id, invitation.id));

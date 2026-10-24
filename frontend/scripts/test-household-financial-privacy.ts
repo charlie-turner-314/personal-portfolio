@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../lib/db";
-import { accounts, accountOwners, householdAccountShares, householdMemberships, householdNetWorthShares, people, transactions, users, properties, exchangeRates, transactionLinks } from "../lib/db/schema";
+import { accounts, accountOwners, householdAccountShares, householdMemberships, householdNetWorthShares, people, transactions, users, properties, exchangeRates, transactionLinks, accountOwnershipAllocations } from "../lib/db/schema";
+import { deletePerson } from "../lib/people/mutations";
 import { getVisibleNetWorthTotals } from "../lib/household/net-worth";
 import { accountAccess, transactionAccess } from "../lib/household/account-access";
 import { setAccountSharing, setNetWorthSharing } from "../lib/household/sharing";
@@ -95,6 +96,8 @@ async function main() {
     assert.equal((await db.select().from(householdAccountShares)).length, 0);
     assert.equal((await db.select().from(householdNetWorthShares)).length, 0);
     assert.equal((await getVisibleNetWorthTotals(owner)).length, 1, "leaving removes aggregate access");
+    await assert.rejects(createHouseholdInvitation(owner, partner.id, email(third)), /already has a login identity/);
+    await assert.rejects(deletePerson({ userId: owner, id: partner.id }), /preserve/);
     const invitation = await createHouseholdInvitation(owner, partner.id, email(member));
     await acceptHouseholdInvitation(member, invitation.token);
     assert.deepEqual(await visible(member), [memberPrivate.id], "rejoining does not restore old grants");
@@ -113,6 +116,14 @@ async function main() {
     assert.equal(Number((await getVisibleNetWorthTotals(owner)).find((t) => t.isOwn)!.total), 550, "personal totals deduct debt and convert foreign assets");
     await db.update(properties).set({ currency: "CHF" }).where(eq(properties.id, foreignProperty.id));
     assert.equal((await getVisibleNetWorthTotals(owner)).find((t) => t.isOwn)!.total, null, "missing FX cannot silently produce a misleading total");
+    const [privateHistoryPerson] = await db.insert(people).values({ userId: owner, name: "Historical placeholder", kind: "member" }).returning();
+    await db.insert(accountOwnershipAllocations).values({ accountId: memberPrivate.id, personId: privateHistoryPerson.id, share: "1", effectiveFrom: "2026-01-01" });
+    await assert.rejects(deletePerson({ userId: owner, id: privateHistoryPerson.id }), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /preserve ownership history/);
+      assert.equal("blockers" in error, false, "a deletion conflict must not disclose private account IDs");
+      return true;
+    });
     console.log("Household privacy integration: private defaults, selective symmetric sharing, shared edits, unrelated isolation, ownership separation, revoke/leave/rejoin and stale-grant defenses passed.");
   } finally {
     await db.delete(householdMemberships).where(inArray(householdMemberships.memberUserId, ids));
