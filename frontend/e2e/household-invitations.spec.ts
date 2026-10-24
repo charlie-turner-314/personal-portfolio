@@ -86,9 +86,8 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
     const replay = await member.request.post("/api/household", { headers: { Origin: origin }, data: { action: "accept", token: new URL(link).searchParams.get("token") } });
     expect(replay.status()).toBe(409);
     const nextLink = await invite();
-    expect((await member.request.post("/api/auth/sign-out", { headers: { Origin: origin }, data: {} })).ok()).toBeTruthy();
     await member.goto(nextLink);
-    await member.getByRole("link", { name: "Sign in", exact: true }).click();
+    await member.getByRole("button", { name: "Sign in with a different account" }).click();
     await member.getByLabel("Email", { exact: true }).fill(memberEmail);
     await member.getByLabel("Password", { exact: true }).fill(password);
     await member.getByRole("button", { name: "Login", exact: true }).click();

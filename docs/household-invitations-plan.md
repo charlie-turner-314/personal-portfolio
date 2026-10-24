@@ -18,3 +18,11 @@ Members can work with shared household finances. Login identity, personal profil
 ## Delivery notes
 
 Worktree starts at origin/develop f7005e6. The original checkout contains unrelated uncommitted category-confidence work and is left intact. The user authorized deployment and bypassing disabled GitHub CI/CD; repository acceptance rules still govern promotion to main.
+
+## Validation progress
+
+- Initial source-build candidate f74a741 passed local upgrade preservation checks and both Docker health checks. PostgreSQL integration exercises acceptance races, wrong-email rejection, expiry, replay, invite replacement, revocation, leave, reciprocal invites, and unchanged ownership rows.
+- 424 frontend tests passed (six skipped), 48 backend tests passed, TypeScript passed, ESLint reported zero errors, 25 release safety/isolation tests and deployment contract passed.
+- Browser testing found anonymous invitation RSC payload reuse after login. fb8016e changes invitation returns to full navigation and adds account switching. Rebuild and full browser journey are required before integration.
+- PR #63 targets develop. Workflow dispatch returned HTTP 422: Actions has been disabled for this repository. Use the user-authorized local CI/build path; do not weaken repository branch protection settings.
+- Pi read-only discovery: v0.1.8 at aa9fa1a3801a734d0aff58d8ca4862946b21cf77, project personal-portfolio, persistent DB/uploads volumes personal-portfolio_postgres_data and personal-portfolio_uploads_data, deployment checkout /home/charlieturner/personal-portfolio, 8.5 GiB free. Production remains unchanged.
