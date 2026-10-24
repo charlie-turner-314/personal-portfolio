@@ -98,7 +98,7 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.goto("/budget");
   await expect(page.getByRole("heading", { name: "Budget" })).toBeVisible();
   await expect(page.getByText("Budget failed to load")).not.toBeVisible();
-  await expect(page.getByText("Monthly Budget")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Monthly Budget", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Close walkthrough" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
 

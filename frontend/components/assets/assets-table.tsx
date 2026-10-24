@@ -67,7 +67,7 @@ function AccountRow({
           className="h-3 w-3 shrink-0 rounded-sm"
           style={{ backgroundColor: color }}
         />
-        <div className="min-w-0 truncate">
+        <div className="min-w-0 break-words sm:truncate">
           <span className="text-sm">{account.name}</span>
           {account.institution && (
             <span className="text-xs text-muted-foreground ml-2">
@@ -76,7 +76,7 @@ function AccountRow({
           )}
         </div>
       </div>
-      <div className="hidden items-center justify-end gap-2 sm:flex">
+      <div className="col-span-2 row-start-2 flex items-center justify-end gap-2 sm:col-span-1 sm:col-start-2 sm:row-start-1">
         {showWeight ? (
           <>
             <WeightBarVisualizer percentage={percentage} color={color} />
@@ -88,7 +88,7 @@ function AccountRow({
           <span className="text-sm text-muted-foreground">{descriptor}</span>
         )}
       </div>
-      <div className="min-w-0 text-right">
+      <div className="col-start-2 row-start-1 min-w-0 text-right sm:col-start-3">
         <span className={cn("whitespace-nowrap text-sm font-medium tabular-nums", displayAsLiability && displayedValue !== 0 && "text-red-600 dark:text-red-400")}>
           {formatCurrency(displayedValue, currency, { showSign: true })}
         </span>
@@ -121,7 +121,7 @@ function CategoryRow({
         <span className="hidden text-right text-sm text-muted-foreground sm:block">
           -
         </span>
-        <div className="min-w-0 text-right">
+        <div className="col-start-2 row-start-1 min-w-0 text-right sm:col-start-3">
           <span className="whitespace-nowrap text-sm text-muted-foreground tabular-nums">
             {formatCurrency(0, currency)}
           </span>
@@ -146,9 +146,9 @@ function CategoryRow({
           ) : (
             <div className="w-4 h-4" />
           )}
-          <span className="truncate text-sm font-medium">{category.label}</span>
+          <span className="break-words text-sm font-medium sm:truncate">{category.label}</span>
         </div>
-        <div className="hidden items-center justify-end gap-2 sm:flex">
+        <div className="col-span-2 row-start-2 flex items-center justify-end gap-2 sm:col-span-1 sm:col-start-2 sm:row-start-1">
           <WeightBarVisualizer
             percentage={category.percentage}
             color={category.color}
@@ -157,7 +157,7 @@ function CategoryRow({
             {category.percentage.toFixed(0)}%
           </span>
         </div>
-        <div className="min-w-0 text-right">
+        <div className="col-start-2 row-start-1 min-w-0 text-right sm:col-start-3">
           <span className="whitespace-nowrap text-sm font-medium tabular-nums">
             {formatCurrency(category.value, currency)}
           </span>
@@ -288,8 +288,8 @@ export function AssetsTable({
     <div className="rounded-md border">
       <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-3 py-2 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider sm:grid-cols-[minmax(0,1fr)_9rem_7rem]">
         <div>Name</div>
-        <div className="hidden text-right sm:block">Asset allocation</div>
-        <div className="text-right">Value</div>
+        <div className="col-span-2 row-start-2 text-right sm:col-span-1 sm:col-start-2 sm:row-start-1">Asset allocation</div>
+        <div className="col-start-2 row-start-1 text-right sm:col-start-3">Value</div>
       </div>
 
       {categories.map((category, index) => (

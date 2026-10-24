@@ -175,7 +175,7 @@ async function DashboardContent({
         </div>
 
         {/* Row 3: Cash Flow Sankey */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <div data-walkthrough="walkthrough-cash-flow">
           <SankeyFlowChart
             data={data.sankeyData}
@@ -190,17 +190,17 @@ async function DashboardContent({
         </div>
 
         {/* Row 4: Upcoming Irregular Expenses */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <UpcomingPlannedExpensesCard data={data.upcomingPlannedExpenses} />
         </div>
 
         {/* Row 5: Assets Overview */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <AssetsOverviewCard data={data.assetsOverview} />
         </div>
 
         {/* Row 6: Investments Summary */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <PortfolioSummaryCard />
         </div>
     </div>

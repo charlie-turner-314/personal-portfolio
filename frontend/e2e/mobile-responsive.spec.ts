@@ -22,7 +22,7 @@ for (const width of [320, 390, 768, 1440]) {
   test(`dashboard routes fit a ${width}px viewport and navigation remains available`, async ({ page }, testInfo) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width, height: width < 768 ? 844 : 1000 });
-    for (const path of ["/", "/transactions", "/subscriptions", "/budget", "/cashflow", "/investments", "/assets", "/reports", "/reports/new", "/reports/tax-year", "/settings", "/transactions/import"]) {
+    for (const path of ["/", "/category-spending", "/investments/connect", "/settings/connect-bank", ...(process.env.MOBILE_UAT_ACCOUNT_ID ? [`/accounts/${process.env.MOBILE_UAT_ACCOUNT_ID}`] : []), ...(process.env.MOBILE_UAT_HOLDING_ID ? [`/investments/${process.env.MOBILE_UAT_HOLDING_ID}`] : []), "/transactions", "/subscriptions", "/budget", "/cashflow", "/investments", "/assets", "/reports", "/reports/new", "/reports/tax-year", "/settings", "/transactions/import"]) {
       await page.goto(path);
       await expect(page.locator("main")).toBeVisible();
       await page.waitForTimeout(500);
