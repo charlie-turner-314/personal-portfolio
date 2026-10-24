@@ -17,6 +17,7 @@ export function accountAccess(accountId: AnyPgColumn | SQL, actorUserId: string 
       where permitted_share.account_id = permitted_account.id
         and permitted_share.member_user_id = ${actorUserId}
         and permitted_share.granted_by_user_id = permitted_account.user_id
+        and permitted_account.is_active = true
         and ${sameHousehold(sql`permitted_account.user_id`, actorUserId)}
     )
   )`;

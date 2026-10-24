@@ -4,7 +4,7 @@ import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
 import { eq, and, lte, gte, lt, desc, sql, inArray, max } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, csvImports, type NewAccount } from "@/lib/db/schema";
+import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, csvImports, householdAccountShares, type NewAccount } from "@/lib/db/schema";
 import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
@@ -218,13 +218,10 @@ export async function deleteAccount(
     // Soft delete by setting isActive to false
     // Note: Transactions and balances remain associated with the deactivated account
     // Use hardDeleteAccount for complete cleanup
-    await db
-      .update(accounts)
-      .set({
-        isActive: false,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
+    await db.transaction(async (tx) => {
+      await tx.update(accounts).set({ isActive: false, updatedAt: new Date() }).where(eq(accounts.id, accountId));
+      await tx.delete(householdAccountShares).where(eq(householdAccountShares.accountId, accountId));
+    });
 
     revalidatePath("/settings");
     revalidatePath("/");

@@ -10,7 +10,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.database import get_db
-from app.models import Account, Transaction
+from app.models import Account, Transaction, HouseholdAccountShare
 from app.db_helpers import get_user_id
 from app.services.financial_access import account_access
 from app.schemas import (
@@ -378,12 +378,14 @@ def update_account(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    if account.user_id != user_id and updates.is_active is not None:
+    if account.user_id != user_id and "is_active" in updates.model_fields_set:
         raise HTTPException(status_code=403, detail="Only the account owner can remove or restore an account")
     update_data = updates.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(account, field, value)
 
+    if "is_active" in update_data and update_data["is_active"] is not True:
+        db.query(HouseholdAccountShare).filter(HouseholdAccountShare.account_id == account_id).delete(synchronize_session=False)
     db.commit()
     db.refresh(account)
     return _serialize_account(account, user_id)

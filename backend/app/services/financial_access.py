@@ -27,6 +27,7 @@ def account_access(account_id_column, actor_user_id: str):
         grant.account_id == account.id,
         grant.member_user_id == actor_user_id,
         grant.granted_by_user_id == account.user_id,
+        account.is_active.is_(True),
         household_root(account.user_id) == household_root(actor_user_id),
     )))
     permitted = select(account.id).where(or_(account.user_id == actor_user_id, granted))

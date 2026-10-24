@@ -75,11 +75,12 @@ def main():
             assert {a["id"] for a in get_financial_summary(member)["accounts"]} == {str(joint), str(personal)}, "MCP raw-SQL summaries must include only permitted accounts"
             assert get_account(joint, user_id=member, db=db).id == joint
             assert get_account(joint, user_id=member, db=db).external_id is None
-            try:
-                update_account(joint, AccountUpdate(is_active=False), user_id=member, db=db)
-                raise AssertionError("A collaborator could bypass owner-only deletion via PATCH")
-            except HTTPException as exc:
-                assert exc.status_code == 403
+            for active in (False, None):
+                try:
+                    update_account(joint, AccountUpdate(is_active=active), user_id=member, db=db)
+                    raise AssertionError("A collaborator could bypass owner-only deletion via PATCH")
+                except HTTPException as exc:
+                    assert exc.status_code == 403
             for call in (lambda: get_account(private, user_id=member, db=db), lambda: get_transaction(secret_id, user_id=member, db=db), lambda: delete_transactions_by_account(private, user_id=member, db=db)):
                 try:
                     call()
