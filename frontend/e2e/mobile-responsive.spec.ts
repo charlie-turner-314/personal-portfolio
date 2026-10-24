@@ -102,7 +102,7 @@ test("phone overlays, date presets, transaction details and bulk actions stay re
   await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
   await expectFits(page.getByTitle("Categorize", { exact: true }));
   await expectFits(page.getByTitle("Analytics", { exact: true }));
-  await page.screenshot({ path: "test-results/phone-bulk-actions.png", fullPage: true });
+  await page.screenshot({ path: "test-results/phone-bulk-actions.png", fullPage: false });
 
   await page.getByRole("checkbox", { name: "Select row", exact: true }).first().click();
   await page.getByRole("button", { name: "Table", exact: true }).click();
@@ -115,4 +115,19 @@ test("phone overlays, date presets, transaction details and bulk actions stay re
   await expectFits(page.getByRole("dialog"));
   await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
+});
+
+test("populated report history keeps every column reachable on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  // Render a failed-run fixture without scheduling or sending any reports.
+  await page.route("**/api/reports/mobile-layout-report", (route) => route.fulfill({ json: { id: "mobile-layout-report", name: "Monthly portfolio report" } }));
+  await page.route("**/api/reports/mobile-layout-report/runs", (route) => route.fulfill({ json: [{ id: "run-1", status: "FAILED", scheduled_for: "2026-10-24T12:00:00Z", finished_at: "2026-10-24T12:01:00Z", is_test: false, error_message: "Example delivery error for layout verification" }] }));
+  await page.goto("/reports/mobile-layout-report/runs");
+  const history = page.getByRole("region", { name: "Report run history" });
+  await expect(history).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await expect(history.getByRole("columnheader", { name: "Error", exact: true })).toBeAttached();
+  await history.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+  await expect(history.getByText("Example delivery error for layout verification")).toBeInViewport();
 });

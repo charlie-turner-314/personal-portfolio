@@ -344,7 +344,7 @@ export function TransactionTable({
         }
         footer={
           resolvedFilteredTotals ? (
-            <div className="-mt-px flex items-center justify-end gap-8 border-x border-b bg-muted/25 px-4 py-2">
+            <div className="-mt-px flex flex-wrap items-center justify-end gap-x-8 gap-y-2 border-x border-b bg-muted/25 px-4 py-2">
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-muted-foreground">Total In</span>
                 <span className="font-mono font-medium text-emerald-700">

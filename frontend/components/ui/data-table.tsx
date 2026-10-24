@@ -164,13 +164,26 @@ export function DataTable<TData, TValue>({
     },
   });
 
+  const sortableMobileColumns = table.getAllLeafColumns().filter(
+    (column) => column.getCanSort() && (!mobileSortColumns || mobileSortColumns.includes(column.id))
+  );
+  const reverseMobileSort = () => {
+    const id = resolvedSorting[0]?.id ?? sortableMobileColumns[0]?.id;
+    if (id) table.setSorting([{ id, desc: !(resolvedSorting[0]?.desc ?? true) }]);
+  };
+
   return (
     <div className={cn("w-full", wrapperClassName)}>
       {toolbar && <div className="shrink-0 mb-4">{toolbar(table)}</div>}
       {isMobile && mobileRow && (
         <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="Transaction view">
-          <Button variant={mobileView === "cards" ? "default" : "outline"} className="min-h-11" aria-pressed={mobileView === "cards"} onClick={() => setMobileView("cards")}>Cards</Button>
-          <Button variant={mobileView === "table" ? "default" : "outline"} className="min-h-11" aria-pressed={mobileView === "table"} onClick={() => setMobileView("table")}>Table</Button>
+          {(["cards", "table"] as const).map((view) => (
+            <Button key={view} variant={mobileView === view ? "default" : "outline"}
+              className="min-h-11" aria-pressed={mobileView === view}
+              onClick={() => setMobileView(view)}>
+              {view === "cards" ? "Cards" : "Table"}
+            </Button>
+          ))}
         </div>
       )}
       {showMobileCards ? (
@@ -183,14 +196,27 @@ export function DataTable<TData, TValue>({
             ))}
             <label className="flex min-w-32 flex-1 flex-col gap-1 text-xs">
               Sort by
-              <select aria-label="Sort transactions by" className="h-11 min-w-0 border bg-background px-2 text-base" value={resolvedSorting[0]?.id ?? ""} onChange={(event) => table.setSorting([{ id: event.target.value, desc: resolvedSorting[0]?.desc ?? true }])}>
+              <select aria-label="Sort transactions by"
+                className="h-11 min-w-0 border bg-background px-2 text-base"
+                value={resolvedSorting[0]?.id ?? ""}
+                onChange={(event) => table.setSorting([{ id: event.target.value, desc: resolvedSorting[0]?.desc ?? true }])}>
                 {!resolvedSorting.length && <option value="">Default order</option>}
-                {table.getAllLeafColumns().filter((column) => column.getCanSort() && (!mobileSortColumns || mobileSortColumns.includes(column.id))).map((column) => <option key={column.id} value={column.id}>{mobileColumnLabels[column.id] ?? column.id}</option>)}
+                {sortableMobileColumns.map((column) => (
+                  <option key={column.id} value={column.id}>
+                    {mobileColumnLabels[column.id] ?? column.id}
+                  </option>
+                ))}
               </select>
             </label>
-            <Button className="min-h-11 self-end" variant="outline" aria-label="Reverse sort order" onClick={() => table.setSorting([{ id: resolvedSorting[0]?.id ?? table.getAllLeafColumns().find((column) => column.getCanSort())!.id, desc: !(resolvedSorting[0]?.desc ?? true) }])}>{resolvedSorting[0]?.desc === false ? "Ascending" : "Descending"}</Button>
+            <Button className="min-h-11 self-end" variant="outline"
+              aria-label="Reverse sort order" disabled={!sortableMobileColumns.length}
+              onClick={reverseMobileSort}>
+              {resolvedSorting[0]?.desc === false ? "Ascending" : "Descending"}
+            </Button>
           </div>
-          {table.getRowModel().rows.length ? table.getRowModel().rows.map((row) => <React.Fragment key={row.id}>{mobileRow(row)}</React.Fragment>) : <p className="border p-6 text-center text-sm">No results.</p>}
+          {table.getRowModel().rows.length ? table.getRowModel().rows.map((row) => (
+            <React.Fragment key={row.id}>{mobileRow(row)}</React.Fragment>
+          )) : <p className="border p-6 text-center text-sm">No results.</p>}
         </div>
       ) : <div
         className={cn(
