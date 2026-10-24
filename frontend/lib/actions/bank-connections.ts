@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq, and, desc, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bankConnections, accounts } from "@/lib/db/schema";
-import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
+import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";

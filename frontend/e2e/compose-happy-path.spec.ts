@@ -29,9 +29,9 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
     await page.getByRole("dialog").getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
   }
-  // Submit by keyboard after the currency popup closes; its pointer-dismissal
-  // transition can otherwise swallow the immediately following click.
-  await page.getByRole("button", { name: "Create Account" }).press("Enter");
+  // Wait for the Select portal's exit animation before submitting the form.
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByText("E2E Savings", { exact: true })).toBeVisible();
   if (multiAccount) {
     await page.getByRole("button", { name: "Add another account" }).click();
@@ -40,9 +40,8 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
     await page.getByRole("option", { name: "Savings Account" }).click();
     await page.getByRole("dialog").getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
-    // Submit by keyboard after the currency popup closes; its pointer-dismissal
-    // transition can otherwise swallow the immediately following click.
-    await page.getByRole("button", { name: "Create Account" }).press("Enter");
+    await expect(page.getByRole("option")).toHaveCount(0);
+    await page.getByRole("button", { name: "Create Account" }).click();
     await expect(page.getByText("E2E Spending", { exact: true })).toBeVisible();
   }
   await page.getByRole("button", { name: "Continue" }).click();
@@ -103,7 +102,13 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
 
   await page.goto("/assets");
   await page.getByRole("button", { name: "Close walkthrough" }).click();
-  await expect(page.getByText(/Update recommended/)).toBeVisible();
+  // Onboarding can finish while the queued CSV import is still processing.
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByText(/Update recommended/)).toBeVisible();
+  }).toPass({ timeout: 60_000 });
+  // Closing a walkthrough skips it for this render; a reload starts it again.
+  await page.getByRole("button", { name: "Close walkthrough" }).click();
   await page.getByRole("button", { name: "Upload CSV", exact: true }).click();
   await expect(page).toHaveURL(/\/transactions\/import\?accountId=/);
   await expect(page.getByRole("combobox")).toHaveText("E2E Savings");

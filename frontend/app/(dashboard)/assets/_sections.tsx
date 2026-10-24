@@ -7,7 +7,7 @@ import {
 import { getVehicles } from "@/lib/actions/vehicles";
 import { getPeople, getOwnersForEntities } from "@/lib/people";
 import { avatarUrl } from "@/lib/people/avatars";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { AssetManagement } from "./asset-management";
 
 function ownerIdsByEntity(

@@ -50,6 +50,7 @@ interface SettingsTabsProps {
     createdAt: Date | null;
   }>;
   people: Person[];
+  isHouseholdOwner?: boolean;
 }
 
 export function SettingsTabs({
@@ -64,6 +65,7 @@ export function SettingsTabs({
   csvImports,
   bankConnections,
   people,
+  isHouseholdOwner = true,
 }: SettingsTabsProps) {
   return (
     <Tabs defaultValue={defaultTab} className="flex-1">
@@ -129,7 +131,7 @@ export function SettingsTabs({
       )}
 
       <TabsContent value="household">
-        <HouseholdTab people={people} />
+        <HouseholdTab people={people} isOwner={isHouseholdOwner} />
       </TabsContent>
     </Tabs>
   );

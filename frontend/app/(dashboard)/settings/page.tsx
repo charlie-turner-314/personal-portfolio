@@ -1,3 +1,4 @@
+import { getHouseholdAccess } from "@/lib/household/access";
 import { redirect } from "next/navigation";
 import { Header } from "@/components/layout/header";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
@@ -22,13 +23,15 @@ export default async function SettingsPage({
     redirect("/login");
   }
 
+  const access = await getHouseholdAccess(user.id);
+
   const [categories, apiKeysResult, csvImports, bankConnections, peopleRows, resolvedSearchParams] =
     await Promise.all([
       getCategories(),
       listApiKeys(),
       getCsvImportHistory(),
       getBankConnections(),
-      getPeople(user.id),
+      getPeople(access.ownerUserId),
       searchParams,
     ]);
 
@@ -43,7 +46,7 @@ export default async function SettingsPage({
   const apiKeys = apiKeysResult.success && apiKeysResult.keys ? apiKeysResult.keys : [];
   const isDemoUser = isDemoRestrictedUserEmail(user.email);
   const canCreateApiKeys = !isDemoUser;
-  const canDelete = !isDemoUser;
+  const canDelete = !isDemoUser && access.isOwner;
   const mcpServerUrl = resolveMcpServerUrlForSnippet({
     mcpServerUrl: process.env.MCP_SERVER_URL,
     betterAuthUrl: process.env.BETTER_AUTH_URL || process.env.NEXT_PUBLIC_BETTER_AUTH_URL,
@@ -66,6 +69,7 @@ export default async function SettingsPage({
           csvImports={csvImports}
           bankConnections={bankConnections}
           people={people}
+          isHouseholdOwner={access.isOwner}
         />
       </div>
     </>

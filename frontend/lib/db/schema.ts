@@ -2135,3 +2135,22 @@ export const aiCategorizationJobs = pgTable("ai_categorization_jobs", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [uniqueIndex("ai_jobs_one_active_user").on(t.userId).where(sql`${t.status} IN ('queued', 'running')`)]);
+
+// Login identity stays independent from the user ID owning household finances.
+export const householdMemberships = pgTable("household_memberships", {
+  memberUserId: text("member_user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  personId: uuid("person_id").notNull().unique().references(() => people.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("household_memberships_owner_idx").on(t.ownerUserId), check("household_member_not_owner", sql`${t.memberUserId} <> ${t.ownerUserId}`)]);
+
+export const householdInvitations = pgTable("household_invitations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("household_invitations_owner_idx").on(t.ownerUserId)]);

@@ -23,7 +23,7 @@ function buildFormData(values: PersonFormValues): FormData {
   return fd;
 }
 
-export function PeopleList(props: { initialPeople: Person[] }) {
+export function PeopleList(props: { initialPeople: Person[]; readOnly?: boolean; onPeopleChange?: (people: Person[]) => void }) {
   const [people, setPeople] = useState(props.initialPeople);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -32,6 +32,7 @@ export function PeopleList(props: { initialPeople: Person[] }) {
     const r = await fetch("/api/people");
     const j = await r.json();
     setPeople(j.people);
+    props.onPeopleChange?.(j.people);
   }
 
   async function create(values: PersonFormValues) {
@@ -53,7 +54,7 @@ export function PeopleList(props: { initialPeople: Person[] }) {
     if (r.status === 409) {
       const j = await r.json();
       alert(
-        `Cannot delete: this person is the sole owner of ${j.blockers.length} item(s). Reassign first.`
+        j.error || "Cannot delete this person. Reassign ownership first."
       );
       return;
     }
@@ -69,15 +70,15 @@ export function PeopleList(props: { initialPeople: Person[] }) {
             <PersonAvatar person={p} size={36} />
             <span className="flex-1 font-medium">{p.name}</span>
             {p.kind === "self" && (
-              <span className="text-xs text-muted-foreground">you</span>
+              <span className="text-xs text-muted-foreground">{props.readOnly ? "household owner" : "you"}</span>
             )}
             {p.kind !== "self" && (
-              <span className="text-xs text-muted-foreground">household placeholder</span>
+              <span className="text-xs text-muted-foreground">household person</span>
             )}
-            <Button variant="ghost" size="sm" onClick={() => setEditingId(p.id)}>
+            {!props.readOnly && <Button variant="ghost" size="sm" onClick={() => setEditingId(p.id)}>
               Edit
-            </Button>
-            {p.kind !== "self" && (
+            </Button>}
+            {!props.readOnly && p.kind !== "self" && (
               <Button variant="ghost" size="sm" onClick={() => remove(p.id)}>
                 Delete
               </Button>
@@ -104,7 +105,7 @@ export function PeopleList(props: { initialPeople: Person[] }) {
         </div>
       )}
 
-      {adding ? (
+      {!props.readOnly && (adding ? (
         <div className="rounded-md border p-4">
           <h2 className="mb-1 font-medium">Add household person</h2>
           <p className="mb-3 text-sm text-muted-foreground">
@@ -120,7 +121,7 @@ export function PeopleList(props: { initialPeople: Person[] }) {
         <Button variant="outline" onClick={() => setAdding(true)}>
           Add household person
         </Button>
-      )}
+      ))}
     </div>
   );
 }

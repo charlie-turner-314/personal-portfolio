@@ -9,7 +9,7 @@ import {
 import { InvestmentsOverview } from "@/components/investments/InvestmentsOverview";
 import { InvestmentsEmpty } from "@/components/investments/InvestmentsEmpty";
 import { rangeToDates } from "@/lib/utils/date-ranges";
-import { getAuthenticatedSession } from "@/lib/auth-helpers";
+import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail } from "@/lib/demo-access";
 import { getAustralianFinancialYearForDate } from "@/lib/dates/australian-financial-year";
 

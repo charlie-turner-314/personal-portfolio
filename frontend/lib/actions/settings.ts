@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, transactions, accounts, type User } from "@/lib/db/schema";
 import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
+import { getHouseholdAccess } from "@/lib/household/access";
 import { storage } from "@/lib/storage";
 import {
   getCountryDefaults,
@@ -122,6 +123,10 @@ export async function deleteAllTransactionsAndResetBalances(): Promise<{
 
   if (!userId) {
     return { success: false, error: "Not authenticated" };
+  }
+
+  if (!(await getHouseholdAccess(userId)).isOwner) {
+    return { success: false, error: "Only the household owner can reset transactions" };
   }
 
   try {

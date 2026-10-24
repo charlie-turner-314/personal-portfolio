@@ -4,6 +4,7 @@ import {
   accountOwners,
   propertyOwners,
   vehicleOwners,
+  householdMemberships,
 } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { validateOwners, type OwnerInput } from "./validation";
@@ -49,6 +50,21 @@ export async function updatePerson(input: {
 }
 
 export async function deletePerson(input: { userId: string; id: string }) {
+  const [target] = await db
+    .select({ kind: people.kind })
+    .from(people)
+    .where(and(eq(people.id, input.id), eq(people.userId, input.userId)));
+  if (!target) throw new Error("person not found");
+  if (target.kind === "self") throw new Error("cannot delete the self person");
+
+  const [linked] = await db.select().from(householdMemberships).where(and(
+    eq(householdMemberships.personId, input.id), eq(householdMemberships.ownerUserId, input.userId),
+  ));
+  if (linked) {
+    const error = new Error("Revoke this person's login access before deleting them");
+    Object.assign(error, { code: "LINKED_LOGIN" });
+    throw error;
+  }
   // Block delete if this person is the sole owner of any entity.
   const blockers: { entityType: EntityType; entityId: string }[] = [];
 
@@ -87,12 +103,6 @@ export async function deletePerson(input: { userId: string; id: string }) {
     throw err;
   }
 
-  const [target] = await db
-    .select({ kind: people.kind })
-    .from(people)
-    .where(and(eq(people.id, input.id), eq(people.userId, input.userId)));
-  if (!target) throw new Error("person not found");
-  if (target.kind === "self") throw new Error("cannot delete the self person");
 
   await db.delete(people).where(eq(people.id, input.id));
 }

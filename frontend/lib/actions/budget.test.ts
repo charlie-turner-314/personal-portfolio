@@ -137,7 +137,7 @@ vi.mock("@/lib/db", () => ({
   db: mocks.db,
 }));
 
-vi.mock("@/lib/auth-helpers", () => ({
+vi.mock("@/lib/household/financial-auth", () => ({
   requireAuth: mocks.requireAuth,
 }));
 

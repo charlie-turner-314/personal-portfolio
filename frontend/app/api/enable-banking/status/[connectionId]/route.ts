@@ -1,3 +1,4 @@
+import { getHouseholdAccess } from "@/lib/household/access";
 import { NextRequest, NextResponse } from "next/server";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
@@ -18,7 +19,7 @@ export async function GET(
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
-    userId = session.user.id;
+    userId = (await getHouseholdAccess(session.user.id)).ownerUserId;
   } catch {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
