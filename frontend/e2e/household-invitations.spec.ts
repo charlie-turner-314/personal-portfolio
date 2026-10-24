@@ -52,10 +52,9 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
     await member.getByLabel("Email", { exact: true }).fill(memberEmail);
     await member.getByLabel("Password", { exact: true }).fill(password);
     await member.getByLabel("Confirm Password").fill(password);
-    const registered = member.waitForResponse((r) => r.url().includes("/api/auth/sign-up/email") && r.request().method() === "POST");
     await member.getByRole("button", { name: "Sign up" }).click();
-    const memberId = (await (await registered).json()).user.id as string;
     await expect(member.getByRole("button", { name: "Accept invitation" })).toBeVisible();
+    const memberId = (await (await member.request.get("/api/auth/get-session")).json()).user.id as string;
     const privateId = randomUUID();
     psql(`INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${privateId}',${literal(memberId)},'Preserved Personal Savings','savings','AUD','manual',200,200);`);
     await member.addInitScript(({ userId }) => {
