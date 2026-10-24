@@ -14,6 +14,7 @@ from celery.result import AsyncResult
 
 from app.database import get_db
 from app.db_helpers import get_user_id
+from app.services.financial_access import account_access
 from app.models import CsvImport, Account
 from celery_app import celery_app
 
@@ -146,7 +147,7 @@ def enqueue_csv_import(
         # Validate every account, including the credit side, before publishing work.
         account_ids = {txn.account_id for txn in request.transactions}
         account_ids.update(txn.destination_account_id for txn in request.transactions if txn.destination_account_id)
-        owned = db.query(Account).filter(Account.id.in_(account_ids), Account.user_id == user_id).all() if account_ids else []
+        owned = db.query(Account).filter(Account.id.in_(account_ids), account_access(Account.id, user_id)).all() if account_ids else []
         by_id = {str(account.id): account for account in owned}
         if account_ids - by_id.keys():
             raise HTTPException(status_code=404, detail="Account not found")

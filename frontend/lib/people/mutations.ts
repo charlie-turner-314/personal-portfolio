@@ -6,7 +6,8 @@ import {
   vehicleOwners,
   householdMemberships,
 } from "@/lib/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, or } from "drizzle-orm";
+import { getHouseholdAccess } from "@/lib/household/access";
 import { validateOwners, type OwnerInput } from "./validation";
 import type { EntityType } from "./queries";
 
@@ -115,13 +116,14 @@ export async function setOwners(input: {
 }) {
   validateOwners(input.owners);
 
-  // Verify all listed personIds belong to this user.
+  // Economic ownership can use the household roster or a retained personal identity.
+  const access = await getHouseholdAccess(input.userId);
   const ownedPeople = await db
     .select({ id: people.id })
     .from(people)
     .where(
       and(
-        eq(people.userId, input.userId),
+        or(eq(people.userId, input.userId), eq(people.userId, access.ownerUserId), eq(people.linkedUserId, input.userId)),
         inArray(
           people.id,
           input.owners.map((o) => o.personId)

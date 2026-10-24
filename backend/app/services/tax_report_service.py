@@ -16,6 +16,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.financial_access import account_access
 from app.models import (
     Account,
     CgtAllocation,
@@ -77,7 +78,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     start, end = financial_year_bounds(financial_year_start)
     income_events = (
         db.query(InvestmentIncomeEvent)
-        .filter(InvestmentIncomeEvent.user_id == user_id,
+        .filter(account_access(InvestmentIncomeEvent.account_id, user_id),
                 InvestmentIncomeEvent.pay_date >= start.date(),
                 InvestmentIncomeEvent.pay_date < end.date())
         .order_by(InvestmentIncomeEvent.pay_date, InvestmentIncomeEvent.id)
@@ -114,7 +115,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     cgt_events = (
         db.query(CgtAllocation)
         .join(Account, Account.id == CgtAllocation.account_id)
-        .filter(Account.user_id == user_id, CgtAllocation.disposal_date >= start.date(), CgtAllocation.disposal_date < end.date())
+        .filter(account_access(Account.id, user_id), CgtAllocation.disposal_date >= start.date(), CgtAllocation.disposal_date < end.date())
         .order_by(CgtAllocation.disposal_date, CgtAllocation.id)
         .all()
     )
@@ -149,7 +150,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
         db.query(InvestmentCostBaseAdjustment)
         .join(Account, Account.id == InvestmentCostBaseAdjustment.account_id)
         .filter(
-            Account.user_id == user_id,
+            account_access(Account.id, user_id),
             InvestmentCostBaseAdjustment.effective_date >= start.date(),
             InvestmentCostBaseAdjustment.effective_date < end.date(),
         )
@@ -205,7 +206,8 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     # as excluded instead of guessing.
     linked_ids = {
         transaction_id for (transaction_id,) in db.query(TransactionLink.transaction_id)
-        .filter(TransactionLink.user_id == user_id).all()
+        .join(Transaction, Transaction.id == TransactionLink.transaction_id)
+        .filter(account_access(Transaction.account_id, user_id)).all()
     }
     matched_income_transaction_ids = {
         event.matched_transaction_id for event in income_events if event.matched_transaction_id
@@ -213,7 +215,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     transactions = (
         db.query(Transaction)
         .options(joinedload(Transaction.property))
-        .filter(Transaction.user_id == user_id, Transaction.booked_at >= start, Transaction.booked_at < end)
+        .filter(account_access(Transaction.account_id, user_id), Transaction.booked_at >= start, Transaction.booked_at < end)
         .order_by(Transaction.booked_at, Transaction.id).all()
     )
     transaction_rows, excluded = [], []

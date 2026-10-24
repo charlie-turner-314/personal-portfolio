@@ -3,6 +3,7 @@ People and household tools for the MCP server.
 """
 from __future__ import annotations
 
+from app.services.financial_access import account_access, household_root
 from app.mcp.dependencies import get_db
 from app.models import Account, Person, Property, Vehicle
 from app.services.net_worth_service import calculate_net_worth, classify_account_amount
@@ -23,7 +24,7 @@ def list_people(user_id: str) -> list[dict]:
     with get_db() as db:
         rows = (
             db.query(Person)
-            .filter(Person.user_id == user_id)
+            .filter(Person.user_id == household_root(user_id))
             .order_by(Person.kind, Person.created_at)
             .all()
         )
@@ -52,14 +53,14 @@ def get_household_summary(
         net_worth, and total.
     """
     with get_db() as db:
-        people = db.query(Person).filter(Person.user_id == user_id).all()
+        people = db.query(Person).filter(Person.user_id == household_root(user_id)).all()
         if person_ids is not None:
             pid_set = set(person_ids)
             people = [p for p in people if str(p.id) in pid_set]
 
         accounts = (
             db.query(Account)
-            .filter(Account.user_id == user_id, Account.is_active.is_(True))
+            .filter(account_access(Account.id, user_id), Account.is_active.is_(True))
             .all()
         )
         properties = (
@@ -129,4 +130,4 @@ def get_household_summary(
                 "net_worth": round(net_worth, 2),
                 "total": round(net_worth, 2),
             })
-        return {"people": out}
+        return {"people": out, "scope": "Visible accounts and your private assets; other members’ private net worth is excluded"}

@@ -1,3 +1,4 @@
+import { accountAccess } from "@/lib/household/account-access";
 import { and, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
@@ -120,7 +121,7 @@ export async function fetchCategoryActualAmounts(
 ): Promise<CategoryActualAmount[]> {
   const normalizedAccountIds = normalizeAccountIds(accountIds);
   const baseConditions = [
-    eq(transactions.userId, userId),
+    accountAccess(transactions.accountId, userId),
     eq(transactions.transactionType, "debit"),
     eq(transactions.includeInAnalytics, true),
     isNull(transactions.internalTransferId),

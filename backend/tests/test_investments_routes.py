@@ -8,11 +8,9 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
-from app.database import Base, get_db
+from app.database import Base, engine, get_db
 from app.main import app
 from app.models import User, Account, Holding, BrokerConnection, HoldingValuation, AccountBalance
 
@@ -62,15 +60,18 @@ class SigningClient:
 
 @pytest.fixture
 def db():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    for model in (User, Account, BrokerConnection, Holding, HoldingValuation, AccountBalance):
-        model.__table__.create(bind=engine)
-    with Session(engine) as session:
+    # Use the supported database and real grant tables. Savepoints keep commits
+    # in API/service code isolated from other tests.
+    Base.metadata.create_all(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
+    finally:
+        session.close()
+        transaction.rollback()
+        connection.close()
 
 
 @pytest.fixture
@@ -126,7 +127,8 @@ def test_delete_holding_only_for_manual(client, db):
     acc = Account(id=uuid4(), user_id="u1", name="m", account_type="investment_manual", currency="EUR")
     h = Holding(id=uuid4(), user_id="u1", account_id=acc.id, symbol="AAPL", currency="USD",
                 instrument_type="equity", quantity=Decimal("1"), source="ibkr_flex")
-    db.add_all([acc, h]); db.commit()
+    db.add(acc); db.flush()
+    db.add(h); db.commit()
     r = client.delete(f"/api/investments/holdings/{h.id}")
     assert r.status_code == 400
     h.source = "manual"; db.commit()

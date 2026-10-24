@@ -1677,6 +1677,7 @@ class Person(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    linked_user_id = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     name = Column(String(255), nullable=False)
     kind = Column(String(20), nullable=False, default="member")
     color = Column(String(7), nullable=True)
@@ -1684,7 +1685,7 @@ class Person(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    user = relationship("User", backref="people")
+    user = relationship("User", backref="people", foreign_keys=[user_id])
 
     __table_args__ = (
         Index("idx_people_user", "user_id"),
@@ -1799,3 +1800,20 @@ class HouseholdInvitation(Base):
     expires_at = Column(DateTime, nullable=False)
     consumed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class HouseholdAccountShare(Base):
+    __tablename__ = "household_account_shares"
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    member_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    granted_by_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=text("now()"))
+    __table_args__ = (CheckConstraint("member_user_id <> granted_by_user_id", name="household_account_shares_not_self"),)
+
+
+class HouseholdNetWorthShare(Base):
+    __tablename__ = "household_net_worth_shares"
+    owner_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    member_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, nullable=False, server_default=text("now()"))
+    __table_args__ = (CheckConstraint("owner_user_id <> member_user_id", name="household_net_worth_shares_not_self"),)

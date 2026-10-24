@@ -1,5 +1,6 @@
 "use server";
 
+import { accountAccess, transactionAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
 import { eq, and, inArray, sql, ne, desc, gte, lte, ilike, or, count } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -72,6 +73,12 @@ export interface AccountOption {
 /**
  * Gets all user accounts for filter dropdown.
  */
+async function wholeLinkGroupAccessible(groupId: string, actorUserId: string): Promise<boolean> {
+  const [counts] = await db.select({ total: sql<number>`count(*)::int`, visible: sql<number>`count(*) filter(where ${transactionAccess(transactionLinks.transactionId, actorUserId)})::int` })
+    .from(transactionLinks).where(eq(transactionLinks.groupId, groupId));
+  return !!counts && counts.total > 0 && counts.total === counts.visible;
+}
+
 export async function getUserAccountsForLinking(): Promise<AccountOption[]> {
   const userId = await requireAuth();
 
@@ -81,7 +88,7 @@ export async function getUserAccountsForLinking(): Promise<AccountOption[]> {
 
   try {
     const userAccounts = await db.query.accounts.findMany({
-      where: eq(accounts.userId, userId),
+      where: accountAccess(accounts.id, userId),
       columns: {
         id: true,
         name: true,
@@ -122,7 +129,7 @@ export async function createTransactionLinkGroup(
     const allIds = [primaryId, ...linkedIds];
     const userTransactions = await db.query.transactions.findMany({
       where: and(
-        eq(transactions.userId, userId),
+        accountAccess(transactions.accountId, userId),
         inArray(transactions.id, allIds)
       ),
     });
@@ -189,7 +196,7 @@ export async function addTransactionToLinkGroup(
     const transaction = await db.query.transactions.findFirst({
       where: and(
         eq(transactions.id, transactionId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
     });
 
@@ -201,13 +208,15 @@ export async function addTransactionToLinkGroup(
     const existingGroupLink = await db.query.transactionLinks.findFirst({
       where: and(
         eq(transactionLinks.groupId, groupId),
-        eq(transactionLinks.userId, userId)
+        transactionAccess(transactionLinks.transactionId, userId)
       ),
     });
 
     if (!existingGroupLink) {
       return { success: false, error: "Link group not found" };
     }
+
+    if (!(await wholeLinkGroupAccessible(groupId, userId))) return { success: false, error: "Some linked transactions are no longer accessible" };
 
     // Check if transaction is already linked
     const existingLink = await db.query.transactionLinks.findFirst({
@@ -253,7 +262,7 @@ export async function removeTransactionFromLinkGroup(
     const link = await db.query.transactionLinks.findFirst({
       where: and(
         eq(transactionLinks.transactionId, transactionId),
-        eq(transactionLinks.userId, userId)
+        transactionAccess(transactionLinks.transactionId, userId)
       ),
     });
 
@@ -262,6 +271,7 @@ export async function removeTransactionFromLinkGroup(
     }
 
     const groupId = link.groupId;
+    if (!(await wholeLinkGroupAccessible(groupId, userId))) return { success: false, error: "Some linked transactions are no longer accessible" };
 
     // Count remaining transactions in the group
     const groupLinks = await db.query.transactionLinks.findMany({
@@ -306,13 +316,15 @@ export async function deleteLinkGroup(
     const existingLink = await db.query.transactionLinks.findFirst({
       where: and(
         eq(transactionLinks.groupId, groupId),
-        eq(transactionLinks.userId, userId)
+        transactionAccess(transactionLinks.transactionId, userId)
       ),
     });
 
     if (!existingLink) {
       return { success: false, error: "Link group not found" };
     }
+
+    if (!(await wholeLinkGroupAccessible(groupId, userId))) return { success: false, error: "Some linked transactions are no longer accessible" };
 
     // Delete all links in the group
     await db.delete(transactionLinks).where(eq(transactionLinks.groupId, groupId));
@@ -343,7 +355,7 @@ export async function getTransactionLinkGroup(
     const link = await db.query.transactionLinks.findFirst({
       where: and(
         eq(transactionLinks.transactionId, transactionId),
-        eq(transactionLinks.userId, userId)
+        transactionAccess(transactionLinks.transactionId, userId)
       ),
     });
 
@@ -353,13 +365,13 @@ export async function getTransactionLinkGroup(
 
     // Get all links in the group
     const groupLinks = await db.query.transactionLinks.findMany({
-      where: eq(transactionLinks.groupId, link.groupId),
+      where: and(eq(transactionLinks.groupId, link.groupId), transactionAccess(transactionLinks.transactionId, userId)),
     });
 
     // Get all transactions in the group
     const txnIds = groupLinks.map((l) => l.transactionId);
     const linkedTransactions = await db.query.transactions.findMany({
-      where: inArray(transactions.id, txnIds),
+      where: and(inArray(transactions.id, txnIds), accountAccess(transactions.accountId, userId)),
     });
 
     // Build the result
@@ -422,7 +434,7 @@ export async function getUserLinkGroups(): Promise<TransactionLinkGroup[]> {
   try {
     // Get all links for the user
     const userLinks = await db.query.transactionLinks.findMany({
-      where: eq(transactionLinks.userId, userId),
+      where: transactionAccess(transactionLinks.transactionId, userId),
     });
 
     // Group by groupId
@@ -445,7 +457,7 @@ export async function getUserLinkGroups(): Promise<TransactionLinkGroup[]> {
     for (const [groupId, links] of groupMap) {
       const txnIds = links.map((l) => l.transactionId);
       const linkedTransactions = await db.query.transactions.findMany({
-        where: inArray(transactions.id, txnIds),
+        where: and(inArray(transactions.id, txnIds), accountAccess(transactions.accountId, userId)),
       });
 
       let primary: LinkedTransaction | null = null;
@@ -526,7 +538,7 @@ export async function findPotentialReimbursements(
     const sourceTxn = await db.query.transactions.findFirst({
       where: and(
         eq(transactions.id, transactionId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
     });
 
@@ -544,13 +556,13 @@ export async function findPotentialReimbursements(
     const linkedTxnIds = await db
       .select({ transactionId: transactionLinks.transactionId })
       .from(transactionLinks)
-      .where(eq(transactionLinks.userId, userId));
+      .where(transactionAccess(transactionLinks.transactionId, userId));
 
     const linkedIds = linkedTxnIds.map((l) => l.transactionId);
 
     // Build conditions
     const conditions = [
-      eq(transactions.userId, userId),
+      accountAccess(transactions.accountId, userId),
       eq(transactions.transactionType, "credit"),
       eq(transactions.currency, sourceTxn.currency || "EUR"),
       ne(transactions.id, transactionId),
@@ -664,7 +676,7 @@ export async function findPotentialExpenses(
     const sourceTxn = await db.query.transactions.findFirst({
       where: and(
         eq(transactions.id, transactionId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
     });
 
@@ -682,13 +694,13 @@ export async function findPotentialExpenses(
     const linkedTxnIds = await db
       .select({ transactionId: transactionLinks.transactionId })
       .from(transactionLinks)
-      .where(eq(transactionLinks.userId, userId));
+      .where(transactionAccess(transactionLinks.transactionId, userId));
 
     const linkedIds = linkedTxnIds.map((l) => l.transactionId);
 
     // Build conditions
     const conditions = [
-      eq(transactions.userId, userId),
+      accountAccess(transactions.accountId, userId),
       eq(transactions.transactionType, "debit"),
       eq(transactions.currency, sourceTxn.currency || "EUR"),
       ne(transactions.id, transactionId),
@@ -788,7 +800,7 @@ export async function getTransactionLinkInfo(
     const link = await db.query.transactionLinks.findFirst({
       where: and(
         eq(transactionLinks.transactionId, transactionId),
-        eq(transactionLinks.userId, userId)
+        transactionAccess(transactionLinks.transactionId, userId)
       ),
     });
 
@@ -830,7 +842,7 @@ export async function createLinkGroupFromSelection(
     // Verify all transactions belong to the user
     const userTransactions = await db.query.transactions.findMany({
       where: and(
-        eq(transactions.userId, userId),
+        accountAccess(transactions.accountId, userId),
         inArray(transactions.id, transactionIds)
       ),
     });

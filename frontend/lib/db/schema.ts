@@ -1414,6 +1414,7 @@ export const people = pgTable(
     userId: text("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
+    linkedUserId: text("linked_user_id").references(() => users.id, { onDelete: "set null" }),
     name: varchar("name", { length: 255 }).notNull(),
     // 'self' = auto-created person representing the operator (one per user)
     // 'member' = anyone else in the household
@@ -1427,6 +1428,7 @@ export const people = pgTable(
   },
   (t) => [
     index("idx_people_user").on(t.userId),
+    index("people_linked_user_idx").on(t.linkedUserId),
     uniqueIndex("people_user_self_uq")
       .on(t.userId)
       .where(sql`${t.kind} = 'self'`),
@@ -2154,3 +2156,25 @@ export const householdInvitations = pgTable("household_invitations", {
   consumedAt: timestamp("consumed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [index("household_invitations_owner_idx").on(t.ownerUserId)]);
+
+// Financial access is explicit and independent of economic ownership percentages.
+export const householdAccountShares = pgTable("household_account_shares", {
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  memberUserId: text("member_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  grantedByUserId: text("granted_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.accountId, t.memberUserId] }),
+  index("household_account_shares_member_idx").on(t.memberUserId),
+  check("household_account_shares_not_self", sql`${t.memberUserId} <> ${t.grantedByUserId}`),
+]);
+
+export const householdNetWorthShares = pgTable("household_net_worth_shares", {
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  memberUserId: text("member_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.ownerUserId, t.memberUserId] }),
+  index("household_net_worth_shares_member_idx").on(t.memberUserId),
+  check("household_net_worth_shares_not_self", sql`${t.ownerUserId} <> ${t.memberUserId}`),
+]);

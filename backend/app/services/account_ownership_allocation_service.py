@@ -12,6 +12,8 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from app.services.financial_access import household_root
 
 from app.models import Account, AccountOwnershipAllocation, Person
 
@@ -64,7 +66,7 @@ class AccountOwnershipAllocationService:
         person_ids = [person_id for person_id, _ in allocations]
         owned_count = (
             self.db.query(Person.id)
-            .filter(Person.user_id == self.user_id, Person.id.in_(person_ids))
+            .filter(or_(Person.user_id == self.user_id, Person.user_id == household_root(self.user_id), Person.linked_user_id == self.user_id), Person.id.in_(person_ids))
             .count()
         )
         if owned_count != len(person_ids):

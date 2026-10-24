@@ -15,10 +15,12 @@ import redis
 import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.db_helpers import get_user_id
+from app.services.financial_access import account_access
 from app.models import BankConnection, Account
 from app.integrations.enable_banking_auth import EnableBankingClient
 from app.integrations.enable_banking_adapter import EnableBankingAdapter, _ACCOUNT_TYPE_MAP
@@ -28,6 +30,15 @@ from app.security.data_encryption import encrypt_value, blind_index
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _bank_identity_match(uid: str):
+    identities = [Account.external_id == uid]
+    hashed = blind_index(uid)
+    if hashed:
+        identities.append(Account.external_id_hash == hashed)
+    return or_(*identities)
+
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 ASPSP_CACHE_TTL = 86400  # 24 hours
@@ -75,7 +86,7 @@ class SyncTriggerResponse(BaseModel):
 
 class AccountMapping(BaseModel):
     bank_uid: str
-    action: str  # "create" or "link"
+    action: str  # "create", "link" or "skip"
     name: Optional[str] = None
     existing_account_id: Optional[str] = None
 
@@ -91,7 +102,7 @@ class MapAccountsResponse(BaseModel):
 class SuggestedMapping(BaseModel):
     bank_uid: str
     bank_name: str
-    suggested_action: str       # "link" or "create"
+    suggested_action: str       # "link", "create" or "skip"
     suggested_account_id: Optional[str] = None
     suggested_account_name: Optional[str] = None
 
@@ -304,6 +315,15 @@ def map_accounts(
                 detail=f"No bank account found with uid '{mapping.bank_uid}' in session data",
             )
 
+        if mapping.action == "skip":
+            continue
+        shared = db.query(Account).filter(
+            account_access(Account.id, user_id), Account.user_id != user_id,
+            Account.provider == connection.provider,
+            _bank_identity_match(mapping.bank_uid),
+        ).first()
+        if shared:
+            raise HTTPException(status_code=409, detail="This bank account is already shared with you. Skip it here and use the shared account to avoid duplicate balances.")
         if mapping.action == "create":
             name = (
                 mapping.name
@@ -362,7 +382,7 @@ def map_accounts(
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid action '{mapping.action}'. Must be 'create' or 'link'",
+                detail=f"Invalid action '{mapping.action}'. Must be 'create', 'link' or 'skip'",
             )
 
     connection.initial_sync_days = request.initial_sync_days
@@ -547,6 +567,7 @@ def _build_suggested_mappings(
     db: Session,
     user_id: str,
     raw_accounts: list,
+    provider: Optional[str] = None,
 ) -> list:
     """For each bank account UID, check if the user has an existing account with that external_id_hash."""
     results = []
@@ -564,12 +585,19 @@ def _build_suggested_mappings(
             })
             continue
 
-        uid_hash = blind_index(uid)
+        shared = db.query(Account).filter(
+            account_access(Account.id, user_id), Account.user_id != user_id,
+            _bank_identity_match(uid), Account.provider == provider if provider else True,
+        ).first()
+        if shared:
+            results.append({"bank_uid": uid, "bank_name": bank_name, "suggested_action": "skip",
+                "suggested_account_id": str(shared.id), "suggested_account_name": shared.name})
+            continue
         existing = (
             db.query(Account)
             .filter(
                 Account.user_id == user_id,
-                Account.external_id_hash == uid_hash,
+                _bank_identity_match(uid), Account.provider == provider if provider else True,
             )
             .first()
         )
@@ -624,6 +652,7 @@ def get_suggested_mappings(
         db=db,
         user_id=user_id,
         raw_accounts=raw_accounts,
+        provider=connection.provider,
     )
     return suggestions
 
