@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { RiArrowLeftLine, RiArrowRightLine, RiCloseLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ interface WalkthroughPopoverProps {
 }
 
 export function WalkthroughPopover({ step }: WalkthroughPopoverProps) {
+  const popoverRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const { currentPage, currentStepIndex, nextStep, previousStep, skipWalkthrough } =
     useWalkthroughStore();
@@ -27,8 +28,8 @@ export function WalkthroughPopover({ step }: WalkthroughPopoverProps) {
     const el = document.querySelector(`[data-walkthrough="${step.target}"]`);
     if (el) {
       const rect = el.getBoundingClientRect();
-      const popoverWidth = 320;
-      const popoverHeight = 180;
+      const popoverWidth = Math.min(320, window.innerWidth - 32);
+      const popoverHeight = popoverRef.current?.offsetHeight ?? 180;
       const gap = 12;
 
       let top = rect.bottom + gap;
@@ -37,11 +38,8 @@ export function WalkthroughPopover({ step }: WalkthroughPopoverProps) {
       if (top + popoverHeight > window.innerHeight - 20) {
         top = rect.top - popoverHeight - gap;
       }
-      if (top < 20) top = 20;
-      if (left < 20) left = 20;
-      if (left + popoverWidth > window.innerWidth - 20) {
-        left = window.innerWidth - popoverWidth - 20;
-      }
+      top = Math.max(16, Math.min(top, window.innerHeight - popoverHeight - 16));
+      left = Math.max(16, Math.min(left, window.innerWidth - popoverWidth - 16));
 
       setPosition({ top, left });
     } else {
@@ -69,15 +67,16 @@ export function WalkthroughPopover({ step }: WalkthroughPopoverProps) {
 
   const content = (
     <motion.div
+      ref={popoverRef}
       key={step.id}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 8 }}
-      className="fixed z-[9999] w-80 rounded-none border border-border bg-popover p-4 shadow-lg"
+      className="fixed z-[9999] w-80 max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-none border border-border bg-popover p-4 shadow-lg"
       style={
         position
           ? { top: position.top, left: position.left }
-          : { top: "50%", left: "50%", transform: "translate(-50%, -50%)" }
+          : { top: "50%", left: "50%", translate: "-50% -50%" }
       }
     >
       <div className="flex items-start justify-between gap-2">

@@ -4,10 +4,17 @@ import { test, expect } from "@playwright/test";
 // in the environment. Never log credentials or store authenticated browser state.
 test.beforeEach(async ({ page }) => {
   test.skip(!process.env.MOBILE_UAT_EMAIL || !process.env.MOBILE_UAT_PASSWORD, "Requires isolated lab credentials");
-  const response = await page.request.post("/api/auth/sign-in/email", {
+  let response = await page.request.post("/api/auth/sign-in/email", {
     data: { email: process.env.MOBILE_UAT_EMAIL, password: process.env.MOBILE_UAT_PASSWORD },
     headers: { Origin: process.env.E2E_BASE_URL || "http://localhost:8102" },
   });
+  for (let attempt = 0; response.status() === 429 && attempt < 4; attempt++) {
+    await page.waitForTimeout(15_000);
+    response = await page.request.post("/api/auth/sign-in/email", {
+      data: { email: process.env.MOBILE_UAT_EMAIL, password: process.env.MOBILE_UAT_PASSWORD },
+      headers: { Origin: process.env.E2E_BASE_URL || "http://localhost:8102" },
+    });
+  }
   expect(response.ok()).toBeTruthy();
 });
 
@@ -21,9 +28,16 @@ for (const width of [320, 390, 768, 1440]) {
       await page.waitForTimeout(500);
       expect(new URL(page.url()).pathname, `authenticated route ${path}`).toBe(path);
       const overflow = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
-      expect(overflow.scroll, `${path} page must fit without clipping or page-wide horizontal scrolling`).toBeLessThanOrEqual(overflow.width + 1);
+      expect.soft(overflow.scroll, `${path} page must fit without clipping or page-wide horizontal scrolling`).toBeLessThanOrEqual(overflow.width + 1);
       if (width < 768) {
         await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
+      }
+      const closeWalkthrough = page.getByRole("button", { name: "Close walkthrough" });
+      if (await closeWalkthrough.isVisible()) {
+        const bounds = await closeWalkthrough.boundingBox();
+        expect.soft(bounds?.x).toBeGreaterThanOrEqual(0);
+        expect.soft((bounds?.x ?? 0) + (bounds?.width ?? 0)).toBeLessThanOrEqual(width);
+        await closeWalkthrough.click();
       }
       await page.screenshot({ path: testInfo.outputPath(`${path.replaceAll("/", "_") || "home"}.png`), fullPage: true });
     }

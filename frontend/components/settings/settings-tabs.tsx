@@ -69,7 +69,7 @@ export function SettingsTabs({
 }: SettingsTabsProps) {
   return (
     <Tabs defaultValue={defaultTab} className="flex-1">
-      <TabsList variant="line" className="mb-6">
+      <TabsList variant="line" className="mb-6 max-md:h-auto max-md:w-full max-md:flex-wrap max-md:justify-start max-md:gap-y-2 max-md:[&>button]:min-h-11 max-md:[&>button]:flex-none">
         <TabsTrigger value="profile" data-walkthrough="walkthrough-profile">
           <RiUserLine className="mr-1.5 h-4 w-4" />
           Profile
