@@ -4,7 +4,7 @@ import { revalidatePath, updateTag } from "next/cache";
 import { eq, and, count } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { categories, transactions, type Category, type NewCategory } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { getCachedUserCategories, CACHE_TAGS } from "@/lib/data/cached";
 
 export interface CategoryCreateInput {

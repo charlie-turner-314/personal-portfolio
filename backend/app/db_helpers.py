@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - fallback when MCP SDK is unavailable
     def get_access_token():  # type: ignore[no-redef]
         return None
 
-from app.models import User
+from app.models import User, HouseholdMembership
 from app.mcp.auth import validate_api_key
 
 INTERNAL_AUTH_USER_HEADER = "x-personal-portfolio-user-id"
@@ -209,6 +209,18 @@ def _get_authenticated_user_id(api_key: Optional[str] = None) -> Optional[str]:
     return None
 
 
+
+def resolve_household_user_id(actor_user_id: str) -> str:
+    """Resolve financial scope afresh for API and MCP requests; never cache grants."""
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        membership = db.query(HouseholdMembership).filter(
+            HouseholdMembership.member_user_id == actor_user_id
+        ).first()
+        return membership.owner_user_id if membership else actor_user_id
+
+
 def get_mcp_user_id(user_id: Optional[str] = None, api_key: Optional[str] = None) -> str:
     """
     Resolve user_id for MCP tool calls.
@@ -223,7 +235,7 @@ def get_mcp_user_id(user_id: Optional[str] = None, api_key: Optional[str] = None
     if user_id and user_id != resolved:
         raise ValueError("Provided user_id does not match authenticated user.")
 
-    return resolved
+    return resolve_household_user_id(resolved)
 
 
 def get_user_id(user_id: Optional[str] = None, api_key: Optional[str] = None) -> str:
@@ -245,7 +257,7 @@ def get_user_id(user_id: Optional[str] = None, api_key: Optional[str] = None) ->
     # Priority 1: MCP auth context or API key parameter (if present)
     resolved = _get_authenticated_user_id(api_key)
     if resolved:
-        return resolved
+        return resolve_household_user_id(resolved)
 
     request_user_id = get_request_user_id()
     if not request_user_id:
@@ -260,4 +272,4 @@ def get_user_id(user_id: Optional[str] = None, api_key: Optional[str] = None) ->
             detail="Provided user_id does not match authenticated user.",
         )
 
-    return request_user_id
+    return resolve_household_user_id(request_user_id)

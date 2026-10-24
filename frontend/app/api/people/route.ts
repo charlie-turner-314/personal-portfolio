@@ -1,3 +1,4 @@
+import { getHouseholdAccess } from "@/lib/household/access";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getPeople, createPerson, updatePerson } from "@/lib/people";
@@ -7,7 +8,7 @@ import { requireAuth } from "@/lib/auth-helpers";
 export async function GET() {
   const userId = await requireAuth();
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const rows = await getPeople(userId);
+  const rows = await getPeople((await getHouseholdAccess(userId)).ownerUserId);
   return NextResponse.json({
     people: rows.map((p) => ({ ...p, avatarUrl: avatarUrl(p.avatarPath) })),
   });
@@ -24,6 +25,7 @@ const createSchema = z.object({
 export async function POST(req: NextRequest) {
   const userId = await requireAuth();
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!(await getHouseholdAccess(userId)).isOwner) return NextResponse.json({ error: "Only the household owner can manage people" }, { status: 403 });
   const form = await req.formData();
   const parsed = createSchema.safeParse({
     name: form.get("name"),

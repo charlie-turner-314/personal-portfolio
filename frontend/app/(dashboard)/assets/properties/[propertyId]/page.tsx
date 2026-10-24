@@ -27,7 +27,7 @@ import {
   getPropertyValuations,
 } from "@/lib/actions/properties";
 import { getPeople, getOwnersForEntities } from "@/lib/people";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { calculatePropertyEquity, getLiabilityMagnitude } from "@/lib/properties/equity";
 import {
   getAustralianFinancialYearForDate,

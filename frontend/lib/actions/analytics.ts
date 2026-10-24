@@ -2,7 +2,7 @@
 
 import { db } from "@/lib/db";
 import { transactions } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { eq, sql, gte, and, desc } from "drizzle-orm";
 
 // Note: getTotalBalance has been consolidated in lib/actions/dashboard.ts

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getTableName } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 const mocks = vi.hoisted(() => ({ rows: {} as Record<string, unknown[]>, selections: [] as Record<string, unknown>[], portfolio: vi.fn(), owners: vi.fn() }));
-vi.mock("@/lib/auth-helpers", () => ({ getAuthenticatedSession: async () => ({ user: { id: "user" } }) }));
+vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: async () => ({ user: { id: "user" } }) }));
 vi.mock("@/lib/api/investments", () => ({ getPortfolio: mocks.portfolio }));
 vi.mock("@/lib/people/queries", () => ({ getOwnersForEntities: mocks.owners }));
 vi.mock("@/lib/data/cached", () => ({ getCachedUserAccounts: vi.fn() }));

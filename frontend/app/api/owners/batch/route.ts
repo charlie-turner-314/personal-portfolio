@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { inArray, and, eq } from "drizzle-orm";
 import { getOwnersForEntities, type EntityType } from "@/lib/people";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { db } from "@/lib/db";
 import { accounts, properties, vehicles } from "@/lib/db/schema";
 

@@ -4,7 +4,7 @@ import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { historicalSnapshotImports, historicalSnapshotValues } from "@/lib/db/schema";
-import { getAuthenticatedSession } from "@/lib/auth-helpers";
+import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 
 export type HistoricalSnapshotRow = { date: string; netWorth: number | null; metrics?: Record<string, number> };

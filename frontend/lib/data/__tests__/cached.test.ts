@@ -7,7 +7,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/auth-helpers", () => ({
+vi.mock("@/lib/household/financial-auth", () => ({
   getAuthenticatedSession: vi.fn(),
 }));
 
@@ -28,7 +28,7 @@ describe("cached data layer", () => {
   });
 
   it("dedupes getCachedUserCategories within a single request via React.cache", async () => {
-    const { getAuthenticatedSession } = await import("@/lib/auth-helpers");
+    const { getAuthenticatedSession } = await import("@/lib/household/financial-auth");
     (getAuthenticatedSession as ReturnType<typeof vi.fn>).mockResolvedValue({
       user: { id: "user-1" },
     });

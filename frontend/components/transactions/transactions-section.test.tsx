@@ -30,7 +30,7 @@ vi.mock("@/lib/actions/properties", () => ({
   getProperties: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("@/lib/auth-helpers", () => ({
+vi.mock("@/lib/household/financial-auth", () => ({
   getAuthenticatedSession: vi.fn().mockResolvedValue({ user: { email: "user@example.com" } }),
 }));
 

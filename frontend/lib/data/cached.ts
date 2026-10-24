@@ -9,6 +9,7 @@ import { unstable_cache } from "next/cache";
 import { eq, and } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accounts, categories, users } from "@/lib/db/schema";
+import { getAuthenticatedSession as getFinancialSession } from "@/lib/household/financial-auth";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";
 import type { OnboardingStatus, OnboardingStatusResult } from "@/lib/actions/onboarding";
@@ -40,7 +41,7 @@ const getCachedCategoriesByUser = (userId: string) =>
   )();
 
 export const getCachedUserCategories = cache(async () => {
-  const session = await getCachedSession();
+  const session = await getFinancialSession();
   const userId = session?.user?.id;
   if (!userId) return [];
   return getCachedCategoriesByUser(userId);
@@ -70,7 +71,7 @@ const getCachedAccountsByUser = (userId: string) =>
   )();
 
 export const getCachedUserAccounts = cache(async () => {
-  const session = await getCachedSession();
+  const session = await getFinancialSession();
   const userId = session?.user?.id;
   if (!userId) return [];
   return getCachedAccountsByUser(userId);
@@ -103,7 +104,7 @@ const getCachedFullAccountsByUser = (userId: string) =>
   )();
 
 export const getCachedFullUserAccounts = cache(async () => {
-  const session = await getCachedSession();
+  const session = await getFinancialSession();
   const userId = session?.user?.id;
   if (!userId) return [];
   return getCachedFullAccountsByUser(userId);
@@ -155,7 +156,7 @@ const getCachedOnboardingStatusByUser = (userId: string) =>
   )();
 
 export const getCachedOnboardingStatus = cache(async () => {
-  const session = await getCachedSession();
+  const session = await getFinancialSession();
   const userId = session?.user?.id;
   if (!userId) return null;
   return getCachedOnboardingStatusByUser(userId);

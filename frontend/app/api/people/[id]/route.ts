@@ -1,3 +1,4 @@
+import { getHouseholdAccess } from "@/lib/household/access";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { updatePerson, deletePerson, getPeople } from "@/lib/people";
@@ -17,6 +18,7 @@ const patchSchema = z.object({
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const userId = await requireAuth();
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!(await getHouseholdAccess(userId)).isOwner) return NextResponse.json({ error: "Only the household owner can manage people" }, { status: 403 });
   const { id } = await ctx.params;
   const form = await req.formData();
   const parsed = patchSchema.safeParse({
@@ -68,6 +70,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const userId = await requireAuth();
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!(await getHouseholdAccess(userId)).isOwner) return NextResponse.json({ error: "Only the household owner can manage people" }, { status: 403 });
   const { id } = await ctx.params;
   try {
     // Capture the avatar path before deletion to clean up.
@@ -78,6 +81,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     return NextResponse.json({ ok: true });
   } catch (e) {
     const code = (e as any).code;
+    if (code === "LINKED_LOGIN") return NextResponse.json({ error: (e as Error).message }, { status: 409 });
     if (code === "SOLE_OWNER") {
       return NextResponse.json(
         { error: (e as Error).message, blockers: (e as any).blockers },

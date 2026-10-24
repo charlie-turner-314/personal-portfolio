@@ -1,5 +1,7 @@
 "use client";
 
+import { invitationReturnPath } from "@/lib/household/return-path";
+
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -117,7 +119,7 @@ function LoginPageContent() {
 
       // push("/") already fetches a fresh RSC payload for the dashboard route;
       // calling router.refresh() here would redundantly re-render it a second time.
-      router.push("/");
+      router.push(invitationReturnPath(searchParams.get("redirect")) ?? "/");
     } catch {
       setError("An unexpected error occurred");
     } finally {
@@ -192,7 +194,7 @@ function LoginPageContent() {
               {!signUpsDisabled && (
                 <FieldDescription className="text-center">
                   Don&apos;t have an account?{" "}
-                  <Link href="/register" className="underline underline-offset-4">
+                  <Link href={invitationReturnPath(searchParams.get("redirect")) ? `/register?redirect=${encodeURIComponent(invitationReturnPath(searchParams.get("redirect"))!)}` : "/register"} className="underline underline-offset-4">
                     Sign up
                   </Link>
                 </FieldDescription>

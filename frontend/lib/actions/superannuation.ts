@@ -10,7 +10,7 @@ import {
   superContributionCaps,
   superContributions,
 } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { CACHE_TAGS } from "@/lib/data/cached";
 import {
   calculateSuperCapProgress,

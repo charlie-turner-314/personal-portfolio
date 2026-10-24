@@ -4,7 +4,7 @@ import { revalidatePath, updateTag } from "next/cache";
 import { eq, and, lte, gte, lt, desc, sql, inArray, max } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, csvImports, type NewAccount } from "@/lib/db/schema";
-import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
+import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";

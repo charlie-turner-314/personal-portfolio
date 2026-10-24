@@ -1,5 +1,7 @@
 "use client";
 
+import { invitationReturnPath } from "@/lib/household/return-path";
+
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -84,7 +86,7 @@ function RegisterPageContent() {
         return;
       }
 
-      router.push("/");
+      router.push(invitationReturnPath(searchParams.get("redirect")) ?? "/");
       router.refresh();
     } catch {
       setError("An unexpected error occurred");
@@ -165,7 +167,7 @@ function RegisterPageContent() {
               </Button>
               <FieldDescription className="text-center">
                 Already have an account?{" "}
-                <Link href="/login" className="underline underline-offset-4">
+                <Link href={invitationReturnPath(searchParams.get("redirect")) ? `/login?redirect=${encodeURIComponent(invitationReturnPath(searchParams.get("redirect"))!)}` : "/login"} className="underline underline-offset-4">
                   Login
                 </Link>
               </FieldDescription>

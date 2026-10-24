@@ -9,7 +9,7 @@ import {
   transactions,
   type SubscriptionSuggestion,
 } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 
 // ============================================================================
 // Types

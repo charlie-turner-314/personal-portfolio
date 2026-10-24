@@ -8,7 +8,7 @@ vi.mock("@/lib/db", async () => {
   const { drizzle } = await import("drizzle-orm/pg-proxy");
   return { db: drizzle(mocks.execute) };
 });
-vi.mock("@/lib/auth-helpers", () => ({ getAuthenticatedSession: mocks.session }));
+vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: mocks.session }));
 vi.mock("@/lib/data/cached", () => ({ getCachedUserAccounts: vi.fn() }));
 vi.mock("@/lib/api/investments", () => ({ getPortfolio: vi.fn() }));
 vi.mock("@/lib/actions/planned-expenses", () => ({ getUpcomingPlannedExpenses: vi.fn() }));
