@@ -32,6 +32,16 @@ for (const width of [320, 390, 768, 1440]) {
       if (width < 768) {
         await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
       }
+      if (path === "/settings") {
+        const tabs = page.getByRole("tablist");
+        const tabBounds = await tabs.boundingBox();
+        const panelBounds = await page.getByRole("tabpanel").boundingBox();
+        expect.soft(panelBounds?.y, "settings panel must follow all tab rows").toBeGreaterThanOrEqual((tabBounds?.y ?? 0) + (tabBounds?.height ?? 0));
+        for (const tab of await tabs.getByRole("tab").all()) {
+          const bounds = await tab.boundingBox();
+          expect.soft((bounds?.y ?? 0) + (bounds?.height ?? 0), "tab must fit within its list").toBeLessThanOrEqual((tabBounds?.y ?? 0) + (tabBounds?.height ?? 0) + 1);
+        }
+      }
       const closeWalkthrough = page.getByRole("button", { name: "Close walkthrough" });
       if (await closeWalkthrough.isVisible()) {
         const bounds = await closeWalkthrough.boundingBox();
@@ -54,3 +64,47 @@ for (const width of [320, 390, 768, 1440]) {
     }
   });
 }
+
+test("phone overlays, date presets, transaction details and bulk actions stay reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  const closeTour = async () => {
+    const close = page.getByRole("button", { name: "Close walkthrough" });
+    await expect(close).toBeVisible();
+    await close.click();
+  };
+  const expectFits = async (locator: ReturnType<typeof page.locator>) => {
+    await expect(locator).toBeVisible();
+    const bounds = await locator.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(321);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(641);
+  };
+  await page.goto("/");
+  await closeTour();
+  await page.getByRole("button", { name: "Date", exact: true }).click();
+  const datePicker = page.locator('[data-slot="popover-content"]');
+  await expectFits(datePicker);
+  await datePicker.getByRole("button", { name: "Last Month", exact: true }).click();
+  await expect(datePicker).not.toBeVisible();
+
+  await page.goto("/transactions");
+  await closeTour();
+  await page.getByRole("button", { name: "Add Transaction", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expectFits(dialog);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+
+  await page.getByRole("checkbox", { name: "Select row", exact: true }).first().click();
+  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+  await expectFits(page.getByTitle("Categorize", { exact: true }));
+  await expectFits(page.getByTitle("Analytics", { exact: true }));
+  await page.screenshot({ path: "test-results/phone-bulk-actions.png", fullPage: true });
+
+  await page.getByRole("checkbox", { name: "Select row", exact: true }).first().click();
+  await page.locator('tbody tr').first().locator('td').nth(2).click();
+  await expectFits(page.getByRole("dialog"));
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+});

@@ -384,7 +384,9 @@ export function SankeyFlowChart({
         )}
       </CardHeader>
       <CardContent className="pt-0">
-        <div className="h-[400px] w-full">
+        <p className="mb-2 text-xs text-muted-foreground md:hidden">Scroll horizontally to explore cash flow.</p>
+        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Cash flow diagram">
+        <div className="h-[400px] w-full min-w-[640px] md:min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <Sankey
               data={data}
@@ -402,6 +404,7 @@ export function SankeyFlowChart({
               />
             </Sankey>
           </ResponsiveContainer>
+        </div>
         </div>
       </CardContent>
     </Card>
