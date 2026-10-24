@@ -103,6 +103,11 @@ test("phone overlays, date presets, transaction details and bulk actions stay re
   await expectFits(page.getByTitle("Categorize", { exact: true }));
   await expectFits(page.getByTitle("Analytics", { exact: true }));
   await page.screenshot({ path: "test-results/phone-bulk-actions.png", fullPage: false });
+  const nextPage = page.getByRole("button", { name: "Next page", exact: true });
+  await nextPage.scrollIntoViewIfNeeded();
+  const paginationBounds = await nextPage.boundingBox();
+  const dockBounds = await page.getByRole("group", { name: "Bulk transaction actions" }).boundingBox();
+  expect(paginationBounds!.y + paginationBounds!.height, "bulk dock must leave pagination reachable").toBeLessThanOrEqual(dockBounds!.y);
 
   await page.getByRole("checkbox", { name: "Select row", exact: true }).first().click();
   await page.getByRole("button", { name: "Table", exact: true }).click();

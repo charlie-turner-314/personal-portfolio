@@ -188,7 +188,7 @@ export function DataTable<TData, TValue>({
   };
 
   return (
-    <div className={cn("w-full", wrapperClassName)}>
+    <div className={cn("w-full", isMobile && mobileRow && bulkActions && table.getSelectedRowModel().rows.length > 0 && "pb-40", wrapperClassName)}>
       {toolbar && <div className="shrink-0 mb-4">{toolbar(table)}</div>}
       {isMobile && mobileRow && (
         <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="Transaction view">
