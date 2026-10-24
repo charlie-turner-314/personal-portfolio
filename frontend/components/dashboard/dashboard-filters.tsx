@@ -155,7 +155,7 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
   );
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <PersonFilter
         value={selectedPersonId ? [selectedPersonId] : []}
         onChange={updateSelectedPeople}
@@ -213,7 +213,7 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
         </PopoverContent>
       </Popover>
 
-      <div className={cn("flex items-center", shouldCollapseGap ? "gap-0" : "gap-2")}>
+      <div className={cn("flex flex-wrap items-center", shouldCollapseGap ? "gap-0" : "gap-2")}>
         <DateRangePicker
           value={dateRange}
           onChange={updateDateRange}

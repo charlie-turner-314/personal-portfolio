@@ -16,8 +16,8 @@ import { useWalkthroughStore, getPageConfig } from "./walkthrough-store";
 
 export function HelpButton() {
   const pathname = usePathname();
-  const { state } = useSidebar();
-  const isCollapsed = state === "collapsed";
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  const isCollapsed = !isMobile && state === "collapsed";
   const config = getPageConfig(pathname);
   const { openOverview, startWalkthrough, closeOverview, showOverview, currentPage } =
     useWalkthroughStore();
@@ -26,6 +26,7 @@ export function HelpButton() {
 
   const handleStartTour = () => {
     closeOverview();
+    setOpenMobile(false);
     // Defer so popover can unmount before tour overlay appears
     requestAnimationFrame(() => {
       startWalkthrough(config.page);

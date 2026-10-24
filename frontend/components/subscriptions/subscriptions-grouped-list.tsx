@@ -250,8 +250,9 @@ export function SubscriptionsGroupedList({
     return (
       <div
         key={item.id}
+        data-subscription-id={item.id}
         className={cn(
-          "flex items-center gap-4 px-4 py-3 hover:bg-muted/40",
+          "flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-muted/40 md:flex-nowrap md:gap-4",
           !item.isSuggestion && "cursor-pointer",
           muted && "opacity-60"
         )}
@@ -261,10 +262,10 @@ export function SubscriptionsGroupedList({
           }
         }}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3 max-md:basis-full">
           <CompanyLogo name={item.name} logoUrl={item.logoUrl || null} size="sm" />
           <div className="min-w-0">
-            <div className="truncate font-medium">{item.name}</div>
+            <div className="break-words font-medium md:truncate">{item.name}</div>
             {item.merchant && (
               <div className="truncate text-sm text-muted-foreground">
                 {item.merchant}
@@ -285,7 +286,7 @@ export function SubscriptionsGroupedList({
           </div>
         </div>
 
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="flex flex-wrap items-center gap-3">
           <Badge variant="secondary" className={frequencyClass}>
             {frequencyLabel}
           </Badge>
@@ -368,7 +369,7 @@ export function SubscriptionsGroupedList({
 
   return (
     <>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-semibold">Subscriptions</h2>
           <span className="text-sm text-muted-foreground">

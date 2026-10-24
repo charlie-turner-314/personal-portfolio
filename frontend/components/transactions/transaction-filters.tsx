@@ -285,8 +285,8 @@ function DateRangeFilter({ dateRange, onDateRangeChange }: DateRangeFilterProps)
           <RiArrowDownSLine className="h-4 w-4 shrink-0 text-muted-foreground" />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-auto p-0">
-          <div className="flex">
-            <div className="w-28 space-y-0.5 border-r p-2">
+          <div className="flex flex-col sm:flex-row">
+            <div className="grid grid-cols-2 gap-0.5 border-b p-2 sm:block sm:w-28 sm:space-y-0.5 sm:border-b-0 sm:border-r">
               <button
                 type="button"
                 onClick={() => {
@@ -588,22 +588,22 @@ export function TransactionFilters({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <div className="relative w-64" data-walkthrough="walkthrough-search">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+          <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none" data-walkthrough="walkthrough-search">
             <RiSearchLine className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search transactions..."
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              className="pl-8"
+              className="pl-8 max-md:h-11 max-md:text-base"
             />
           </div>
 
           <Popover>
             <PopoverTrigger
               data-walkthrough="walkthrough-filters"
-              className="inline-flex h-8 items-center justify-center gap-2 whitespace-nowrap border border-input bg-transparent px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              className="inline-flex h-8 max-md:h-11 items-center justify-center gap-2 whitespace-nowrap border border-input bg-transparent px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
             >
               <RiFilter3Line className="h-4 w-4" />
               Filters

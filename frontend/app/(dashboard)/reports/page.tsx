@@ -29,9 +29,9 @@ export default function ReportsPage() {
 
   return (
     <div className="p-6 text-foreground">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
         <h1 className="text-xl font-semibold">Reports</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link href="/reports/tax-year" className={buttonVariants({ size: "sm", variant: "outline" })}>Tax-year report</Link>
           <Link href="/reports/new" className={buttonVariants({ size: "sm" })}>New report</Link>
         </div>
@@ -51,8 +51,8 @@ export default function ReportsPage() {
       ) : reports && reports.length > 0 ? (
         <ul className="divide-y divide-border border border-border rounded-lg">
           {reports.map((report) => (
-            <li key={report.id} className="flex items-center justify-between px-4 py-3">
-              <div>
+            <li key={report.id} className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between px-4 py-3">
+              <div className="min-w-0 break-words">
                 <Link href={`/reports/${report.id}`} className="font-medium text-foreground hover:underline">
                   {report.name}
                 </Link>
