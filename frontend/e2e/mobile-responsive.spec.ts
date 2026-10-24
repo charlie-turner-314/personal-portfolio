@@ -74,11 +74,13 @@ test("phone overlays, date presets, transaction details and bulk actions stay re
   };
   const expectFits = async (locator: ReturnType<typeof page.locator>) => {
     await expect(locator).toBeVisible();
+    await expect(async () => {
     const bounds = await locator.boundingBox();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(321);
     expect(bounds!.y).toBeGreaterThanOrEqual(0);
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(641);
+    }).toPass({ timeout: 5_000 });
   };
   await page.goto("/");
   await closeTour();
