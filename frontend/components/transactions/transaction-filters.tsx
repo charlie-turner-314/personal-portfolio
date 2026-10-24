@@ -589,21 +589,21 @@ export function TransactionFilters({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-64" data-walkthrough="walkthrough-search">
+        <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+          <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none" data-walkthrough="walkthrough-search">
             <RiSearchLine className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search transactions..."
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              className="pl-8"
+              className="pl-8 max-md:h-11 max-md:text-base"
             />
           </div>
 
           <Popover>
             <PopoverTrigger
               data-walkthrough="walkthrough-filters"
-              className="inline-flex h-8 items-center justify-center gap-2 whitespace-nowrap border border-input bg-transparent px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              className="inline-flex h-8 max-md:h-11 items-center justify-center gap-2 whitespace-nowrap border border-input bg-transparent px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
             >
               <RiFilter3Line className="h-4 w-4" />
               Filters

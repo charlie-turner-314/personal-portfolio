@@ -167,6 +167,7 @@ export function DataTable<TData, TValue>({
   const sortableMobileColumns = table.getAllLeafColumns().filter(
     (column) => column.getCanSort() && (!mobileSortColumns || mobileSortColumns.includes(column.id))
   );
+  const selectAllHeader = table.getHeaderGroups()[0]?.headers.find((header) => header.column.id === "select");
   const reverseMobileSort = () => {
     const id = resolvedSorting[0]?.id ?? sortableMobileColumns[0]?.id;
     if (id) table.setSorting([{ id, desc: !(resolvedSorting[0]?.desc ?? true) }]);
@@ -184,17 +185,17 @@ export function DataTable<TData, TValue>({
               {view === "cards" ? "Cards" : "Table"}
             </Button>
           ))}
+          {showMobileCards && selectAllHeader && (
+            <label className="ml-auto flex min-h-11 items-center gap-2 text-xs">
+              {flexRender(selectAllHeader.column.columnDef.header, selectAllHeader.getContext())} Select all
+            </label>
+          )}
         </div>
       )}
       {showMobileCards ? (
         <div className="space-y-3" {...tableContainerProps}>
-          <div className="flex flex-wrap items-center gap-2 border p-3">
-            {table.getHeaderGroups()[0]?.headers.filter((header) => header.column.id === "select").map((header) => (
-              <label key={header.id} className="flex min-h-11 items-center gap-2 text-xs">
-                {flexRender(header.column.columnDef.header, header.getContext())} Select all
-              </label>
-            ))}
-            <label className="flex min-w-32 flex-1 flex-col gap-1 text-xs">
+          <div className="flex items-end gap-2">
+            <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs">
               Sort by
               <select aria-label="Sort transactions by"
                 className="h-11 min-w-0 border bg-background px-2 text-base"
@@ -211,7 +212,8 @@ export function DataTable<TData, TValue>({
             <Button className="min-h-11 self-end" variant="outline"
               aria-label="Reverse sort order" disabled={!sortableMobileColumns.length}
               onClick={reverseMobileSort}>
-              {resolvedSorting[0]?.desc === false ? "Ascending" : "Descending"}
+              <span aria-hidden="true" className="text-lg">{resolvedSorting[0]?.desc === false ? "↑" : "↓"}</span>
+              <span className="sr-only">{resolvedSorting[0]?.desc === false ? "Ascending" : "Descending"}</span>
             </Button>
           </div>
           {table.getRowModel().rows.length ? table.getRowModel().rows.map((row) => (
