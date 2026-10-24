@@ -42,7 +42,7 @@ export function HouseholdAccess({ people }: { people: { id: string; name: string
       <Button disabled={busy} variant="outline" onClick={async () => { if (await request({ action: "leave" })) window.location.assign("/"); }}>Leave household</Button>
     </>}
     {access?.isOwner && <>
-      <p className="text-sm text-muted-foreground">Invite a placeholder to use their own login. They will be able to view and edit all household finances. Existing ownership and history stay in place. Links expire after seven days and only work for the invited email.</p>
+      <p className="text-sm text-muted-foreground">Invite a placeholder to use their own login. They and their connected integrations will be able to view and edit all household finances. Existing ownership and history stay in place. Links expire after seven days and only work for the invited email.</p>
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); void request({ action: "invite", personId, email }); }}>
         <label className="block text-sm">Household person
           <select aria-label="Household person" className="mt-1 block w-full rounded border bg-background p-2" required value={personId} onChange={(e) => setPersonId(e.target.value)}>
