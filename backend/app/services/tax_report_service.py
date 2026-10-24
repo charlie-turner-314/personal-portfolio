@@ -233,7 +233,8 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             excluded.append({"source_id": str(transaction.id), "reason": "reimbursement_link"})
             continue
         category = transaction.category or transaction.category_system
-        is_rental = bool(transaction.property and transaction.property.is_rental)
+        visible_property = transaction.property if transaction.property and transaction.property.user_id == user_id else None
+        is_rental = bool(visible_property and visible_property.is_rental)
         transaction_rows.append({
             "source_id": str(transaction.id), "account_id": str(transaction.account_id),
             "booked_at": transaction.booked_at.isoformat(), "transaction_type": transaction.transaction_type,
@@ -241,9 +242,9 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             "currency": transaction.currency, "category_id": str(category.id) if category else None,
             "category_name": category.name if category else None,
             "category_type": category.category_type if category else None,
-            "property_id": str(transaction.property_id) if transaction.property_id else None,
+            "property_id": str(visible_property.id) if visible_property else None,
             "tax_treatment": "unclassified", "interest_treatment": "unavailable",
-            "rental_treatment": "recorded_property_cashflow" if is_rental else ("unavailable" if transaction.property_id else "not_property_linked"),
+            "rental_treatment": "recorded_property_cashflow" if is_rental else ("unavailable" if visible_property else "not_property_linked"),
             "is_rental_property": is_rental,
         })
 

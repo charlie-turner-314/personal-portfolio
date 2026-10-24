@@ -52,7 +52,7 @@ def _transaction(id, amount, transaction_type, *, rental=False, excluded=False, 
         category=SimpleNamespace(id="category-1", name="Rates", category_type="expense"),
         category_system=None,
         property_id="property-1" if rental else None,
-        property=SimpleNamespace(is_rental=True) if rental else None,
+        property=SimpleNamespace(id="property-1", user_id="user-1", is_rental=True) if rental else None,
         internal_transfer_id="transfer-1" if excluded else None,
         include_in_analytics=True,
     )
@@ -130,3 +130,16 @@ def test_report_exposes_statement_components_adjustments_and_excludes_matched_ca
     assert report["transactions"]["excluded_rows"] == [
         {"source_id": "cash-credit", "reason": "investment_income_match"}
     ]
+
+
+def test_shared_transaction_does_not_reveal_another_users_private_property_metadata():
+    transaction = _transaction("shared-cashflow", "-30", "debit", rental=True)
+    transaction.property = SimpleNamespace(id="private-property", user_id="another-user", is_rental=True)
+    transaction.property_id = "private-property"
+    db = _Db([[], [], [], [], [], [transaction]])
+    report = build_australian_tax_report(db, "user-1", 2025)
+    row = report["transactions"]["rows"][0]
+    assert row["property_id"] is None
+    assert row["is_rental_property"] is False
+    assert row["rental_treatment"] == "not_property_linked"
+    assert "private-property" not in str(report)

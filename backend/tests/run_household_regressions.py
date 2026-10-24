@@ -24,7 +24,7 @@ files = [
     'test_mcp_update_category.py', 'test_mcp_accounts_asset_class.py', 'test_people_filter.py',
     'test_mcp_investments_tools.py', 'test_mcp_broker_trade_import.py', 'test_broker_trade_service.py',
     'test_multi_account_csv.py', 'test_transaction_import.py', 'test_tax_report_service.py',
-    'test_bank_connectivity_fixes.py', 'test_up_adapter.py', 'test_up_sync.py', 'test_investments_routes.py',
+    'test_report_data_service.py', 'test_report_service.py', 'test_bank_connectivity_fixes.py', 'test_up_adapter.py', 'test_up_sync.py', 'test_investments_routes.py',
     'test_pocket_account_routes.py', 'services/test_account_ownership_allocation_service.py',
 ]
 raise SystemExit(pytest.main(['-q', '--tb=short', '-p', 'no:cacheprovider', *[str(root / 'regression-tests' / file) for file in files]]))

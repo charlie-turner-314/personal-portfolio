@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.financial_access import account_access, value_in_actor_currency
 from app.models import Account, Report, Transaction
 from app.services.report_horizon import horizon_start, period_label
 
@@ -63,7 +64,7 @@ def _fetch_accounts(db: Session, report: Report) -> list[dict]:
         db.query(Account)
         # Eager-load so rendering N accounts does not fire N logo queries.
         .options(joinedload(Account.logo))
-        .filter(Account.user_id == report.user_id, Account.id.in_(account_uuids))
+        .filter(account_access(Account.id, report.user_id), Account.id.in_(account_uuids))
         .all()
     )
     functional_currency = (report.user.functional_currency if report.user else None) or "EUR"
@@ -82,7 +83,7 @@ def _fetch_accounts(db: Session, report: Report) -> list[dict]:
             # functional_balance is already converted to the user's
             # functional currency, so it must be labeled with that
             # currency, not the account's native currency.
-            return str(a.functional_balance), functional_currency
+            return str(value_in_actor_currency(db, a.functional_balance, a.user_id, report.user_id, datetime.utcnow().date())), functional_currency
         return str(a.balance_available or 0), a.currency or "EUR"
 
     accounts = []
@@ -110,12 +111,12 @@ def _total_balance(db: Session, report: Report) -> Optional[str]:
     account_uuids = [UUID(a) for a in report.account_ids]
     rows = (
         db.query(Account)
-        .filter(Account.user_id == report.user_id, Account.id.in_(account_uuids))
+        .filter(account_access(Account.id, report.user_id), Account.id.in_(account_uuids))
         .all()
     )
-    if not rows or any(a.functional_balance is None for a in rows):
+    if len(rows) != len(set(account_uuids)) or any(a.functional_balance is None for a in rows):
         return None
-    return str(sum((a.functional_balance for a in rows), Decimal("0")).quantize(Decimal("0.01")))
+    return str(sum((value_in_actor_currency(db, a.functional_balance, a.user_id, report.user_id, datetime.utcnow().date()) for a in rows), Decimal("0")).quantize(Decimal("0.01")))
 
 
 def _fetch_transactions(db: Session, report: Report) -> dict:
@@ -124,7 +125,7 @@ def _fetch_transactions(db: Session, report: Report) -> dict:
     # digest reports on the last seven days rather than on all of history.
     window_start = horizon_start(report.frequency, datetime.utcnow())
     query = db.query(Transaction).filter(
-        Transaction.user_id == report.user_id,
+        account_access(Transaction.account_id, report.user_id),
         Transaction.transaction_type.in_(types),
         Transaction.booked_at >= window_start,
     )

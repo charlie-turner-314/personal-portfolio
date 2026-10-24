@@ -1,6 +1,8 @@
 """Real-Postgres API access checks. Run only in a disposable release-lab database."""
 import os
 import uuid
+import io
+import zipfile
 from decimal import Decimal
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -9,7 +11,7 @@ from sqlalchemy import text
 from fastapi import HTTPException, BackgroundTasks
 from app.database import SessionLocal
 from app.db_helpers import set_request_user_id, clear_request_user_id
-from app.models import Account, Transaction, CsvImport, Category, Holding, HoldingValuation
+from app.models import Account, Transaction, CsvImport, Category, Holding, HoldingValuation, Property, Report
 from app.routes import up, enable_banking, investments
 from app.mcp.tools.analytics import get_financial_summary
 from app.mcp.tools.investments import list_holdings_impl, get_portfolio_summary_impl
@@ -19,6 +21,9 @@ from app.routes.accounts import get_account, update_account
 from app.routes.transactions import get_transaction, create_transaction, update_transaction, delete_transactions_by_account
 from app.schemas import TransactionCreate, TransactionUpdate, AccountUpdate
 from app.services.financial_access import account_access
+from app.services.report_data_service import build_report_payload
+from app.services.report_service import _validate_account_ids
+from app.services.tax_report_service import build_australian_tax_report, tax_report_zip
 
 
 def main():
@@ -112,6 +117,25 @@ def main():
             with patch("app.routes.categories.categorize_transactions_batch", side_effect=actor_categorize):
                 result = import_transactions(TransactionImportRequest(transactions=[TransactionImportItem(account_id=joint, amount=Decimal("-28"), description="Uncategorized API import", booked_at=datetime.now(timezone.utc), transaction_type="debit")], sync_exchange_rates=False, update_functional_amounts=False, calculate_balances=False, detect_subscriptions=False), db=db)
                 assert result.success and result.transactions_inserted == 1
+            private_property = Property(user_id=owner, name="Private rental asset", property_type="residential", currency="AUD", current_value=300, is_rental=True)
+            db.add(private_property); db.flush()
+            created.property_id = private_property.id; db.commit()
+            report = build_australian_tax_report(db, member, 2026)
+            assert str(private_property.id) not in str(report)
+            assert all(not row["is_rental_property"] for row in report["transactions"]["rows"]), "private rental metadata cannot leak through a shared transaction"
+            _validate_account_ids([str(joint)], member, db)
+            digest = Report(user_id=member, name="Personal report over shared activity", account_ids=[str(joint)], frequency="WEEKLY", transaction_direction="ALL", transaction_mode="RECENT", transaction_count=50)
+            db.add(digest); db.commit()
+            payload = build_report_payload(db, digest)
+            assert payload["accounts"] and payload["accounts"][0]["name"] == "Joint"
+            assert "Private secret" not in str(payload)
+
+            assert "Private secret" not in str(report)
+            assert str(secret_id) not in str(report)
+            assert first["inserted_transactions"][0].id.hex in str(report).replace("-", ""), "shared account activity is included in reports"
+            with zipfile.ZipFile(io.BytesIO(tax_report_zip(report))) as archive:
+                exported = b"".join(archive.read(name) for name in archive.namelist())
+                assert b"Private secret" not in exported and str(secret_id).encode() not in exported
             investment, private_investment = uuid.uuid4(), uuid.uuid4()
             for aid in (investment, private_investment):
                 db.add(Account(id=aid, user_id=owner, name="Synthetic investment", account_type="investment_manual", currency="AUD"))
