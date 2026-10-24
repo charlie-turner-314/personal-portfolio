@@ -86,7 +86,13 @@ function RegisterPageContent() {
         return;
       }
 
-      router.push(invitationReturnPath(searchParams.get("redirect")) ?? "/");
+      const invitationPath = invitationReturnPath(searchParams.get("redirect"));
+      if (invitationPath) {
+        // Refresh server authentication instead of reusing an anonymous prefetched page.
+        window.location.assign(invitationPath);
+        return;
+      }
+      router.push("/");
       router.refresh();
     } catch {
       setError("An unexpected error occurred");

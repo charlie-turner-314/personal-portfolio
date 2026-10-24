@@ -119,7 +119,13 @@ function LoginPageContent() {
 
       // push("/") already fetches a fresh RSC payload for the dashboard route;
       // calling router.refresh() here would redundantly re-render it a second time.
-      router.push(invitationReturnPath(searchParams.get("redirect")) ?? "/");
+      const invitationPath = invitationReturnPath(searchParams.get("redirect"));
+      if (invitationPath) {
+        // Refresh server authentication instead of reusing an anonymous prefetched page.
+        window.location.assign(invitationPath);
+        return;
+      }
+      router.push("/");
     } catch {
       setError("An unexpected error occurred");
     } finally {

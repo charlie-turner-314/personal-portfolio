@@ -30,7 +30,7 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
   const personForm = owner.locator("form").filter({ has: owner.getByRole("button", { name: "Add person", exact: true }) });
   await personForm.locator('input:not([type="file"])').fill("Existing Partner");
   await personForm.getByRole("button", { name: "Add person", exact: true }).click();
-  await expect(owner.getByText("Existing Partner", { exact: true })).toBeVisible();
+  await expect(owner.locator("li").getByText("Existing Partner", { exact: true })).toBeVisible();
   const people = (await (await owner.request.get("/api/people")).json()).people;
   const personId = people.find((p: { name: string }) => p.name === "Existing Partner").id as string;
   psql(`INSERT INTO account_owners(account_id,person_id,share) VALUES ('${sharedId}','${personId}',1);`);
@@ -86,7 +86,7 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
     const replay = await member.request.post("/api/household", { headers: { Origin: origin }, data: { action: "accept", token: new URL(link).searchParams.get("token") } });
     expect(replay.status()).toBe(409);
     const nextLink = await invite();
-    await member.request.post("/api/auth/sign-out", { headers: { Origin: origin } });
+    expect((await member.request.post("/api/auth/sign-out", { headers: { Origin: origin }, data: {} })).ok()).toBeTruthy();
     await member.goto(nextLink);
     await member.getByRole("link", { name: "Sign in", exact: true }).click();
     await member.getByLabel("Email", { exact: true }).fill(memberEmail);
