@@ -38,4 +38,13 @@ describe("financial sharing consent controls", () => {
     expect(JSON.parse(vi.mocked(fetch).mock.calls[1][1]!.body as string)).toEqual({ resource: "net-worth", memberUserIds: ["partner"] });
     expect(screen.getByRole("checkbox", { name: "Share Savings with Jess" })).not.toBeChecked();
   });
+  it("hides stale privacy claims when a save and its confirmation both lose connection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(initial)).mockRejectedValue(new Error("Connection lost")));
+    render(<FinancialSharing />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Share Savings with Jess" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not confirm sharing settings"));
+    expect(screen.queryByText("Private · only you")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Share Savings with Jess" })).not.toBeInTheDocument();
+  });
+
 });

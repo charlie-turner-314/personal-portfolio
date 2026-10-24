@@ -24,12 +24,21 @@ export function FinancialSharing() {
       ? { ...data, accounts: data.accounts.map((account) => account.id === body.accountId ? { ...account, sharedWith: body.memberUserIds } : account) }
       : { ...data, netWorthSharedWith: body.memberUserIds });
     setBusy(true); setError("");
+    let denied = false;
     try {
       const response = await fetch("/api/household/sharing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not update sharing");
+      if (!response.ok) { denied = response.status >= 400 && response.status < 500; throw new Error(result.error || "Could not update sharing"); }
       await refresh(); router.refresh();
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not update sharing"); }
+    } catch (e) {
+      if (denied) setError(e instanceof Error ? e.message : "Could not update sharing");
+      else {
+        // A lost response may follow a committed change. Never claim privacy
+        // from an old selection when the server's current state is unknown.
+        try { await refresh(); setError("Sharing settings were reloaded after a connection problem. Check the current selection."); }
+        catch { setData(null); setError("Could not confirm sharing settings. Reload them before assuming access has changed."); }
+      }
+    }
     finally { setDraft(null); setBusy(false); }
   }
   const toggle = (ids: string[], id: string) => ids.includes(id) ? ids.filter((v) => v !== id) : [...ids, id];
