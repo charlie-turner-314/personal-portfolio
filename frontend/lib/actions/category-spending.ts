@@ -115,6 +115,7 @@ interface CategorySpendingTransactionRowWithRelations {
   currency: string | null;
   categoryId: string | null;
   categorySystemId: string | null;
+  categoryConfidence?: number | null;
   propertyId: string | null;
   recurringTransactionId: string | null;
   internalTransferId: string | null;
@@ -339,6 +340,7 @@ function mapCategorySpendingTransactionRowsForUi(
             }
           : null,
         categorySystemId: tx.categorySystemId,
+        categoryConfidence: tx.categoryConfidence ?? null,
         categorySystem: tx.categorySystem
           ? {
               id: tx.categorySystem.id,

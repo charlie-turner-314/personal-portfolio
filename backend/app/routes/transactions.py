@@ -238,6 +238,8 @@ def create_transaction(
 
     transaction_data = transaction.model_dump()
     transaction_data["user_id"] = user_id
+    if transaction.category_id:
+        transaction_data["category_verified_at"] = datetime.utcnow()
     db_transaction = Transaction(**transaction_data)
     db.add(db_transaction)
     db.commit()
@@ -262,6 +264,12 @@ def update_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     update_data = updates.model_dump(exclude_unset=True)
+    if "category_id" in update_data:
+        if update_data["category_id"]:
+            category = db.query(Category).filter(Category.id == update_data["category_id"], Category.user_id == user_id).first()
+            if not category:
+                raise HTTPException(status_code=404, detail="Category not found")
+        transaction.category_verified_at = datetime.utcnow() if update_data["category_id"] else None
     for field, value in update_data.items():
         setattr(transaction, field, value)
 
@@ -295,6 +303,7 @@ def assign_category(
 
     # Set category_id (user override), keep category_system_id if it exists
     transaction.category_id = category_data.category_id
+    transaction.category_verified_at = datetime.utcnow()
     db.commit()
     db.refresh(transaction)
     return transaction

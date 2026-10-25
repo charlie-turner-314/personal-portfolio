@@ -13,7 +13,7 @@ const DEFAULT_SORT = "bookedAt";
 const DEFAULT_ORDER = "desc";
 const DEFAULT_HORIZON = 30;
 
-export type TransactionSortField = "bookedAt" | "amount" | "description" | "merchant";
+export type TransactionSortField = "bookedAt" | "amount" | "description" | "merchant" | "categoryConfidence";
 export type TransactionSortOrder = "asc" | "desc";
 
 export interface TransactionsQueryState {
@@ -79,7 +79,7 @@ function toURLSearchParams(params: SearchParamsInput): URLSearchParams {
 }
 
 function parseSortField(value: string | undefined | null): TransactionSortField {
-  if (value === "bookedAt" || value === "amount" || value === "description" || value === "merchant") {
+  if (value === "bookedAt" || value === "amount" || value === "description" || value === "merchant" || value === "categoryConfidence") {
     return value;
   }
   return DEFAULT_SORT;

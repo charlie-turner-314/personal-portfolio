@@ -1,7 +1,9 @@
 from fastapi import APIRouter
+from app.routes import categorization_suggestions
 from app.routes import accounts, categories, transactions, analytics, sync, transaction_import, subscriptions, events, csv_import, health, enable_banking, investments, reports, tax_reports, up
 
 api_router = APIRouter()
+api_router.include_router(categorization_suggestions.router, prefix="/categorization-suggestions", tags=["categorization-suggestions"])
 
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])

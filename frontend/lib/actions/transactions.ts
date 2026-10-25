@@ -304,6 +304,7 @@ export async function updateTransactionCategory(
       .update(transactions)
       .set({
         categoryId,
+        categoryVerifiedAt: categoryId ? new Date() : null,
         updatedAt: new Date(),
       })
       .where(eq(transactions.id, transactionId));
@@ -411,6 +412,7 @@ export interface TransactionWithRelations {
     icon: string | null;
   } | null;
   categorySystemId: string | null;
+  categoryConfidence?: number | null;
   categorySystem: {
     id: string;
     name: string;
@@ -477,6 +479,15 @@ function resolveSortOrder(
   sort: TransactionSortField,
   order: TransactionSortOrder
 ) {
+  if (sort === "categoryConfidence") {
+    // Review unscored rows first, scored suggestions next, and manual choices last.
+    const group = sql`CASE WHEN ${transactions.categoryId} IS NOT NULL THEN 2
+      WHEN ${transactions.categorySystemId} IS NULL OR ${transactions.categoryConfidence} IS NULL THEN 0
+      ELSE 1 END`;
+    const score = sql`CASE WHEN ${transactions.categoryId} IS NULL AND ${transactions.categorySystemId} IS NOT NULL
+      THEN ${transactions.categoryConfidence} END`;
+    return [asc(group), order === "asc" ? asc(score) : desc(score), desc(transactions.bookedAt), desc(transactions.id)];
+  }
   if (sort === "amount") {
     return order === "asc"
       ? [asc(transactions.amount), desc(transactions.bookedAt)]
@@ -509,6 +520,7 @@ interface TransactionRowWithRelations {
   currency: string | null;
   categoryId: string | null;
   categorySystemId: string | null;
+  categoryConfidence?: number | null;
   propertyId: string | null;
   recurringTransactionId: string | null;
   bookedAt: Date;
@@ -609,6 +621,7 @@ function mapTransactionRowsForUi(
             }
           : null,
         categorySystemId: tx.categorySystemId,
+        categoryConfidence: tx.categoryConfidence ?? null,
         categorySystem: tx.categorySystem
           ? {
               id: tx.categorySystem.id,
@@ -1152,6 +1165,7 @@ export async function bulkUpdateTransactionCategory(
       .update(transactions)
       .set({
         categoryId,
+        categoryVerifiedAt: categoryId ? new Date() : null,
         updatedAt: new Date(),
       })
       .where(

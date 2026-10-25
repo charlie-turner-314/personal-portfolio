@@ -51,6 +51,7 @@ import { SubscriptionLinkedDialog } from "./subscription-linked-dialog";
 import { LinkReimbursementsDialog } from "./link-reimbursements-dialog";
 import { LinkedTransactionsSection } from "./linked-transactions-section";
 import { DeleteConfirmationDialog } from "./delete-confirmation-dialog";
+import { CategorizationSuggestionPanel } from "./categorization-suggestion";
 
 interface TransactionSheetProps {
   transaction: TransactionWithRelations | null;
@@ -305,6 +306,19 @@ export function TransactionSheet({
           )}
 
           {/* Category Section */}
+          {open && !transaction.categoryId && !transaction.pending && !transaction.internalTransferId && !isBalancingTransfer && (
+            <CategorizationSuggestionPanel
+              key={transaction.id}
+              transactionId={transaction.id}
+              categories={selectableCategories}
+              onCategorySaved={category => {
+                setSelectedCategoryId(category.id);
+                setHasChanges(false);
+                onUpdateTransaction?.(transaction.id, { categoryId: category.id, category });
+                router.refresh();
+              }}
+            />
+          )}
           <div className="space-y-3">
             <Label htmlFor="category">Category</Label>
             <Select

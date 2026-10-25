@@ -204,6 +204,7 @@ class InternalTransferService:
             # explicit category_id override (left untouched below).
             if transfer_category_id and src.category_id is None:
                 src.category_system_id = transfer_category_id
+                src.category_confidence = None
 
             # Only manual destinations get added to the recalc set — they're the
             # only ones where a mirror transaction was created and the balance

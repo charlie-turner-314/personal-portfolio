@@ -80,7 +80,7 @@ function mergeManagedQueryParams(
 }
 
 function mapSortColumnIdToSortField(id: string): TransactionSortField {
-  if (id === "amount" || id === "description" || id === "merchant") {
+  if (id === "amount" || id === "description" || id === "merchant" || id === "categoryConfidence") {
     return id;
   }
   return "bookedAt";
@@ -177,7 +177,7 @@ export function TransactionTable({
           sort: mapSortColumnIdToSortField(nextSort.id),
           order: nextSort.desc ? "desc" : "asc",
         },
-        { resetPage: false }
+        { resetPage: true }
       );
     },
     [sortingState, updateQueryState]

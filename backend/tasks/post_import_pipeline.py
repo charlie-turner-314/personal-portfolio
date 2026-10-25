@@ -25,6 +25,7 @@ from app.services.account_balance_service import AccountBalanceService
 from app.services.subscription_matcher import SubscriptionMatcher
 from app.services.subscription_detector import SubscriptionDetector
 from app.services.category_matcher import CategoryMatcher
+from app.services.categorization_context import transaction_record
 from app.services.internal_transfer_service import InternalTransferService
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ def _batch_categorize_transactions(db, user_id: str, transaction_ids: List[str])
             # Skip transactions excluded from analytics — covers internal
             # transfers (set by step 3) AND user-hidden rows (set via UI).
             Transaction.include_in_analytics.is_(True),
+            Transaction.pending.is_(False),
         )
         .all()
     )
@@ -164,9 +166,22 @@ def _batch_categorize_transactions(db, user_id: str, transaction_ids: List[str])
         return
 
     matcher = CategoryMatcher(db, user_id=user_id)
+    if matcher.context_enabled and matcher._get_openai_client():
+        related_ids = matcher._get_context_retriever().reconsideration_ids(
+            [transaction_record(txn) for txn in transactions],
+        )
+        if related_ids:
+            earlier = db.query(Transaction).filter(
+                Transaction.user_id == user_id, Transaction.id.in_(related_ids),
+                Transaction.category_id.is_(None), Transaction.category_system_id.is_(None),
+                Transaction.include_in_analytics.is_(True), Transaction.pending.is_(False),
+            ).all()
+            transactions.extend(earlier)
+            logger.info("categorizer.reconsidering_previous count=%d", len(earlier))
 
     batch_input = [
         {
+            **transaction_record(txn),
             "index": i,
             "description": txn.description,
             "merchant": txn.merchant,
@@ -190,8 +205,9 @@ def _batch_categorize_transactions(db, user_id: str, transaction_ids: List[str])
     assigned = 0
     for i, txn in enumerate(transactions):
         if i in results:
-            category, _confidence = results[i]
+            category, confidence = results[i]
             txn.category_system_id = category.id
+            txn.category_confidence = round(confidence) if confidence is not None else None
             assigned += 1
         # When LLM ran but returned no match for a transaction, leave the existing
         # system category intact rather than wiping it.

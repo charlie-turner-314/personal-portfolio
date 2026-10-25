@@ -28,11 +28,9 @@ from app.schemas import (
     TransactionInput,
     BatchCategorizeRequest,
     BatchCategorizeResponse,
-    UserOverride,
     DailyBalanceImport
 )
 from app.models import Category
-from app.services.category_matcher import CategoryMatcher
 from app.services.exchange_rate_service import ExchangeRateService
 from app.services.account_balance_service import AccountBalanceService
 from app.services.subscription_matcher import SubscriptionMatcher
@@ -82,45 +80,6 @@ class TransactionImportResponse(BaseModel):
     functional_amounts_updated: Optional[dict] = None
     balances_calculated: Optional[dict] = None
     timeseries_calculated: Optional[dict] = None
-
-
-def _get_user_overrides_from_db(db: Session, user_id: str) -> List[dict]:
-    """
-    Get user overrides from database based on overridden transactions.
-    
-    Returns list of override dicts in format:
-    [{"description": "...", "merchant": "...", "category_name": "..."}, ...]
-    """
-    matcher = CategoryMatcher(db, user_id=user_id)
-    overridden_transactions = matcher.get_overridden_transactions()
-    
-    overrides = []
-    for txn in overridden_transactions:
-        # Get the user-selected category (category_id, not category_system_id)
-        if txn.category_id:
-            category = db.query(Category).filter(Category.id == txn.category_id).first()
-            if category:
-                overrides.append({
-                    "description": txn.description,
-                    "merchant": txn.merchant,
-                    "category_name": category.name
-                })
-    
-    return overrides
-
-
-def _get_categorization_instructions_from_db(db: Session, user_id: str) -> List[str]:
-    """
-    Get categorization instructions from overridden transactions.
-    
-    Returns list of instruction strings from transactions with categorization_instructions.
-    """
-    instructions = db.query(Transaction.categorization_instructions).filter(
-        Transaction.user_id == user_id,
-        Transaction.categorization_instructions.isnot(None)
-    ).distinct().all()
-    
-    return [inst[0] for inst in instructions if inst[0]]
 
 
 @router.post("/import", response_model=TransactionImportResponse)
@@ -258,30 +217,19 @@ def import_transactions(
         # Only run categorization if there are transactions without categories
         if transactions_needing_categorization:
             logger.info(f"[IMPORT] Categorizing {len(transactions_needing_categorization)} transactions (AI)...")
-            logger.info("[IMPORT] Fetching user overrides and categorization instructions...")
-            user_overrides = _get_user_overrides_from_db(db, user_id)
-            categorization_instructions = _get_categorization_instructions_from_db(db, user_id)
-
-            logger.info(f"[IMPORT] Found {len(user_overrides)} user overrides and {len(categorization_instructions)} instructions")
-
-            # Log first transaction to debug transaction_type
-            if transactions_needing_categorization:
-                first_txn = transactions_needing_categorization[0]
-                logger.info(f"[IMPORT] First transaction needing categorization: transaction_type='{first_txn.get('transaction_type')}', amount={first_txn.get('amount')}, description='{first_txn.get('description', '')[:50]}...'")
-
             categorize_request = BatchCategorizeRequest(
                 transactions=[
                     TransactionInput(
                         description=txn["description"],
                         merchant=txn["merchant"],
                         amount=txn["amount"],
-                        transaction_type=txn.get("transaction_type")  # Use .get() to handle missing keys
+                        transaction_type=txn.get("transaction_type"),
+                        account_id=txn["account_id"], booked_at=txn["booked_at"],
+                        currency=txn["currency"],
                     )
                     for txn in transactions_needing_categorization
                 ],
                 use_llm=True,
-                user_overrides=[UserOverride(**override) for override in user_overrides] if user_overrides else None,
-                additional_instructions=categorization_instructions if categorization_instructions else None
             )
 
             # Call the categorize/batch endpoint logic directly
@@ -464,8 +412,8 @@ def import_transactions(
                         continue
                 
                 # Create transaction
-                # If category was pre-selected, set both category_id and category_system_id to it
-                # If category was AI-assigned, set category_id = category_system_id initially (user can override later)
+                # Only explicit pre-selections are user decisions. AI results
+                # stay in category_system_id and must not become verified examples.
                 transaction = Transaction(
                     user_id=user_id,
                     account_id=txn_data["account_id"],  # Already a UUID from the request
@@ -476,8 +424,9 @@ def import_transactions(
                     description=txn_data["description"],
                     merchant=txn_data["merchant"],
                     booked_at=txn_data["booked_at"],
-                    category_id=category_id,
-                    category_system_id=category_id if not txn_data.get("category_id") else None,  # Only set if AI-categorized
+                    category_id=txn_data.get("category_id"),
+                    category_verified_at=datetime.utcnow() if txn_data.get("category_id") else None,
+                    category_system_id=category_id if not txn_data.get("category_id") else None,
                     pending=False
                 )
                 
