@@ -2,8 +2,8 @@
 """Private, token-authenticated gateway to localhost Ollama; no request logging.
 
 Run with a mode-600 JSON config containing listen_host, listen_port,
-allowed_clients (IP addresses), and token. Only local models and the two
-Portfolio API operations are exposed. Never point this at an internet port forward.
+allowed_clients (IP addresses), and token. Only local models and the required
+Portfolio chat/identity operations are exposed. Never point this at an internet port forward.
 """
 import argparse
 import hmac
@@ -50,17 +50,21 @@ def handler(config):
         def do_GET(self):
             if not self.authorized():
                 self.reply(403, {'error': 'Forbidden'}); return
-            if self.path != '/api/tags':
+            if self.path not in ('/api/tags', '/api/version'):
                 self.reply(404, {'error': 'Not found'}); return
             try:
-                self.reply(200, {'models': local_models()})
+                if self.path == '/api/tags':
+                    self.reply(200, {'models': local_models()})
+                else:
+                    with urllib.request.urlopen(UPSTREAM + '/api/version', timeout=10) as response:
+                        self.reply(200, {'version': json.load(response)['version']})
             except Exception:
                 self.reply(503, {'error': 'Local Ollama unavailable'})
 
         def do_POST(self):
             if not self.authorized():
                 self.reply(403, {'error': 'Forbidden'}); return
-            if self.path != '/v1/chat/completions':
+            if self.path not in ('/v1/chat/completions', '/api/chat', '/api/show'):
                 self.reply(404, {'error': 'Not found'}); return
             if not slots.acquire(blocking=False):
                 self.reply(429, {'error': 'Local model is busy. Retry later.'}); return
@@ -71,11 +75,26 @@ def handler(config):
                 payload = json.loads(self.rfile.read(length))
                 if payload.get('model') not in {m['name'] for m in local_models()}:
                     self.reply(400, {'error': 'Select an installed local model'}); return
-                payload['stream'] = False
-                payload['reasoning_effort'] = 'none'
-                request = urllib.request.Request(UPSTREAM + '/v1/chat/completions', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
-                with urllib.request.urlopen(request, timeout=125) as response:
+                if self.path == '/api/show':
+                    payload = {'model': payload['model']}
+                else:
+                    payload['stream'] = False
+                    if self.path == '/api/chat':
+                        payload['think'] = False
+                        options = payload.setdefault('options', {})
+                        if not isinstance(options, dict):
+                            raise ValueError('Invalid options')
+                        context, predict = options.get('num_ctx', 8192), options.get('num_predict', 150)
+                        if type(context) is not int or not 512 <= context <= 32768 or type(predict) is not int or not 1 <= predict <= 4096:
+                            raise ValueError('Invalid generation bounds')
+                        options['num_ctx'], options['num_predict'] = context, predict
+                    else:
+                        payload['reasoning_effort'] = 'none'
+                request = urllib.request.Request(UPSTREAM + self.path, data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
+                with urllib.request.urlopen(request, timeout=185) as response:
                     result = json.load(response)
+                if self.path == '/api/show':
+                    result = {key: result.get(key) for key in ('parameters', 'template', 'details', 'model_info')}
                 self.reply(200, result)
             except (ValueError, KeyError, TypeError):
                 self.reply(400, {'error': 'Invalid request'})
