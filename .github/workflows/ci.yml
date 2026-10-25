@@ -133,13 +133,13 @@ jobs:
 
     - name: Test dashboard accounting and ownership
       working-directory: ./frontend
-      run: pnpm exec vitest run lib/dashboard/activity.test.ts lib/dashboard/sankey.test.ts lib/actions/dashboard.activity.test.ts lib/actions/dashboard.cash.test.ts lib/actions/dashboard.net-worth.test.ts lib/people/ownership-sql.test.ts lib/net-worth/calculation.test.ts components/settings/ai-settings.test.tsx
+      run: pnpm exec vitest run lib/dashboard/activity.test.ts lib/dashboard/sankey.test.ts lib/actions/dashboard.activity.test.ts lib/actions/dashboard.cash.test.ts lib/actions/dashboard.net-worth.test.ts lib/people/ownership-sql.test.ts lib/net-worth/calculation.test.ts components/settings/ai-settings.test.tsx components/transactions/categorization-suggestion.test.tsx lib/transactions/category-confidence.test.ts
 
     - name: Test categorisation and person-level accounting
       working-directory: ./backend
       env:
         DATABASE_URL: postgresql+psycopg://financeuser:financepass@localhost:5432/finance_db
-      run: python -m pytest tests/test_ai_settings.py tests/test_post_import_pipeline.py tests/test_category_matcher_specific_rules.py tests/test_people_filter.py tests/services/test_ownership_service.py tests/services/test_account_ownership_allocation_service.py -q
+      run: python -m pytest tests/test_categorization_context.py tests/test_categorization_evaluation.py tests/test_categorization_suggestions.py tests/test_ollama_categorizer.py tests/test_category_confidence.py tests/test_ai_settings.py tests/test_post_import_pipeline.py tests/test_category_matcher_specific_rules.py tests/test_people_filter.py tests/services/test_ownership_service.py tests/services/test_account_ownership_allocation_service.py -q
 
     - name: Build frontend
       working-directory: ./frontend

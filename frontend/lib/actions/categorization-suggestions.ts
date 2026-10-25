@@ -84,3 +84,7 @@ export async function getCategorizationTrialSummary(): Promise<{
 }> {
   return callBackend("/summary");
 }
+
+export async function markCategorizationSuggestionShown(suggestionId: string): Promise<void> {
+  await callBackend(`/${encodeURIComponent(suggestionId)}/shown`, "POST");
+}

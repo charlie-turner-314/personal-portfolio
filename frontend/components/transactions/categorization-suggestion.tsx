@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { CategoryDisplay } from "@/types";
 import {
-  categorizationTrialAvailable, requestCategorizationSuggestion, reviewCategorizationSuggestion, getCategorizationTrialSummary,
+  markCategorizationSuggestionShown, categorizationTrialAvailable, requestCategorizationSuggestion, reviewCategorizationSuggestion, getCategorizationTrialSummary,
   type CategorizationSuggestion,
 } from "@/lib/actions/categorization-suggestions";
 
@@ -42,6 +42,12 @@ export function CategorizationSuggestionPanel({ transactionId, categories, onCat
     categorizationTrialAvailable().then(value => { if (mounted.current) setEnabled(value); });
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (suggestion) void markCategorizationSuggestionShown(suggestion.id).catch(() => {
+      setError("Unable to record that this suggestion was displayed. You can still review it.");
+    });
+  }, [suggestion]);
 
   async function request() {
     setBusy(true); setError("");

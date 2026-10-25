@@ -585,7 +585,7 @@ class CategoryMatcher:
         Returns:
             Cost in USD
         """
-        if os.getenv("CATEGORIZER_PROVIDER", "openai") == "ollama":
+        if getattr(self, "_ai_provider", None) == "ollama" or os.getenv("CATEGORIZER_PROVIDER", "openai") == "ollama":
             return 0.0  # Local inference has no per-token API charge.
         pricing = self.PRICING.get(model, {"input": 0, "output": 0})
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
@@ -1416,7 +1416,7 @@ Response:"""
                     model=self.LLM_MODEL,
                     messages=messages,
                     temperature=self.LLM_TEMPERATURE,
-                    max_tokens=max(150, len(batch) * 30), timeout=30.0,
+                    max_tokens=max(150, len(batch) * 30), **self._provider_options(),
                 )
                 total_tokens += response.usage.total_tokens
                 total_cost += self._calculate_llm_cost(response.usage.prompt_tokens, response.usage.completion_tokens, self.LLM_MODEL)
@@ -1425,6 +1425,10 @@ Response:"""
                                   "completion_tokens": response.usage.completion_tokens,
                                   "total_tokens": response.usage.total_tokens}
                 trace["finish_reason"] = getattr(response.choices[0], "finish_reason", None)
+                trace["provider_response"] = {key: getattr(response, key, None) for key in
+                                              ("id", "model", "system_fingerprint")}
+                if trace["finish_reason"] == "length":
+                    raise ValueError("Incomplete generation")
                 seen, duplicates, abstained = set(), set(), set()
                 for line in (response.choices[0].message.content or "").splitlines():
                     parts = line.strip().split("|")
@@ -1464,5 +1468,10 @@ Response:"""
                 trace["error_type"] = type(exc).__name__
                 self.last_batch_failures += 1
                 logger.warning("categorizer.batch_failed error_type=%s batch_size=%d", type(exc).__name__, len(batch))
+                if self.strict_ai_errors:
+                    if getattr(self, '_ai_provider', 'openai') == 'ollama':
+                        from app.services.ai_settings import AiConfigurationError
+                        raise AiConfigurationError('Mac/Ollama unavailable or the model request failed. Check the Mac and retry remaining transactions. No cloud fallback was used.') from None
+                    raise
         logger.info("categorizer.batch_complete assigned=%d requested=%d tokens=%d", len(results), len(transactions), total_tokens)
         return results, total_tokens, total_cost

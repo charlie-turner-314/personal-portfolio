@@ -2,10 +2,10 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CategorizationSuggestionPanel } from "./categorization-suggestion";
-import { categorizationTrialAvailable, requestCategorizationSuggestion, reviewCategorizationSuggestion, getCategorizationTrialSummary } from "@/lib/actions/categorization-suggestions";
+import { markCategorizationSuggestionShown, categorizationTrialAvailable, requestCategorizationSuggestion, reviewCategorizationSuggestion, getCategorizationTrialSummary } from "@/lib/actions/categorization-suggestions";
 
 vi.mock("@/lib/actions/categorization-suggestions", () => ({
-  categorizationTrialAvailable: vi.fn(), requestCategorizationSuggestion: vi.fn(), reviewCategorizationSuggestion: vi.fn(), getCategorizationTrialSummary: vi.fn(),
+  markCategorizationSuggestionShown: vi.fn(), categorizationTrialAvailable: vi.fn(), requestCategorizationSuggestion: vi.fn(), reviewCategorizationSuggestion: vi.fn(), getCategorizationTrialSummary: vi.fn(),
 }));
 
 const categories = [{ id: "food", name: "Food", color: null, icon: null }, { id: "transfer", name: "Transfer", color: null, icon: null }];
@@ -16,6 +16,7 @@ const suggestion = { id: "suggestion", transaction_id: "tx", category_id: "food"
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(markCategorizationSuggestionShown).mockResolvedValue(undefined);
   vi.mocked(categorizationTrialAvailable).mockResolvedValue(true);
   vi.mocked(requestCategorizationSuggestion).mockResolvedValue(suggestion);
   vi.mocked(reviewCategorizationSuggestion).mockResolvedValue({ ...suggestion, status: "reviewed", review_outcome: "accepted" });
@@ -41,6 +42,7 @@ describe("categorisation trial", () => {
   it("shows evidence, then saves only after explicit acceptance", async () => {
     const saved = await openSuggestion();
     expect(saved).not.toHaveBeenCalled();
+    expect(markCategorizationSuggestionShown).toHaveBeenCalledWith("suggestion");
     expect(reviewCategorizationSuggestion).not.toHaveBeenCalled();
     expect(screen.getByText("Previous shop → Food")).toBeInTheDocument();
     expect(screen.queryByText(/95%/)).not.toBeInTheDocument();

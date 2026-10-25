@@ -14,7 +14,7 @@ whose user and system categories are equal are **not** assumed reviewed: older
 imports populated both fields automatically. Legacy manual differences, and
 user assignments without a system category, remain eligible as precedents.
 
-Migration `0044_category_verification.manual.sql` adds a nullable timestamp without
+Migration `0048_category_verification.manual.sql` adds a nullable timestamp without
 backfilling or changing any labels. Deploy the migration before the new code.
 
 A user can explicitly attest that their current history has been reviewed and
@@ -96,9 +96,9 @@ selection still uses `CATEGORIZATION_LLM_MODEL` (default `gpt-4o-mini`).
 ## Prospective suggestion trial
 
 The transaction details sheet has an opt-in, on-demand review panel. Apply pending
-migrations, including `0043_category_confidence.manual.sql`,
-`0044_category_verification.manual.sql` and
-`0045_categorization_suggestions.manual.sql` before enabling it. Set the backend's
+migrations, including `0047_category_confidence.manual.sql`,
+`0048_category_verification.manual.sql` and
+`0049_categorization_suggestions.manual.sql` before enabling it. Set the backend's
 `CATEGORIZER_SUGGESTIONS_ENABLED=true`, `CATEGORIZER_PROVIDER=ollama` and
 `CATEGORIZATION_LLM_MODEL=qwen3:8b`. The Ollama endpoint must be reachable from the
 backend; an Ollama service on a Mac is not automatically reachable from a Pi.
@@ -371,3 +371,44 @@ These test retrieval, leakage, verification provenance, read-only snapshots,
 transfer candidates, API fallbacks, output validation and pipeline preservation.
 They do not establish an improvement in model accuracy; that requires the live
 holdout comparison and review of disagreements with the trusted labels.
+
+### Durable suggestion and feedback records
+
+Migration 0050 stores a versioned private JSON record for each panel attempt:
+original transaction/account metadata, category taxonomy/guidance, exact system
+and user prompts, selected evidence, raw model output, parse outcomes, token
+usage, provider response identifiers, Ollama digest/template/parameters/runtime
+and explicit sampling/context options. Classifier source hashes identify the
+implementation even when a build revision is unavailable. No credentials or
+account numbers are copied. These payloads stay in owner-scoped database records,
+not application logs or the public suggestion response.
+
+An attempt is committed before inference. Completed assignments, explicit UNKNOWN
+abstentions, malformed output, provider failures, and stale results are distinct;
+a killed process can leave `generating`, which must not count as an abstention.
+The cache requires the same target and configuration fingerprints, including
+code, taxonomy, model identity and inference settings. Historical rows with no
+provenance are marked `legacy`; missing history is never fabricated.
+
+The client acknowledges first display through an owner-scoped, idempotent endpoint;
+request time, first display, explicit review time, dismissal, and client-reported
+elapsed time remain distinct. A successful display acknowledgement is evidence
+of client rendering, not evidence the person read the suggestion.
+
+A PostgreSQL trigger records manual category assignments/reassignments/clears and
+verification changes from every writer (frontend SQL, REST, MCP, imports). It
+captures previous and resulting manual categories, the contemporaneous system
+category, category names/definitions, target metadata and verification times.
+Panel assignments link to the originating suggestion. Outside-panel changes are
+observations of manual assignment, not automatically classified as acceptance or
+rejection of an earlier suggestion. System-only predictions create no manual
+feedback. Records follow user/transaction deletion; category snapshots survive
+renames and category foreign-key deletion. No retroactive manual history is
+invented for changes made before installation.
+
+This supports replay and future supervised evaluation, but manual labels are not
+infallible ground truth. Panel acceptance is selected feedback, not an unbiased
+accuracy estimate. Compare new methods against frozen held-out targets and
+labels, excluding target/event labels from retrieval, and report coverage,
+errors, and uncertainty. New inference methods must use a new configuration
+fingerprint rather than reusing pending suggestions from an older method.

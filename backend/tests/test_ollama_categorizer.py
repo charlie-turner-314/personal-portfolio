@@ -31,5 +31,5 @@ def test_native_request_and_usage(monkeypatch):
     assert request["think"] is False
     assert request["options"]["num_ctx"] == 32768
     response.json.return_value["done_reason"] = "length"
-    with pytest.raises(ValueError, match="Incomplete"):
-        OllamaCategorizerClient().create(model="qwen3:8b", messages=[], temperature=.1, max_tokens=100)
+    partial = OllamaCategorizerClient().create(model="qwen3:8b", messages=[], temperature=.1, max_tokens=100)
+    assert partial.choices[0].finish_reason == "length"

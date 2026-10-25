@@ -434,6 +434,19 @@ class CategorizationSuggestion(Base):
     reviewed_at = Column(DateTime)
     __table_args__ = (CheckConstraint("review_outcome IS NULL OR review_outcome IN ('accepted', 'corrected', 'dismissed')"),)
 
+class CategorizationFeedback(Base):
+    """Append-only observations written by the manual-category database trigger."""
+    __tablename__ = "categorization_feedback"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False)
+    suggestion_id = Column(UUID(as_uuid=True), ForeignKey("categorization_suggestions.id", ondelete="SET NULL"))
+    source = Column(String(40), nullable=False)
+    snapshot = Column(JSONB, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (Index("categorization_feedback_user_transaction_idx", "user_id", "transaction_id", "created_at"),)
+
+
 
 class Report(Base):
     """Newsletter report configuration."""

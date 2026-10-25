@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.db_helpers import get_user_id
-from app.services.categorization_suggestions import request_suggestion, review_suggestion, trial_enabled, trial_summary
+from app.services.categorization_suggestions import request_suggestion, review_suggestion, trial_enabled, trial_summary, mark_shown
 
 router = APIRouter()
 
@@ -36,3 +36,8 @@ def suggest(transaction_id: UUID, db: Session = Depends(get_db)):
 @router.post("/{suggestion_id}/review")
 def review(suggestion_id: UUID, body: ReviewRequest, db: Session = Depends(get_db)):
     return review_suggestion(db, get_user_id(None), suggestion_id, **body.model_dump())
+
+
+@router.post("/{suggestion_id}/shown")
+def shown(suggestion_id: UUID, db: Session = Depends(get_db)):
+    return mark_shown(db, get_user_id(None), suggestion_id)

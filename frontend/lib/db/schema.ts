@@ -2208,3 +2208,14 @@ export const categorizationSuggestions = pgTable("categorization_suggestions", {
   index("categorization_suggestions_transaction_idx").on(table.transactionId),
   check("categorization_suggestions_review_outcome_check", sql`${table.reviewOutcome} IS NULL OR ${table.reviewOutcome} IN ('accepted', 'corrected', 'dismissed')`),
 ]);
+
+// Rows are created by the manual-category trigger, covering all application writers.
+export const categorizationFeedback = pgTable("categorization_feedback", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  transactionId: uuid("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }),
+  suggestionId: uuid("suggestion_id").references(() => categorizationSuggestions.id, { onDelete: "set null" }),
+  source: varchar("source", { length: 40 }).notNull(),
+  snapshot: jsonb("snapshot").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, table => [index("categorization_feedback_user_transaction_idx").on(table.userId, table.transactionId, table.createdAt)]);
