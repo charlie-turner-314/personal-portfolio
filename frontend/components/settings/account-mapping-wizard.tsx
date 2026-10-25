@@ -52,7 +52,7 @@ interface LinkableAccount {
 
 interface AccountMapping {
   bank_uid: string;
-  action: "create" | "link" | "skip";
+  action: "create" | "link" | "skip" | "shared";
   name?: string;
   existing_account_id?: string;
 }
@@ -127,8 +127,10 @@ export function AccountMappingWizard({
     );
   }
 
-  function handleActionSelect(action: "create" | "link" | "skip") {
-    if (action === "skip") {
+  function handleActionSelect(action: "create" | "link" | "skip" | "shared") {
+    if (action === "shared") {
+      updateCurrentMapping({ action, name: undefined, existing_account_id: suggestionByUid[currentAccount!.uid]?.suggested_account_id || undefined });
+    } else if (action === "skip") {
       updateCurrentMapping({ action: "skip", name: undefined, existing_account_id: undefined });
     } else if (action === "create") {
       updateCurrentMapping({
@@ -239,8 +241,13 @@ export function AccountMappingWizard({
               <button type="button" onClick={() => handleActionSelect("skip")}
                 className={`border p-4 text-left ${currentMapping.action === "skip" ? "border-primary bg-muted/30" : "border-border"}`}>
                 <p className="text-sm font-medium">Skip this account</p>
-                <p className="mt-1 text-xs text-muted-foreground">Use this for a joint account already shared with you. It keeps its existing sync connection and avoids a second balance.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Do not import this account through this connection. Existing shared accounts keep their other sync connections.</p>
               </button>
+              {suggestionByUid[currentAccount.uid]?.shared_connection_available && <button type="button" onClick={() => handleActionSelect("shared")}
+                className={`border p-4 text-left ${currentMapping.action === "shared" ? "border-primary bg-muted/30" : "border-border"}`}>
+                <p className="text-sm font-medium">Sync existing shared account</p>
+                <p className="mt-1 text-xs text-muted-foreground">Use your private Up connection to update {suggestionByUid[currentAccount.uid].suggested_account_name}. Keep one balance and one history.</p>
+              </button>}
               {/* Create new */}
               <button
                 type="button"
@@ -291,7 +298,7 @@ export function AccountMappingWizard({
           </div>
 
           {suggestionByUid[currentAccount.uid]?.suggested_action === "skip" && <p className="text-sm text-muted-foreground">
-            This account is already shared with you as {suggestionByUid[currentAccount.uid].suggested_account_name}. Keep Skip selected to use that account and its existing sync connection.
+            This account is already shared with you as {suggestionByUid[currentAccount.uid].suggested_account_name}. Skip leaves this connection unused. Choose Sync existing shared account to contribute imports through your own connection.
           </p>}
 
           {/* Create: name input */}
@@ -397,7 +404,7 @@ export function AccountMappingWizard({
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <RiArrowRightLine className="h-4 w-4 text-muted-foreground" />
-                      {mapping.action === "skip" ? <Badge variant="outline">Skipped · no duplicate account</Badge> : mapping.action === "create" ? (
+                      {mapping.action === "shared" ? <Badge variant="secondary">Sync shared account</Badge> : mapping.action === "skip" ? <Badge variant="outline">Skipped · no duplicate account</Badge> : mapping.action === "create" ? (
                         <div className="text-right">
                           <Badge variant="secondary" className="mb-1">
                             New

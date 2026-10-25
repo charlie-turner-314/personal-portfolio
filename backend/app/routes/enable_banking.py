@@ -15,17 +15,17 @@ import redis
 import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.db_helpers import get_user_id
 from app.services.financial_access import account_access
-from app.models import BankConnection, Account
+from app.models import BankConnection, Account, UpAccountSource
 from app.integrations.enable_banking_auth import EnableBankingClient
 from app.integrations.enable_banking_adapter import EnableBankingAdapter, _ACCOUNT_TYPE_MAP
 from app.services.sync_service import SyncService
-from app.security.data_encryption import encrypt_value, blind_index
+from app.security.data_encryption import encrypt_value, blind_index, blind_index_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,9 @@ def _bank_identity_match(uid: str):
     hashed = blind_index(uid)
     if hashed:
         identities.append(Account.external_id_hash == hashed)
+    candidates = blind_index_candidates(uid)
+    if candidates:
+        identities.append(Account.external_id_hash.in_(candidates))
     return or_(*identities)
 
 
@@ -105,6 +108,16 @@ class SuggestedMapping(BaseModel):
     suggested_action: str       # "link", "create" or "skip"
     suggested_account_id: Optional[str] = None
     suggested_account_name: Optional[str] = None
+    shared_connection_available: bool = False
+
+
+def _connection_accounts(db, connection):
+    if getattr(connection, "provider", None) == "up":
+        return db.query(Account).outerjoin(UpAccountSource, UpAccountSource.account_id == Account.id).filter(
+            or_(Account.bank_connection_id == connection.id, UpAccountSource.connection_id == connection.id),
+            Account.is_active.is_(True), account_access(Account.id, connection.user_id),
+        ).distinct()
+    return db.query(Account).filter(Account.bank_connection_id == connection.id)
 
 
 # --- Helper ---
@@ -306,6 +319,10 @@ def map_accounts(
 
     accounts_created = 0
     accounts_linked = 0
+    if len({mapping.bank_uid for mapping in request.mappings}) != len(request.mappings):
+        raise HTTPException(status_code=400, detail="Map each bank account only once")
+    if connection.provider == "up":
+        db.execute(text("SELECT pg_advisory_xact_lock(73194, 1)"))
 
     for mapping in request.mappings:
         acc_data = raw_by_uid.get(mapping.bank_uid)
@@ -316,6 +333,23 @@ def map_accounts(
             )
 
         if mapping.action == "skip":
+            if connection.provider == "up":
+                skipped_ids = [a.id for a in db.query(Account).filter(account_access(Account.id, user_id), Account.provider == "up", _bank_identity_match(mapping.bank_uid)).all()]
+                if skipped_ids:
+                    db.query(UpAccountSource).filter(UpAccountSource.connection_id == connection.id, UpAccountSource.account_id.in_(skipped_ids)).delete(synchronize_session=False)
+                    db.query(Account).filter(Account.id.in_(skipped_ids), Account.user_id == user_id, Account.bank_connection_id == connection.id).update({Account.bank_connection_id: None}, synchronize_session=False)
+            continue
+        if not mapping.bank_uid:
+            raise HTTPException(status_code=400, detail="A provider account identity is required")
+        if mapping.action == "shared":
+            if connection.provider != "up" or not mapping.existing_account_id:
+                raise HTTPException(status_code=400, detail="Choose a shared Up account")
+            target = db.query(Account).filter(Account.id == mapping.existing_account_id, Account.provider == "up", _bank_identity_match(mapping.bank_uid), account_access(Account.id, user_id)).first()
+            if not target:
+                raise HTTPException(status_code=404, detail="Matching shared Up account not found")
+            from app.services.up_account_reconciliation import set_joint_source
+            set_joint_source(db, user_id, connection.id, target.id, True)
+            accounts_linked += 1
             continue
         shared = db.query(Account).filter(
             account_access(Account.id, user_id), Account.user_id != user_id,
@@ -323,7 +357,7 @@ def map_accounts(
             _bank_identity_match(mapping.bank_uid),
         ).first()
         if shared:
-            raise HTTPException(status_code=409, detail="This bank account is already shared with you. Skip it here and use the shared account to avoid duplicate balances.")
+            raise HTTPException(status_code=409, detail="This bank account is already shared with you. Choose the shared account option or skip it to avoid duplicate balances.")
         if mapping.action == "create":
             name = (
                 mapping.name
@@ -347,6 +381,9 @@ def map_accounts(
             if encrypted:
                 new_account.external_id_ciphertext = encrypted
             db.add(new_account)
+            db.flush()
+            if connection.provider == "up":
+                db.add(UpAccountSource(connection_id=connection.id, account_id=new_account.id))
             accounts_created += 1
 
         elif mapping.action == "link":
@@ -358,6 +395,7 @@ def map_accounts(
             existing = db.query(Account).filter(
                 Account.id == mapping.existing_account_id,
                 Account.user_id == user_id,
+                Account.consolidated_into_account_id.is_(None),
             ).first()
             if not existing:
                 raise HTTPException(
@@ -377,6 +415,8 @@ def map_accounts(
             existing.external_id_hash = hashed
             if encrypted:
                 existing.external_id_ciphertext = encrypted
+            if connection.provider == "up" and not db.query(UpAccountSource).filter(UpAccountSource.connection_id == connection.id, UpAccountSource.account_id == existing.id).first():
+                db.add(UpAccountSource(connection_id=connection.id, account_id=existing.id))
             accounts_linked += 1
 
         else:
@@ -429,38 +469,21 @@ def recategorize_connection(
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    account_ids = [
-        str(a.id)
-        for a in db.query(Account).filter(Account.bank_connection_id == connection.id).all()
-    ]
-    if not account_ids:
+    visible_accounts = _connection_accounts(db, connection).all()
+    if not visible_accounts:
         raise HTTPException(status_code=404, detail="No accounts found for this connection")
-
-    transaction_ids = [
-        str(t.id)
-        for t in db.query(Transaction.id).filter(
-            Transaction.user_id == user_id,
-            Transaction.account_id.in_(account_ids),
-        ).all()
-    ]
-
-    if not transaction_ids:
-        return SyncTriggerResponse(message="No transactions to re-categorize")
-
-    try:
-        from tasks.post_import_pipeline import post_import_pipeline
-        task = post_import_pipeline.delay(
-            user_id=user_id,
-            account_ids=account_ids,
-            transaction_ids=transaction_ids,
-            is_initial_sync=False,
-        )
-        return SyncTriggerResponse(
-            message=f"Re-categorization started for {len(transaction_ids)} transactions",
-            task_id=task.id,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start re-categorization: {str(e)}")
+    groups = {}
+    for account in visible_accounts:
+        groups.setdefault(account.user_id, []).append(account.id)
+    total = 0
+    last_task = None
+    from tasks.post_import_pipeline import post_import_pipeline
+    for resource_owner, account_ids in groups.items():
+        transaction_ids = [str(t.id) for t in db.query(Transaction.id).filter(Transaction.account_id.in_(account_ids)).all()]
+        if transaction_ids:
+            last_task = post_import_pipeline.delay(user_id=resource_owner, account_ids=[str(a) for a in account_ids], transaction_ids=transaction_ids, is_initial_sync=False)
+            total += len(transaction_ids)
+    return SyncTriggerResponse(message=f"Re-categorization started for {total} transactions" if total else "No transactions to re-categorize", task_id=last_task.id if last_task else None)
 
 
 @router.post("/sync/{connection_id}", response_model=SyncTriggerResponse)
@@ -484,8 +507,12 @@ def trigger_sync(
         )
 
     try:
-        from tasks.enable_banking_tasks import sync_bank_connection
-        task = sync_bank_connection.delay(str(connection.id))
+        if connection.provider == "up":
+            from tasks.up_tasks import sync_up_connection
+            task = sync_up_connection.delay(str(connection.id))
+        else:
+            from tasks.enable_banking_tasks import sync_bank_connection
+            task = sync_bank_connection.delay(str(connection.id))
         return SyncTriggerResponse(message="Sync started", task_id=task.id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start sync: {str(e)}")
@@ -505,9 +532,7 @@ def connection_status(
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    accounts_count = db.query(Account).filter(
-        Account.bank_connection_id == connection.id,
-    ).count()
+    accounts_count = _connection_accounts(db, connection).count()
 
     # Read live sync progress from Redis (set by Celery worker)
     sync_progress = None
@@ -545,9 +570,7 @@ def list_connections(
 
     results = []
     for conn in connections:
-        accounts_count = db.query(Account).filter(
-            Account.bank_connection_id == conn.id,
-        ).count()
+        accounts_count = _connection_accounts(db, conn).count()
         results.append({
             "id": str(conn.id),
             "aspsp_name": conn.aspsp_name,
@@ -591,12 +614,14 @@ def _build_suggested_mappings(
         ).first()
         if shared:
             results.append({"bank_uid": uid, "bank_name": bank_name, "suggested_action": "skip",
-                "suggested_account_id": str(shared.id), "suggested_account_name": shared.name})
+                "suggested_account_id": str(shared.id), "suggested_account_name": shared.name,
+                "shared_connection_available": provider == "up"})
             continue
         existing = (
             db.query(Account)
             .filter(
                 Account.user_id == user_id,
+                Account.consolidated_into_account_id.is_(None),
                 _bank_identity_match(uid), Account.provider == provider if provider else True,
             )
             .first()
@@ -670,6 +695,10 @@ def disconnect(
     ).first()
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
+
+    if connection.provider == "up":
+        from app.routes.up import disconnect_connection
+        return disconnect_connection(connection_id, user_id=user_id, db=db)
 
     # Revoke session at Enable Banking (best-effort)
     try:

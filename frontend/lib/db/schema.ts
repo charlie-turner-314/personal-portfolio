@@ -227,6 +227,7 @@ export const accounts = pgTable(
     externalIdHash: varchar("external_id_hash", { length: 64 }),
     ibanCiphertext: text("iban_ciphertext"),
     ibanHash: varchar("iban_hash", { length: 64 }),
+    consolidatedIntoAccountId: uuid("consolidated_into_account_id").references((): AnyPgColumn => accounts.id, { onDelete: "set null" }),
     bankConnectionId: uuid("bank_connection_id").references(() => bankConnections.id, { onDelete: "set null" }),
     balanceAvailable: decimal("balance_available", { precision: 15, scale: 2 }),
     startingBalance: decimal("starting_balance", { precision: 15, scale: 2 }).default("0"), // Starting balance for calculation
@@ -2230,3 +2231,20 @@ export const householdPropertyShares = pgTable("household_property_shares", {
   index("household_property_shares_member_idx").on(t.memberUserId),
   check("household_property_shares_not_self", sql`${t.memberUserId} <> ${t.grantedByUserId}`),
 ]);
+
+export const upAccountSources = pgTable("up_account_sources", {
+  connectionId: uuid("connection_id").notNull().references(() => bankConnections.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  lastSyncedAt: timestamp("last_synced_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, t => [primaryKey({ columns: [t.connectionId, t.accountId] }), index("up_account_sources_account_idx").on(t.accountId)]);
+export const upAccountReconciliations = pgTable("up_account_reconciliations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  actorUserId: text("actor_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  sourceAccountId: uuid("source_account_id").references(() => accounts.id, { onDelete: "set null" }),
+  canonicalAccountId: uuid("canonical_account_id").references(() => accounts.id, { onDelete: "set null" }),
+  sourceSnapshot: jsonb("source_snapshot").notNull(),
+  canonicalSnapshot: jsonb("canonical_snapshot").notNull(),
+  result: jsonb("result").notNull().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});

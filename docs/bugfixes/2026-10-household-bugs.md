@@ -107,6 +107,35 @@ leave/rejoin and no revived grants. The backend privacy harness and 135 regressi
 tests passed; the extended frontend harness also proves private property economic
 attribution survives leaving. Final develop verification and promotion remain.
 
+PPF-58 delivery: feature PR #93 merged as develop `1fababc`. Exact merged source
+build/migrations preserved 33 users/auth accounts, 41 accounts, 3,301 transactions,
+8 holdings and 8 broker trades. Twenty-four focused tests, authenticated smoke
+and the complete property browser journey passed again. Promotion PR #94 merged
+main `e50ecfb`; PR #95 synchronized develop to `0686a22`.
+
+## PPF-57: canonical Up accounts and private sources
+
+Starting develop: `0686a22`. A new regression invoked the worker with a retained
+archived mapping and failed: sync_transactions was still called for that account.
+This confirms archiving alone was insufficient. The original issue also records
+three joint provider identities duplicated across separate private connections.
+
+Plan: explicit connection-to-canonical-account bindings, each owned by its token's
+login; source-specific checkpoints, live account permission checks and serialized
+canonical writes. Preserve explicit Skip. New shared-account mapping must bind to
+the existing account rather than create another balance. Existing pre-household
+imports need a reviewed, atomic exact-provider-ID consolidation with original
+history archives, preserved manual edits/graphs/ownership/anchors and rollback
+on conflicting relationships. No migration-time merge or implicit sharing. Revoke
+cross-login source bindings on unshare/leave while preserving personal sources.
+
+Implementation is in progress. The archived-account test now passes with 136
+backend regressions. Source sync uses canonical resource ownership and checks
+consent after external fetching, in bounded write batches; it retains manual
+edits and does not delete amount/date-only CSV matches. Account locks precede
+consent locks to avoid deadlocks. Retired account references are blocked at the
+DB boundary so in-flight writes cannot silently append to a hidden duplicate.
+
 ## Remaining issues
 
 - PPF-57: prevent/reconcile joint Up duplicate account mappings without losing

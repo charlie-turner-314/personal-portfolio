@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../lib/db";
-import { accounts, accountOwners, householdAccountShares, householdMemberships, householdNetWorthShares, householdPropertyShares, propertyOwners, people, transactions, users, properties, exchangeRates, transactionLinks, accountOwnershipAllocations } from "../lib/db/schema";
+import { accounts, accountOwners, householdAccountShares, householdMemberships, householdNetWorthShares, householdPropertyShares, propertyOwners, people, transactions, users, properties, exchangeRates, transactionLinks, accountOwnershipAllocations, bankConnections, upAccountSources } from "../lib/db/schema";
 import { deletePerson } from "../lib/people/mutations";
 import { getVisibleNetWorthTotals } from "../lib/household/net-worth";
 import { accountAccess, propertyAccess, transactionAccess } from "../lib/household/account-access";
@@ -84,14 +84,26 @@ async function main() {
     assert.deepEqual(await visible(owner), [joint.id, ownerPrivate.id, memberPrivate.id].sort());
     await setNetWorthSharing(member, [owner]);
     await assert.rejects(setNetWorthSharing(member, [stranger]), /current household member/);
+    const sources = await db.insert(bankConnections).values([
+      { userId: owner, provider: "up", sessionId: randomUUID(), aspspName: "Up", aspspCountry: "AU", status: "active" },
+      { userId: member, provider: "up", sessionId: randomUUID(), aspspName: "Up", aspspCountry: "AU", status: "active" },
+    ]).returning();
+    await db.insert(upAccountSources).values([
+      { connectionId: sources[0].id, accountId: joint.id },
+      { connectionId: sources[1].id, accountId: joint.id },
+      { connectionId: sources[1].id, accountId: memberPrivate.id },
+    ]);
     await setAccountSharing(owner, joint.id, []);
+    assert.equal((await db.select().from(upAccountSources)).length, 2, "unsharing detaches only cross-login Up source");
     assert.deepEqual(await visible(member), [memberPrivate.id]);
     await setAccountSharing(owner, joint.id, [member]);
     await db.update(people).set({ linkedUserId: member }).where(eq(people.id, partner.id));
     await db.insert(accountOwners).values({ accountId: memberPrivate.id, personId: partner.id, share: "1" });
     const [retainedProperty] = await db.insert(properties).values({ userId: member, name: "Retained personal property", propertyType: "residential", currency: "AUD", currentValue: "99" }).returning();
     await db.insert(propertyOwners).values({ propertyId: retainedProperty.id, personId: partner.id, share: "1" });
+    await db.insert(upAccountSources).values({ connectionId: sources[1].id, accountId: joint.id });
     await leaveHousehold(member);
+    assert.equal((await db.select().from(upAccountSources)).length, 2, "leaving preserves each personal connection while removing shared sources");
     assert.deepEqual(await visible(member), [memberPrivate.id]);
     assert.equal(Number((await getVisibleNetWorthTotals(member)).find((t) => t.isOwn)!.total), 149, "leaving preserves linked-person economic ownership of private accounts and property");
     assert.deepEqual(await visible(owner), [joint.id, ownerPrivate.id].sort());

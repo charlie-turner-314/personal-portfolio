@@ -1,0 +1,30 @@
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ request: vi.fn(), refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh }) }));
+vi.mock("@/lib/actions/bank-connections", () => ({ upJointRequest: mocks.request, downloadUpArchive: vi.fn() }));
+import { UpJointAccounts } from "./up-joint-accounts";
+afterEach(() => { cleanup(); vi.resetAllMocks(); });
+it("requires conflict review before consolidating old imports", async () => {
+  const data = { accounts: [{ account_id: "joint", name: "Joint", currency: "AUD", connected: false, originals: [{ id: "old", name: "Old joint", transactions: 2 }] }], archives: [] };
+  mocks.request.mockImplementation(async (_id, operation) => operation === "joint-preview" ? { transactions_to_move: 1, provider_duplicates: 1, conflicts: [{ transaction_id: "t1", date: "2026-10-01", fields: ["description"] }], blocked: [] } : operation === "joint-reconcile" ? { accounts_consolidated: 1 } : data);
+  render(<UpJointAccounts connectionId="private-connection" />);
+  fireEvent.click(screen.getByText("Review joint Up accounts"));
+  fireEvent.click(await screen.findByText("Preview consolidation"));
+  const submit = await screen.findByText("Consolidate reviewed imports");
+  expect((submit as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("Details to retain"), { target: { value: "keep_mine" } });
+  fireEvent.click(submit);
+  await waitFor(() => expect(mocks.request).toHaveBeenCalledWith("private-connection", "joint-reconcile", { pairs: [{ source_account_id: "old", canonical_account_id: "joint" }], conflict_strategy: "keep_mine" }));
+  expect(await screen.findByText(/Consolidated 1 accounts/)).toBeTruthy();
+});
+it("shows progress while loading and leaves sources unchanged without a click", async () => {
+  let resolve!: (value: unknown) => void;
+  mocks.request.mockReturnValue(new Promise(r => { resolve = r; }));
+  render(<UpJointAccounts connectionId="private" />);
+  fireEvent.click(screen.getByText("Review joint Up accounts"));
+  expect(screen.getByRole("status").textContent).toContain("Updating");
+  resolve({ accounts: [], archives: [] });
+  expect(await screen.findByText("No shared Up accounts available.")).toBeTruthy();
+  expect(mocks.request).toHaveBeenCalledTimes(1);
+});

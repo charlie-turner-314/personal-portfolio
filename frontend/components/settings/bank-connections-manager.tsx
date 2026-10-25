@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { UpJointAccounts } from "./up-joint-accounts";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -415,7 +416,7 @@ export function BankConnectionsManager({ connections, countryCode }: BankConnect
                     )}
                   </div>
                     {connection.provider === "up" && (
-                      <span>Up</span>
+                      <UpJointAccounts connectionId={connection.id} />
                     )}
                     {connection.provider !== "up" && isConsentExpiringSoon(connection) && (
                     <div className="mt-1 flex items-center gap-1 text-xs text-amber-600">
