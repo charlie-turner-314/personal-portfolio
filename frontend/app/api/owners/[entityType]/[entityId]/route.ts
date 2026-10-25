@@ -1,4 +1,4 @@
-import { accountAccess } from "@/lib/household/account-access";
+import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getOwners, setOwners, type EntityType } from "@/lib/people";
@@ -12,7 +12,7 @@ const ENTITY_TYPES = ["account", "property", "vehicle"] as const;
 async function userOwnsEntity(userId: string, entityType: EntityType, entityId: string, allowShared = false): Promise<boolean> {
   const table = entityType === "account" ? accounts : entityType === "property" ? properties : vehicles;
   const [row] = await db.select({ id: table.id }).from(table)
-    .where(and(eq(table.id, entityId), allowShared && entityType === "account" ? accountAccess(accounts.id, userId) : eq(table.userId, userId))).limit(1);
+    .where(and(eq(table.id, entityId), allowShared && entityType === "account" ? accountAccess(accounts.id, userId) : allowShared && entityType === "property" ? propertyAccess(properties.id, userId) : eq(table.userId, userId))).limit(1);
   return !!row;
 }
 

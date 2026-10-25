@@ -10,11 +10,11 @@ const fixture = `
 CREATE TEMP TABLE household_memberships(person_id text, member_user_id text);
 INSERT INTO household_memberships VALUES ('partner','member-login');
 CREATE TEMP TABLE accounts (id text, user_id text);
-CREATE TEMP TABLE people (id text, user_id text, kind text);
+CREATE TEMP TABLE people (id text, user_id text, kind text, linked_user_id text);
 CREATE TEMP TABLE account_owners (account_id text, person_id text, share numeric);
 CREATE TEMP TABLE account_ownership_allocations (account_id text, person_id text, effective_from date, share numeric);
 INSERT INTO accounts VALUES ('dated','household'),('legacy','household'),('default','household'),('future','household'),('personal','member-login'),('new-account','new-login');
-INSERT INTO people VALUES ('self','household','self'),('partner','household','member'),('outsider','another','self'),('member-self','member-login','self');
+INSERT INTO people(id,user_id,kind) VALUES ('self','household','self'),('partner','household','member'),('outsider','another','self'),('member-self','member-login','self');
 INSERT INTO account_owners VALUES ('legacy','self',NULL),('legacy','partner',NULL),('future','self',1);
 INSERT INTO account_ownership_allocations VALUES
 ('dated','self','2026-01-01',0.25),('dated','partner','2026-01-01',0.75),

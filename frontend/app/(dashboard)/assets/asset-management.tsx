@@ -112,6 +112,7 @@ function formatCurrency(value: string | null, currency: string | null): string {
 }
 
 interface AssetManagementProps {
+  actorUserId: string | null;
   initialAccounts: AccountWithLogo[];
   initialAccountFreshness: Record<string, AccountFreshness>;
   initialProperties: Property[];
@@ -135,6 +136,7 @@ type AccountWithLogo = Account & {
 };
 
 export function AssetManagement({
+  actorUserId,
   initialAccounts,
   initialAccountFreshness,
   initialProperties,
@@ -491,17 +493,18 @@ export function AssetManagement({
         valuationDate: editPropertyValuationDate || null,
         valuationSource: editPropertyValuationSource.trim() || null,
         notes: editPropertyNotes.trim() || null,
-        linkedLiabilityAccountIds: editPropertyLinkedLiabilityIds,
+        linkedLiabilityAccountIds: editingProperty.userId === actorUserId ? editPropertyLinkedLiabilityIds : undefined,
       });
 
       if (result.success) {
-        // Update owners — require at least one owner
-        if (editPropertyOwners.length === 0) {
+        // Only the original owner manages economic ownership.
+        if (editingProperty.userId === actorUserId && editPropertyOwners.length === 0) {
           toast.error("Select at least one owner.");
           setIsLoading(false);
           return;
         }
         try {
+          if (editingProperty.userId === actorUserId) {
           const ownersResp = await fetch(`/api/owners/property/${editingProperty.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
@@ -510,6 +513,7 @@ export function AssetManagement({
           if (!ownersResp.ok) {
             const text = await ownersResp.text().catch(() => "request failed");
             throw new Error(`Failed to save owners: ${text.slice(0, 200)}`);
+          }
           }
         } catch (ownersErr) {
           toast.error((ownersErr as Error).message || "Property updated, but failed to save ownership.");
@@ -769,7 +773,7 @@ export function AssetManagement({
                 const equity = calculatePropertyEquity(property, initialAccounts, links);
                 const valuations = propertyValuationsByPropertyId[property.id] || [];
                 return (
-                <div key={property.id} className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
+                <div key={property.id} data-testid={`property-${property.id}`} className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded bg-muted">
                       <RiHome4Line className="h-5 w-5 text-muted-foreground" />
@@ -777,6 +781,7 @@ export function AssetManagement({
                     <div>
                       <div className="flex items-center gap-2">
                         <p className="font-medium">{property.name}</p>
+                        {property.userId !== actorUserId && <span className="text-xs text-muted-foreground">Shared with you</span>}
                         <OwnerBadges
                           entityType="property"
                           entityId={property.id}
@@ -826,10 +831,10 @@ export function AssetManagement({
                           <RiEditLine className="mr-2 h-4 w-4" />
                           Edit
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => setDeletingProperty(property)}>
+                        {property.userId === actorUserId && <DropdownMenuItem className="text-destructive" onClick={() => setDeletingProperty(property)}>
                           <RiDeleteBinLine className="mr-2 h-4 w-4" />
                           Delete
-                        </DropdownMenuItem>
+                        </DropdownMenuItem>}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -1187,6 +1192,7 @@ export function AssetManagement({
               </div>
               <div className="space-y-2">
                 <Label>Linked Mortgage or Debt</Label>
+                {editingProperty?.userId !== actorUserId && <p className="text-sm text-muted-foreground">The property owner manages linked liabilities. Only shared account details are shown.</p>}
                 {liabilityAccounts.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No liability accounts available.</p>
                 ) : (
@@ -1200,6 +1206,7 @@ export function AssetManagement({
                           </span>
                         </span>
                         <Checkbox
+                          disabled={editingProperty?.userId !== actorUserId}
                           checked={editPropertyLinkedLiabilityIds.includes(account.id)}
                           onCheckedChange={(checked) => {
                             setEditPropertyLinkedLiabilityIds((current) => checked === true
@@ -1248,7 +1255,7 @@ export function AssetManagement({
                   </SelectContent>
                 </Select>
               </div>
-              {people.length > 1 && (
+              {people.length > 1 && editingProperty?.userId === actorUserId && (
                 <OwnersField
                   people={people}
                   value={editPropertyOwners}

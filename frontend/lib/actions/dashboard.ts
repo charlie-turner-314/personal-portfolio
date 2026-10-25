@@ -1,6 +1,6 @@
 "use server";
 
-import { accountAccess } from "@/lib/household/account-access";
+import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { db } from "@/lib/db";
 import { accounts, transactions, categories, users, properties, vehicles, transactionLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
@@ -12,7 +12,7 @@ import {
   resolveIncomeExpenseGrouping,
   type IncomeExpenseGrouping,
 } from "@/lib/dashboard/income-expense-buckets";
-import { ownershipShareSql } from "@/lib/people/ownership-sql";
+import { ownershipShareSql, propertyOwnershipShareSql } from "@/lib/people/ownership-sql";
 import { getOwnersForEntities } from "@/lib/people/queries";
 import { attributeAmount } from "@/lib/people/attribution";
 import { getPortfolio } from "@/lib/api/investments";
@@ -296,9 +296,10 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         address: properties.address,
         currentValue: properties.currentValue,
         currency: properties.currency,
+        ownershipShare: propertyOwnershipShareSql(personId, properties.id),
       })
       .from(properties)
-      .where(and(eq(properties.userId, session.user.id), eq(properties.isActive, true))),
+      .where(and(propertyAccess(properties.id, session.user.id), eq(properties.isActive, true))),
     db
       .select({
         id: vehicles.id,
@@ -341,7 +342,9 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
       id: property.id,
       name: property.name,
       institution: property.address,
-      value: attributeAmount(Number(property.currentValue || 0), propertyOwners.get(property.id) || [], personId || null),
+      value: property.ownershipShare === undefined
+        ? attributeAmount(Number(property.currentValue || 0), propertyOwners.get(property.id) || [], personId || null)
+        : Number(property.currentValue || 0) * Number(property.ownershipShare),
       currency: property.currency || currency,
       source: "property" as const,
     }))),

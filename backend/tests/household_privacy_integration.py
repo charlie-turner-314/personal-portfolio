@@ -20,7 +20,8 @@ from tasks.csv_import_tasks import _process_transaction_batch
 from app.routes.accounts import get_account, update_account
 from app.routes.transactions import get_transaction, create_transaction, update_transaction, delete_transactions_by_account
 from app.schemas import TransactionCreate, TransactionUpdate, AccountUpdate
-from app.services.financial_access import account_access
+from app.services.financial_access import account_access, property_access
+from app.mcp.tools.people import get_household_summary
 from app.services.report_data_service import build_report_payload
 from app.services.report_service import _validate_account_ids
 from app.services.tax_report_service import build_australian_tax_report, tax_report_zip
@@ -75,6 +76,19 @@ def main():
             assert skipped.accounts_created == 0
         identity = set_request_user_id(member)
         try:
+            shared_property, private_property = uuid.uuid4(), uuid.uuid4()
+            db.add_all([Property(id=shared_property, user_id=owner, name="Joint property", property_type="residential", currency="AUD", current_value=Decimal("800")), Property(id=private_property, user_id=owner, name="Private property", property_type="residential", currency="AUD", current_value=Decimal("9000"))])
+            db.flush()
+            db.execute(text("INSERT INTO property_owners(property_id,person_id,share) VALUES (:id,:person,0.5),(:private,:person,1)"), {"id":shared_property,"private":private_property,"person":person})
+            db.commit()
+            assert db.query(Property).filter(property_access(Property.id, member)).count() == 0
+            db.execute(text("INSERT INTO household_property_shares(property_id,member_user_id,granted_by_user_id) VALUES (:id,:member,:owner)"), {"id":shared_property,"member":member,"owner":owner}); db.commit()
+            assert {p.id for p in db.query(Property).filter(property_access(Property.id, member))} == {shared_property}
+            assert db.query(Property).filter(property_access(Property.id, third)).count() == 0
+            summary = get_household_summary(member)
+            assert next(p for p in summary["people"] if p["person_id"] == str(person))["properties"] == 400
+            db.execute(text("DELETE FROM household_property_shares WHERE property_id=:id"), {"id":shared_property}); db.commit()
+            assert db.query(Property).filter(property_access(Property.id, member)).count() == 0
             assert {a.id for a in db.query(Account).filter(account_access(Account.id, member))} == {joint, personal}
             assert {a.id for a in db.query(Account).filter(account_access(Account.id, third))} == set()
             assert {a["id"] for a in get_financial_summary(member)["accounts"]} == {str(joint), str(personal)}, "MCP raw-SQL summaries must include only permitted accounts"

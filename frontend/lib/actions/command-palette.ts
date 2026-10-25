@@ -1,6 +1,6 @@
 "use server";
 
-import { accountAccess } from "@/lib/household/account-access";
+import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { eq, and, desc, ilike, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accounts, properties, vehicles, transactions } from "@/lib/db/schema";
@@ -75,7 +75,7 @@ export async function getCommandPaletteData(): Promise<CommandPaletteData> {
       },
     }),
     db.query.properties.findMany({
-      where: and(eq(properties.userId, userId), eq(properties.isActive, true)),
+      where: and(propertyAccess(properties.id, userId), eq(properties.isActive, true)),
       orderBy: [desc(properties.createdAt)],
     }),
     db.query.vehicles.findMany({

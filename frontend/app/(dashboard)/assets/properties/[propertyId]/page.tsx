@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { RiArrowLeftLine, RiDownloadLine } from "@remixicon/react";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import {
   Card,
   CardContent,
@@ -27,6 +27,7 @@ import {
   getPropertyValuations,
 } from "@/lib/actions/properties";
 import { getPeople, getOwnersForEntities } from "@/lib/people";
+import { getHouseholdAccess } from "@/lib/household/access";
 import { requireAuth } from "@/lib/household/financial-auth";
 import { calculatePropertyEquity, getLiabilityMagnitude } from "@/lib/properties/equity";
 import {
@@ -100,6 +101,7 @@ export default async function PropertyPage({ params, searchParams }: PropertyPag
     notFound();
   }
 
+  const access = await getHouseholdAccess(userId);
   const currentFinancialYear = getAustralianFinancialYearForDate();
   const financialYear = getAustralianFinancialYearRange(
     parseFinancialYearStartYear(query.fy, currentFinancialYear.startYear),
@@ -121,7 +123,8 @@ export default async function PropertyPage({ params, searchParams }: PropertyPag
     getPropertyValuations([property.id]),
     getPropertyTaggedTransactions(property.id, 25),
     getPropertyTaxYearSummary(property.id, financialYear.startYear),
-    getPeople(userId),
+    Promise.all([getPeople(access.ownerUserId), getPeople(userId)]).then(([roster, personal]) =>
+      [...new Map([...roster, ...personal.filter(person => person.kind === "self")].map(person => [person.id, person])).values()]),
     getOwnersForEntities("property", [property.id]),
   ]);
 
@@ -219,7 +222,7 @@ export default async function PropertyPage({ params, searchParams }: PropertyPag
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Equity</CardTitle>
+            <CardTitle>Equity from visible linked accounts</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-semibold">

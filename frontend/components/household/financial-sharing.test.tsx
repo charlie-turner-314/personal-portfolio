@@ -48,3 +48,14 @@ describe("financial sharing consent controls", () => {
   });
 
 });
+
+it("shares property explicitly while leaving linked mortgage account consent independent", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ ...initial, properties: [{ id: "home", name: "Home", sharedWith: [] }] }))
+    .mockResolvedValueOnce(response({ success: true }))
+    .mockResolvedValueOnce(response({ ...initial, properties: [{ id: "home", name: "Home", sharedWith: ["partner"] }] })));
+  render(<FinancialSharing />);
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Share property Home with Jess" }));
+  await waitFor(() => expect(screen.getByText("Shared · selected members can view and edit property details and valuations")).toBeInTheDocument());
+  expect(JSON.parse(vi.mocked(fetch).mock.calls[1][1]!.body as string)).toEqual({ resource: "property", propertyId: "home", memberUserIds: ["partner"] });
+  expect(screen.getByRole("checkbox", { name: "Share Savings with Jess" })).not.toBeChecked();
+});

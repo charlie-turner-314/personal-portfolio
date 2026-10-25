@@ -238,7 +238,9 @@ def create_transaction(
             raise HTTPException(status_code=404, detail="Category not found")
 
     transaction_data = transaction.model_dump()
-    transaction_data["user_id"] = user_id
+    # Collaborators write into the canonical account; their login never takes
+    # ownership of its financial history.
+    transaction_data["user_id"] = account.user_id
     if transaction.category_id:
         transaction_data["category_verified_at"] = datetime.utcnow()
     db_transaction = Transaction(**transaction_data)

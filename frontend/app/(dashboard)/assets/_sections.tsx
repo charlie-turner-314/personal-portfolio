@@ -57,6 +57,7 @@ export async function AssetsSection() {
 
   return (
     <AssetManagement
+      actorUserId={userId}
       initialAccounts={accounts}
       initialAccountFreshness={accountFreshness}
       initialProperties={properties}

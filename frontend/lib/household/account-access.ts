@@ -28,3 +28,19 @@ export function transactionAccess(transactionId: AnyPgColumn, actorUserId: strin
   return sql`${transactionId} in (select accessible_transaction.id from transactions accessible_transaction
     where ${accountAccess(sql`accessible_transaction.account_id`, actorUserId)})`;
 }
+
+/** Property permission is explicit; linked account permission is evaluated separately. */
+export function propertyAccess(propertyId: AnyPgColumn | SQL, actorUserId: string | SQL | AnyPgColumn): SQL {
+  return sql`${propertyId} in (
+    select permitted_property.id from properties permitted_property
+    where permitted_property.user_id = ${actorUserId}
+    or exists (
+      select 1 from household_property_shares permitted_share
+      where permitted_share.property_id = permitted_property.id
+        and permitted_share.member_user_id = ${actorUserId}
+        and permitted_share.granted_by_user_id = permitted_property.user_id
+        and permitted_property.is_active = true
+        and ${sameHousehold(sql`permitted_property.user_id`, actorUserId)}
+    )
+  )`;
+}
