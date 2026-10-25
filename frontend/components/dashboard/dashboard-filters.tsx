@@ -160,7 +160,11 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
         value={selectedPersonId ? [selectedPersonId] : []}
         onChange={updateSelectedPeople}
         single
+        personalDefault
       />
+      <span className="text-xs text-muted-foreground">
+        Cash flow and cash balances · {selectedPersonId === "all" ? "whole accounts" : selectedPersonId ? "selected person's share" : "my ownership share"}
+      </span>
       <Popover open={accountsOpen} onOpenChange={setAccountsOpen}>
         <PopoverTrigger
           className={cn(

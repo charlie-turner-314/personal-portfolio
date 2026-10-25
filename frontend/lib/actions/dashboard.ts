@@ -103,6 +103,9 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return { total: 0, currency: "EUR" };
 
+  const ownershipScope = personId === "all" ? undefined : personId ?? {
+    userId: session.user.id, householdPersonId: session.householdPersonId,
+  };
   const conditions = [
     accountAccess(accounts.id, session.user.id),
     eq(accounts.isActive, true),
@@ -118,7 +121,7 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
     WHERE ab.account_id = ${accounts.id} AND ab.date::date <= CURRENT_DATE
     ORDER BY ab.date DESC LIMIT 1
   ), ${accounts.functionalBalance}, 0)`;
-  const share = ownershipShareSql(personId, accounts.id, sql`CURRENT_DATE`);
+  const share = ownershipShareSql(ownershipScope, accounts.id, sql`CURRENT_DATE`);
   const [result, currency] = await Promise.all([
     db.select({ total: sql<string>`COALESCE(SUM(${balance} * ${share}), 0)` })
       .from(accounts).where(and(...conditions)),
@@ -131,6 +134,9 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return [];
 
+  const ownershipScope = personId === "all" ? undefined : personId ?? {
+    userId: session.user.id, householdPersonId: session.householdPersonId,
+  };
   const conditions = [
     accountAccess(accounts.id, session.user.id),
     eq(accounts.isActive, true),
@@ -139,7 +145,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   const normalizedAccountIds = normalizeAccountIds(accountIds);
   if (normalizedAccountIds?.length) conditions.push(inArray(accounts.id, normalizedAccountIds));
   const day = sql`cash_days.day`;
-  const share = ownershipShareSql(personId, accounts.id, day);
+  const share = ownershipShareSql(ownershipScope, accounts.id, day);
 
   // Carry each account's latest known balance forward independently, so an
   // account without a snapshot on a particular day does not disappear. Never
@@ -167,6 +173,9 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
 async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return summarizeActivity([]);
+  const ownershipScope = personId === "all" ? undefined : personId ?? {
+    userId: session.user.id, householdPersonId: session.householdPersonId,
+  };
   const normalizedAccountIds = normalizeAccountIds(accountIds);
   const conditions = [
     accountAccess(transactions.accountId, session.user.id),
@@ -190,16 +199,16 @@ async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: s
       WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
         (
           SELECT CASE WHEN COUNT(*) FILTER (WHERE ${linkedAmountInCurrency} IS NULL) > 0 THEN NULL
-            ELSE SUM(${linkedAmountInCurrency} * ${ownershipShareSql(personId, t2AccountId, t2BookedAt)}) END
+            ELSE SUM(${linkedAmountInCurrency} * ${ownershipShareSql(ownershipScope, t2AccountId, t2BookedAt)}) END
           FROM ${transactions} t2
           JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
           WHERE tl2.group_id = ${transactionLinks.groupId}
-            AND t2.user_id = ${session.user.id}
+            AND ${accountAccess(t2AccountId, session.user.id)}
             AND t2.include_in_analytics = true
             AND t2.internal_transfer_id IS NULL
         )
       WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-      ELSE ${amountInCurrency} * ${ownershipShareSql(personId, transactions.accountId, transactions.bookedAt)}
+      ELSE ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
     END`,
   }).from(transactions)
     .leftJoin(categories, sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`)
@@ -463,7 +472,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     getTotalBalance(normalizedAccountIds, filters.personId),
     getBalanceHistory(startDate, endDate, normalizedAccountIds, filters.personId),
     getActivitySummary(startDate, endDate, normalizedAccountIds, filters.personId),
-    getAssetsOverview(normalizedAccountIds, filters.personId),
+    getAssetsOverview(normalizedAccountIds, filters.personId === "all" ? undefined : filters.personId),
     getUpcomingPlannedExpenses({ days: 90, accountIds: normalizedAccountIds }),
   ]);
   const periodSpending = { total: activity.expenses, currency };
