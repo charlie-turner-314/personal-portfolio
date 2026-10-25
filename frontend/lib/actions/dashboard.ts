@@ -418,7 +418,6 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
       incomeHistory: [],
       incomeExpense: [],
       spendingByCategory: { categories: [], total: 0 },
-      assetsOverview: emptyNetWorthOverview(),
       sankeyData: { nodes: [], links: [] },
       upcomingPlannedExpenses: {
         currency: "EUR",
@@ -471,11 +470,10 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   const currency = await getUserCurrency(session.user.id);
 
-  const [balance, balanceHistory, activity, assetsOverview, upcomingPlannedExpenses] = await Promise.all([
+  const [balance, balanceHistory, activity, upcomingPlannedExpenses] = await Promise.all([
     getTotalBalance(normalizedAccountIds, filters.personId),
     getBalanceHistory(startDate, endDate, normalizedAccountIds, filters.personId),
     getActivitySummary(startDate, endDate, normalizedAccountIds, filters.personId),
-    getAssetsOverview(normalizedAccountIds, filters.personId === "all" ? undefined : filters.personId),
     getUpcomingPlannedExpenses({ days: 90, accountIds: normalizedAccountIds }),
   ]);
   const periodSpending = { total: activity.expenses, currency };
@@ -605,7 +603,6 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     incomeHistory,
     incomeExpense,
     spendingByCategory,
-    assetsOverview,
     sankeyData,
     upcomingPlannedExpenses,
     periodLabel,

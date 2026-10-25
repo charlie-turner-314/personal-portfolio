@@ -1,5 +1,7 @@
 "use server";
 
+import { cache } from "react";
+
 import { getAuthenticatedSession, requireAuth } from "@/lib/household/financial-auth";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
@@ -120,9 +122,15 @@ export async function listHoldings(accountId?: string): Promise<Holding[]> {
   return readJsonOrThrow<Holding[]>(resp);
 }
 
-export async function getPortfolio(): Promise<PortfolioSummary> {
+// Request/render scoped only: share the dashboard's identical portfolio reads,
+// while rechecking access on the next request after a grant/revocation.
+const getPortfolioForRender = cache(async (): Promise<PortfolioSummary> => {
   const resp = await signedFetch("GET", "/api/investments/portfolio/summary");
   return readJsonOrThrow<PortfolioSummary>(resp);
+});
+
+export async function getPortfolio(): Promise<PortfolioSummary> {
+  return getPortfolioForRender();
 }
 
 export type InvestmentAccount = {
