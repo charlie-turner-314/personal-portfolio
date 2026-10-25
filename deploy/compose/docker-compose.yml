@@ -75,6 +75,8 @@ services:
       CATEGORIZATION_LLM_MODEL: ${CATEGORIZATION_LLM_MODEL:-gpt-4o-mini}
       CATEGORIZER_EMBEDDING_MODEL: ${CATEGORIZER_EMBEDDING_MODEL:-}
       CATEGORIZER_VERIFIED_SNAPSHOT: ${CATEGORIZER_VERIFIED_SNAPSHOT:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,6 +122,8 @@ services:
       CATEGORIZATION_LLM_MODEL: ${CATEGORIZATION_LLM_MODEL:-gpt-4o-mini}
       CATEGORIZER_EMBEDDING_MODEL: ${CATEGORIZER_EMBEDDING_MODEL:-}
       CATEGORIZER_VERIFIED_SNAPSHOT: ${CATEGORIZER_VERIFIED_SNAPSHOT:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,6 +158,8 @@ services:
       CATEGORIZATION_LLM_MODEL: ${CATEGORIZATION_LLM_MODEL:-gpt-4o-mini}
       CATEGORIZER_EMBEDDING_MODEL: ${CATEGORIZER_EMBEDDING_MODEL:-}
       CATEGORIZER_VERIFIED_SNAPSHOT: ${CATEGORIZER_VERIFIED_SNAPSHOT:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -188,6 +194,8 @@ services:
       CATEGORIZATION_LLM_MODEL: ${CATEGORIZATION_LLM_MODEL:-gpt-4o-mini}
       CATEGORIZER_EMBEDDING_MODEL: ${CATEGORIZER_EMBEDDING_MODEL:-}
       CATEGORIZER_VERIFIED_SNAPSHOT: ${CATEGORIZER_VERIFIED_SNAPSHOT:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -219,6 +227,8 @@ services:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/data/uploads}
       # Optional features
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       LOGO_DEV_API_KEY: ${LOGO_DEV_API_KEY:-}
     volumes:
       - uploads_data:/data/uploads

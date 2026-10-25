@@ -60,6 +60,8 @@ export interface NetWorthSuperannuation {
 }
 
 export interface NetWorthOverview {
+  scope?: string;
+  accountFiltered?: boolean;
   total: number;
   grossAssets: number;
   totalLiabilities: number;

@@ -38,10 +38,10 @@ interface OnboardingProgressProps {
 export function OnboardingProgress({ currentStep }: OnboardingProgressProps) {
   return (
     <div className="w-full">
-      <div className="flex items-center justify-between">
+      <div className="grid grid-cols-2 gap-4 md:flex md:items-center md:justify-between">
         {steps.map((step, index) => (
-          <div key={step.number} className="flex items-center">
-            <div className="flex flex-col items-center">
+          <div key={step.number} className="flex min-w-0 items-center">
+            <div className="flex min-w-0 flex-1 flex-col items-center">
               <div
                 className={cn(
                   "flex h-10 w-10 items-center justify-center rounded-full border-2 text-sm font-medium transition-colors",
@@ -81,7 +81,7 @@ export function OnboardingProgress({ currentStep }: OnboardingProgressProps) {
             {index < steps.length - 1 && (
               <div
                 className={cn(
-                  "mx-4 h-0.5 flex-1 min-w-[60px]",
+                  "mx-0 h-0.5 w-0 md:mx-4 md:flex-1 md:min-w-[60px]",
                   currentStep > step.number ? "bg-primary" : "bg-muted-foreground/30"
                 )}
               />

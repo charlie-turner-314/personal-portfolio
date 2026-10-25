@@ -108,6 +108,9 @@ jobs:
         REDIS_URL: redis://localhost:6379/0
       run: python -m pytest tests/test_celery_task_registration.py tests/test_up_adapter.py tests/test_up_sync.py tests/test_demo_trade_dates.py -q
 
+    - name: Test private Ollama gateway
+      run: python -m unittest discover -s scripts/tests -p test_ollama_lan_proxy.py
+
     - name: Test bank sync waiting states
       working-directory: ./frontend
       run: pnpm exec vitest run components/settings/bank-connections-manager.test.tsx
@@ -127,6 +130,16 @@ jobs:
     - name: Test CSV routing and mapping
       working-directory: ./frontend
       run: pnpm exec vitest run lib/actions/csv-import.multi-account.test.ts lib/import/account-routing.test.ts lib/import/csv-presets.test.ts components/transactions/dashboard-import-mapping-page.test.tsx
+
+    - name: Test dashboard accounting and ownership
+      working-directory: ./frontend
+      run: pnpm exec vitest run lib/dashboard/activity.test.ts lib/dashboard/sankey.test.ts lib/actions/dashboard.activity.test.ts lib/actions/dashboard.cash.test.ts lib/actions/dashboard.net-worth.test.ts lib/people/ownership-sql.test.ts lib/net-worth/calculation.test.ts components/settings/ai-settings.test.tsx
+
+    - name: Test categorisation and person-level accounting
+      working-directory: ./backend
+      env:
+        DATABASE_URL: postgresql+psycopg://financeuser:financepass@localhost:5432/finance_db
+      run: python -m pytest tests/test_ai_settings.py tests/test_post_import_pipeline.py tests/test_category_matcher_specific_rules.py tests/test_people_filter.py tests/services/test_ownership_service.py tests/services/test_account_ownership_allocation_service.py -q
 
     - name: Build frontend
       working-directory: ./frontend

@@ -3,14 +3,17 @@ Analytics tools for the MCP server.
 """
 from typing import Optional
 
-from sqlalchemy import func, extract, case, or_, and_, text
+from sqlalchemy import func, extract, case, or_, and_, text, bindparam, literal_column
 from sqlalchemy.orm import aliased
 
+from app.services.financial_access import account_access
 from app.mcp.dependencies import get_db, validate_uuid, validate_date
 from app.models import Transaction, Category, Account, TransactionLink
 from app.services.net_worth_service import calculate_net_worth, classify_account_amount
 from app.services.ownership_service import attribute_amount, entity_ids_for_people, get_owners
 
+
+_TRANSACTION_ACCESS_SQL = str(account_access(literal_column("t.account_id"), bindparam("actor_user_id")))
 
 def _get_link_group_nets_cte(user_id: str) -> str:
     """Generate SQL CTE for calculating net amounts per link group."""
@@ -21,7 +24,7 @@ def _get_link_group_nets_cte(user_id: str) -> str:
             SUM(t.amount) as net_amount
         FROM transactions t
         JOIN transaction_links tl ON t.id = tl.transaction_id
-        WHERE t.user_id = '{user_id}'
+        WHERE {_TRANSACTION_ACCESS_SQL}
         GROUP BY tl.group_id
     )
     """
@@ -112,7 +115,7 @@ def get_spending_by_category(
             {join_type} categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
             LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
             LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE t.user_id = '{user_id}'
+            WHERE {_TRANSACTION_ACCESS_SQL}
                 AND t.transaction_type = 'debit'
                 AND t.include_in_analytics = true
                 {uncategorized_filter}
@@ -123,7 +126,7 @@ def get_spending_by_category(
             ORDER BY total DESC
         """)
 
-        results = db.execute(sql).fetchall()
+        results = db.execute(sql, {"actor_user_id": user_id}).fetchall()
 
         return [
             {
@@ -207,7 +210,7 @@ def get_income_by_category(
             INNER JOIN categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
             LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
             LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE t.user_id = '{user_id}'
+            WHERE {_TRANSACTION_ACCESS_SQL}
                 AND t.transaction_type = 'credit'
                 AND t.include_in_analytics = true
                 AND c.category_type = 'income'
@@ -218,7 +221,7 @@ def get_income_by_category(
             ORDER BY total DESC
         """)
 
-        results = db.execute(sql).fetchall()
+        results = db.execute(sql, {"actor_user_id": user_id}).fetchall()
 
         return [
             {
@@ -311,7 +314,7 @@ def get_monthly_cashflow(
             INNER JOIN categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
             LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
             LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE t.user_id = '{user_id}'
+            WHERE {_TRANSACTION_ACCESS_SQL}
                 AND t.include_in_analytics = true
                 {date_filter}
                 {_person_ids_filter_cashflow}
@@ -319,7 +322,7 @@ def get_monthly_cashflow(
             ORDER BY EXTRACT(YEAR FROM t.booked_at), EXTRACT(MONTH FROM t.booked_at)
         """)
 
-        results = db.execute(sql).fetchall()
+        results = db.execute(sql, {"actor_user_id": user_id}).fetchall()
 
         return [
             {
@@ -426,20 +429,20 @@ def get_financial_summary(
             INNER JOIN categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
             LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
             LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE t.user_id = '{user_id}'
+            WHERE {_TRANSACTION_ACCESS_SQL}
                 AND t.include_in_analytics = true
                 {date_filter}
                 {_person_ids_filter_summary}
         """)
 
-        result = db.execute(sql).fetchone()
+        result = db.execute(sql, {"actor_user_id": user_id}).fetchone()
 
         total_income = float(result.total_income or 0)
         total_expenses = float(result.total_expenses or 0)
 
         # Get account balances (current)
         accounts_query = db.query(Account).filter(
-            Account.user_id == user_id,
+            account_access(Account.id, user_id),
             Account.is_active == True
         )
         if filter_by_person and _allowed_account_ids:
@@ -535,7 +538,7 @@ def get_top_merchants(
             func.sum(func.abs(Transaction.amount)).label("total"),
             func.count(Transaction.id).label("count"),
         ).filter(
-            Transaction.user_id == user_id,
+            account_access(Transaction.account_id, user_id),
             Transaction.amount < 0,  # Only expenses
             Transaction.merchant.isnot(None),
             Transaction.merchant != "",

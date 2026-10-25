@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { budgetLimits, categories, users } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import {
   fetchBudgetInsights,
   type BudgetCategoryInsight,

@@ -8,11 +8,9 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
-from app.database import Base, get_db
+from app.database import Base, engine, get_db
 from app.main import app
 from app.models import User, Account, Holding, BrokerConnection, HoldingValuation, AccountBalance
 
@@ -62,15 +60,18 @@ class SigningClient:
 
 @pytest.fixture
 def db():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    for model in (User, Account, BrokerConnection, Holding, HoldingValuation, AccountBalance):
-        model.__table__.create(bind=engine)
-    with Session(engine) as session:
+    # Use the supported database and real grant tables. Savepoints keep commits
+    # in API/service code isolated from other tests.
+    Base.metadata.create_all(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
+    finally:
+        session.close()
+        transaction.rollback()
+        connection.close()
 
 
 @pytest.fixture
@@ -95,7 +96,7 @@ def test_create_manual_account_and_holding(client, db):
         provider.search_symbols.return_value = [
             type("S", (), {"symbol": "AAPL", "name": "Apple", "exchange": "NASDAQ", "currency": "USD"})()
         ]
-        with patch("app.routes.investments.sync_investment_account"):
+        with patch("app.routes.investments._run_sync_in_process"):
             r = client.post(
                 f"/api/investments/manual-accounts/{account_id}/holdings",
                 json={"symbol": "AAPL", "quantity": "10", "instrument_type": "equity",
@@ -108,7 +109,7 @@ def test_create_manual_account_and_holding(client, db):
 
 
 def test_create_broker_connection_encrypts_credentials(client, db):
-    with patch("app.routes.investments.sync_investment_account") as task:
+    with patch("app.routes.investments._run_sync_in_process") as task:
         r = client.post("/api/investments/broker-connections", json={
             "provider": "ibkr_flex", "flex_token": "TOKEN_X",
             "query_id_positions": "111", "query_id_trades": "222",
@@ -119,14 +120,15 @@ def test_create_broker_connection_encrypts_credentials(client, db):
     assert "connection_id" in body and "account_id" in body
     conn = db.query(BrokerConnection).one()
     assert "TOKEN_X" not in conn.credentials_encrypted
-    task.delay.assert_called_once()
+    task.assert_called_once()
 
 
 def test_delete_holding_only_for_manual(client, db):
     acc = Account(id=uuid4(), user_id="u1", name="m", account_type="investment_manual", currency="EUR")
     h = Holding(id=uuid4(), user_id="u1", account_id=acc.id, symbol="AAPL", currency="USD",
                 instrument_type="equity", quantity=Decimal("1"), source="ibkr_flex")
-    db.add_all([acc, h]); db.commit()
+    db.add(acc); db.flush()
+    db.add(h); db.commit()
     r = client.delete(f"/api/investments/holdings/{h.id}")
     assert r.status_code == 400
     h.source = "manual"; db.commit()

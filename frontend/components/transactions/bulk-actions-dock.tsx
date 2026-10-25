@@ -171,10 +171,10 @@ export function BulkActionsDock({
   };
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+    <div role="group" aria-label="Bulk transaction actions" className="fixed bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 w-[calc(100%-2rem)] -translate-x-1/2 z-50 sm:w-auto">
       <Dock
         direction="middle"
-        className="h-14 px-4 gap-3 bg-background/95 border shadow-lg"
+        className="h-auto min-h-14 w-full flex-wrap px-3 gap-2 bg-background/95 border shadow-lg sm:h-14 sm:w-max sm:flex-nowrap sm:px-4 sm:gap-3"
         disableMagnification
       >
         {/* Selection count */}

@@ -38,7 +38,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/db", () => ({ db: mocks.db }));
-vi.mock("@/lib/auth-helpers", () => ({ requireAuth: mocks.requireAuth }));
+vi.mock("@/lib/household/financial-auth", () => ({ requireAuth: mocks.requireAuth }));
 vi.mock("next/cache", () => ({
   revalidatePath: mocks.revalidatePath,
   updateTag: mocks.updateTag,

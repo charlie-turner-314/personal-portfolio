@@ -1,5 +1,7 @@
 "use client";
 
+import { getLiabilityMagnitude } from "@/lib/properties/equity";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { AccountLogo } from "@/components/ui/account-logo";
@@ -34,20 +36,20 @@ export function AccountHeader({ account, currency, freshness, onUploadCsv }: Acc
 
   return (
     <Card>
-      <CardContent className="flex items-center justify-between p-6">
-        <div className="flex items-center gap-4">
+      <CardContent className="flex flex-col items-start gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-4 sm:items-center">
           <AccountLogo
             name={account.name}
             logoUrl={account.logo?.logoUrl}
             updatedAt={account.logo?.updatedAt}
             className="!size-12"
           />
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold">{account.name}</h2>
               <Badge variant="secondary">{typeLabel}</Badge>
             </div>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
               {account.institution && (
                 <>
                   <span>{account.institution}</span>
@@ -79,9 +81,9 @@ export function AccountHeader({ account, currency, freshness, onUploadCsv }: Acc
             )}
           </div>
         </div>
-        <div className="text-right">
-          <p className="font-mono text-2xl font-semibold">
-            {formatCurrency(account.functionalBalance, currency)}
+        <div className="text-left sm:text-right">
+          <p className={cn("font-mono text-2xl font-semibold", isLiability && "text-red-600 dark:text-red-400")}>
+            {formatCurrency(isLiability ? (-getLiabilityMagnitude(account)).toString() : account.functionalBalance, currency)}
           </p>
           <p className="text-sm text-muted-foreground">
             {isLiability ? "Balance owed" : currency}

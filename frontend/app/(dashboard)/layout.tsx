@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
+import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { getOnboardingRedirectPath } from "@/lib/actions/onboarding";
 import { getCachedSession, getCachedOnboardingStatus } from "@/lib/data/cached";
@@ -36,7 +37,7 @@ export default async function DashboardLayout({
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <WalkthroughProvider>
         <AppSidebar initialUser={session.user} />
-        <SidebarInset>{children}</SidebarInset>
+        <SidebarInset><MobileNavigation />{children}</SidebarInset>
         <ImportStatusNotifier />
       </WalkthroughProvider>
     </SidebarProvider>

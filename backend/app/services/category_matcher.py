@@ -120,7 +120,9 @@ class CategoryMatcher:
         user_id: Optional[str] = None,
         user_overrides: Optional[List[Dict]] = None,
         additional_instructions: Optional[List[str]] = None,
-        auto_load_from_db: bool = True
+        auto_load_from_db: bool = True,
+        manual_ai: bool = False,
+        strict_ai_errors: bool = False
     ):
         """
         Initialize the CategoryMatcher.
@@ -138,6 +140,8 @@ class CategoryMatcher:
         self._category_cache: Optional[Dict[str, Category]] = None
         self._keyword_rules: Optional[Dict[str, List[str]]] = None
         self._openai_client = None
+        self.manual_ai = manual_ai
+        self.strict_ai_errors = strict_ai_errors
         self._category_instructions_cache: Optional[List[str]] = None
         self._account_cache: Optional[list] = None
         self._context_retriever = None
@@ -341,6 +345,11 @@ class CategoryMatcher:
             }
         return self._keyword_rules
 
+    def _provider_options(self):
+        if getattr(self, '_ai_provider', 'openai') == 'ollama':
+            return {'timeout': 120.0, 'reasoning_effort': 'none'}
+        return {'timeout': 30.0}
+
     def _get_openai_client(self) -> Optional[object]:
         """
         Get or create OpenAI client instance (cached).
@@ -355,18 +364,26 @@ class CategoryMatcher:
                 self._openai_client = OllamaCategorizerClient()
                 return self._openai_client
             try:
-                from openai import OpenAI
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    logger.warning("OPENAI_API_KEY not set, LLM categorization will be unavailable")
+                from app.services.ai_settings import ai_config, openai_client, ollama_client, AiConfigurationError
+                config = ai_config(self.db, self.user_id, manual=self.manual_ai)
+                if not config:
+                    if self.strict_ai_errors:
+                        raise AiConfigurationError("Configure an AI provider before categorising transactions.")
                     return None
-                self._openai_client = OpenAI(api_key=api_key)
+                self.LLM_MODEL = config['model']
+                self._ai_provider = config['provider']
+                self._openai_client = ollama_client() if self._ai_provider == 'ollama' else openai_client(config['key'])
                 logger.info("OpenAI client initialized successfully")
             except ImportError:
                 logger.warning("OpenAI library not installed, LLM categorization will be unavailable")
                 return None
             except Exception as e:
-                logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+                logger.error("Failed to initialize OpenAI client: %s", type(e).__name__)
+                if self.strict_ai_errors:
+                    if getattr(self, '_ai_provider', 'openai') == 'ollama':
+                        from app.services.ai_settings import AiConfigurationError
+                        raise AiConfigurationError('Mac/Ollama unavailable or the model request failed. Check the Mac and retry remaining transactions. No cloud fallback was used.') from None
+                    raise
                 return None
         return self._openai_client
 
@@ -420,7 +437,7 @@ class CategoryMatcher:
                 categories = self._load_categories()
                 category = categories.get(override_category.lower())
                 if category:
-                    logger.info(f"User override matched: '{description}' -> '{category.name}'")
+                    logger.info("User override matched a transaction")
                     return category
         
         return None
@@ -696,6 +713,47 @@ Category name:"""
             return 0.0
         return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
 
+    def _match_high_confidence_rule(
+        self, search_text: str, is_income: bool, categories: Dict[str, Category]
+    ) -> Optional[CategoryMatchResult]:
+        """Recognize specific alternatives without treating synonyms as required evidence.
+
+        Broad legacy keywords ("food", "income", "market") retain their existing
+        threshold. These narrow rules use token boundaries and reject ambiguous
+        brand products/payment purposes; they never override a user's choice.
+        """
+        confidence = 95.0
+        if confidence < self.MIN_CONFIDENCE_THRESHOLD:
+            return None
+
+        salary_words = re.findall(r"\b(?:salary|payroll|wages)\b", search_text)
+        if is_income:
+            ambiguous = re.search(
+                r"\b(?:reimbursement|reimbursements|reimbursed|advance|advances|repayment|repayments|refund|refunds|reversal|reversed|loan|loans)\b",
+                search_text,
+            )
+            category_name = "salary"
+            matched = salary_words if not ambiguous else []
+        else:
+            merchants = re.findall(r"\b(?:aldi|coles|woolworths)\b", search_text)
+            ambiguous = re.search(
+                r"\b(?:mobile|insurance|express|fuel|petrol|financial|credit|loan|loans|gift|voucher|vouchers|rewards|refund|refunds|reversal|reversed)\b",
+                search_text,
+            )
+            category_name = "groceries"
+            matched = merchants if len(set(merchants)) == 1 and not ambiguous and not salary_words else []
+
+        category = categories.get(category_name)
+        expected_type = "income" if is_income else "expense"
+        if not matched or not category or category.category_type != expected_type:
+            return None
+        return CategoryMatchResult(
+            category=category,
+            method="deterministic",
+            confidence_score=confidence,
+            matched_keywords=list(dict.fromkeys(matched)),
+        )
+
     def match_category_deterministic(
         self,
         description: Optional[str],
@@ -753,6 +811,10 @@ Category name:"""
                 logger.info(f"Matched transfer transaction to category '{transfer_cat.name}'")
                 return transfer_cat
         
+        specific_match = self._match_high_confidence_rule(search_text, is_income, categories)
+        if specific_match:
+            return specific_match.category
+
         # Match against keyword rules using exact matching only
         best_match = None
         best_confidence = 0.0
@@ -857,6 +919,7 @@ Category name:"""
                         {"role": "user", "content": prompt}
                     ],
                     temperature=self.LLM_TEMPERATURE,
+                    **self._provider_options(),
                     max_tokens=self.LLM_MAX_TOKENS
                 )
 
@@ -880,7 +943,7 @@ Category name:"""
             except Exception as e:
                 last_error = e
                 error_type = type(e).__name__
-                error_msg = str(e)
+                error_msg = type(e).__name__
                 logger.warning(f"LLM categorization attempt {attempt + 1} failed: {error_type}: {error_msg}")
 
                 # Provide diagnostics for common error types
@@ -902,7 +965,7 @@ Category name:"""
                 else:
                     logger.error(f"LLM categorization failed after {self.LLM_MAX_RETRIES} attempts: {error_type}: {error_msg}")
                     import traceback
-                    logger.debug(f"[LLM] Final error traceback:\n{traceback.format_exc()}")
+                    logger.debug("[LLM] Final error type: %s", type(e).__name__)
                     return None
 
         return None
@@ -960,6 +1023,7 @@ Category name:"""
                         {"role": "user", "content": prompt}
                     ],
                     temperature=self.LLM_TEMPERATURE,
+                    **self._provider_options(),
                     max_tokens=self.LLM_MAX_TOKENS
                 )
 
@@ -997,7 +1061,7 @@ Category name:"""
             except Exception as e:
                 last_error = e
                 error_type = type(e).__name__
-                error_msg = str(e)
+                error_msg = type(e).__name__
                 logger.warning(f"LLM categorization attempt {attempt + 1} failed: {error_type}: {error_msg}")
 
                 # Provide diagnostics for common error types
@@ -1019,7 +1083,7 @@ Category name:"""
                 else:
                     logger.error(f"LLM categorization failed after {self.LLM_MAX_RETRIES} attempts: {error_type}: {error_msg}")
                     import traceback
-                    logger.debug(f"[LLM] Final error traceback:\n{traceback.format_exc()}")
+                    logger.debug("[LLM] Final error type: %s", type(e).__name__)
                     return None, 0, 0.0
 
         return None, 0, 0.0
@@ -1160,6 +1224,10 @@ Category name:"""
                     confidence_score=100.0,
                     matched_keywords=["transfer"]
                 )
+
+        specific_match = self._match_high_confidence_rule(search_text, is_income, categories)
+        if specific_match:
+            return specific_match
 
         # Match against keyword rules using exact matching only
         best_match = None

@@ -20,3 +20,6 @@ api_router.include_router(up.router, prefix="/up", tags=["up"])
 api_router.include_router(investments.router, prefix="/investments", tags=["investments"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(tax_reports.router, prefix="/tax-reports", tags=["tax-reports"])
+
+from app.routes import ai_settings
+api_router.include_router(ai_settings.router, prefix="/ai-settings", tags=["ai-settings"])

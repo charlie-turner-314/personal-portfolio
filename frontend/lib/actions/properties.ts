@@ -13,7 +13,7 @@ import {
   type NewProperty,
   type NewPropertyValuation,
 } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { isLiabilityAccountType } from "@/lib/constants/account-types";
 import {
   getAustralianFinancialYearRange,

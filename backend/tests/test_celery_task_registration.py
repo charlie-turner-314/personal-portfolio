@@ -13,6 +13,7 @@ from celery_app import celery_app
 celery_app.loader.import_default_modules()
 celery_app.finalize()
 assert 'tasks.up_tasks.sync_up_connection' in celery_app.tasks
+assert 'tasks.ai_categorization.categorize_uncategorized' in celery_app.tasks
 for entry in celery_app.conf.beat_schedule.values():
     assert entry['task'] in celery_app.tasks, entry['task']
 assert celery_app.tasks['tasks.up_tasks.sync_up_connection'].app is celery_app

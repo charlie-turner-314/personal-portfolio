@@ -9,6 +9,7 @@ from enum import Enum
 from app.database import get_db
 from app.models import Transaction, Account, Category
 from app.db_helpers import get_user_id
+from app.services.financial_access import account_access
 from app.schemas import (
     TransactionCreate,
     TransactionResponse,
@@ -59,7 +60,7 @@ def list_transactions(
     user_id = get_user_id(user_id)
     query = (
         db.query(Transaction)
-        .filter(Transaction.user_id == user_id)
+        .filter(account_access(Transaction.account_id, user_id))
         .options(joinedload(Transaction.account), joinedload(Transaction.category))
     )
 
@@ -168,7 +169,7 @@ def get_spending_by_category(
     ).outerjoin(
         Category,
         (Transaction.category_id == Category.id) | (Transaction.category_system_id == Category.id)
-    ).filter(Transaction.user_id == user_id)
+    ).filter(account_access(Transaction.account_id, user_id))
 
     # Only expenses (negative amounts)
     query = query.filter(Transaction.amount < 0)
@@ -204,7 +205,7 @@ def get_transaction(
     user_id = get_user_id(user_id)
     transaction = db.query(Transaction).filter(
         Transaction.id == transaction_id,
-        Transaction.user_id == user_id
+        account_access(Transaction.account_id, user_id)
     ).first()
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -222,7 +223,7 @@ def create_transaction(
     # Verify account exists and belongs to user
     account = db.query(Account).filter(
         Account.id == transaction.account_id,
-        Account.user_id == user_id
+        account_access(Account.id, user_id)
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -258,7 +259,7 @@ def update_transaction(
     user_id = get_user_id(user_id)
     transaction = db.query(Transaction).filter(
         Transaction.id == transaction_id,
-        Transaction.user_id == user_id
+        account_access(Transaction.account_id, user_id)
     ).first()
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -289,7 +290,7 @@ def assign_category(
     user_id = get_user_id(user_id)
     transaction = db.query(Transaction).filter(
         Transaction.id == transaction_id,
-        Transaction.user_id == user_id
+        account_access(Transaction.account_id, user_id)
     ).first()
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -319,7 +320,7 @@ def delete_transaction(
     user_id = get_user_id(user_id)
     transaction = db.query(Transaction).filter(
         Transaction.id == transaction_id,
-        Transaction.user_id == user_id
+        account_access(Transaction.account_id, user_id)
     ).first()
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -330,15 +331,16 @@ def delete_transaction(
 
 
 @router.delete("/by-account/{account_id}", status_code=200)
-def delete_transactions_by_account(account_id: UUID, db: Session = Depends(get_db)):
+def delete_transactions_by_account(account_id: UUID, user_id: Optional[str] = None, db: Session = Depends(get_db)):
     """
     Delete all transactions for a specific account.
     Use with caution - this permanently deletes all transactions.
     """
     from app.models import Account
     
-    # Verify account exists
-    account = db.query(Account).filter(Account.id == account_id).first()
+    user_id = get_user_id(user_id)
+    # Require access even for a caller who knows a private account UUID.
+    account = db.query(Account).filter(Account.id == account_id, account_access(Account.id, user_id)).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     

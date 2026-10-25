@@ -1,5 +1,6 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import {
   endOfDay,
   endOfMonth,
@@ -21,7 +22,7 @@ import {
   type SQLWrapper,
 } from "drizzle-orm";
 import type { SupportedHorizon } from "@/lib/dashboard/query-params";
-import { getAuthenticatedSession } from "@/lib/auth-helpers";
+import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { db } from "@/lib/db";
 import { categories, transactions, users } from "@/lib/db/schema";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";
@@ -239,7 +240,7 @@ async function getLatestTransactionDate(
   userId: string,
   accountIds: string[]
 ): Promise<Date> {
-  const conditions = [eq(transactions.userId, userId)];
+  const conditions = [accountAccess(transactions.accountId, userId)];
   if (accountIds.length > 0) {
     conditions.push(inArray(transactions.accountId, accountIds));
   }
@@ -581,7 +582,7 @@ export async function getCategorySpendingTransactionsPage(
   )!;
 
   const conditions: SQLWrapper[] = [
-    eq(transactions.userId, userId),
+    accountAccess(transactions.accountId, userId),
     eq(transactions.transactionType, "debit"),
     eq(transactions.includeInAnalytics, true),
     gte(transactions.bookedAt, startDate),

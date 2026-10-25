@@ -700,7 +700,7 @@ export const transactions = pgTable(
     counterpartyIbanHash: varchar("counterparty_iban_hash", { length: 64 }),
     internalTransferId: uuid("internal_transfer_id"), // FK to internal_transfers.id (enforced at DB level in migration 0017)
     categoryId: uuid("category_id").references(() => categories.id), // User-overridden category
-    categoryVerifiedAt: timestamp("category_verified_at"), // Explicit user confirmation, including accepting an AI choice
+    categoryVerifiedAt: timestamp("category_verified_at"),
     categoryConfidence: integer("category_confidence"), // Estimated score, 0–100; null means not scored
     categorySystemId: uuid("category_system_id").references(() => categories.id), // AI-assigned category (never updated by user)
     propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
@@ -1416,6 +1416,7 @@ export const people = pgTable(
     userId: text("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
+    linkedUserId: text("linked_user_id").references(() => users.id, { onDelete: "set null" }),
     name: varchar("name", { length: 255 }).notNull(),
     // 'self' = auto-created person representing the operator (one per user)
     // 'member' = anyone else in the household
@@ -1429,6 +1430,7 @@ export const people = pgTable(
   },
   (t) => [
     index("idx_people_user").on(t.userId),
+    index("people_linked_user_idx").on(t.linkedUserId),
     uniqueIndex("people_user_self_uq")
       .on(t.userId)
       .where(sql`${t.kind} = 'self'`),
@@ -2114,6 +2116,70 @@ export type NewReport = typeof reports.$inferInsert;
 
 export type ReportRun = typeof reportRuns.$inferSelect;
 export type NewReportRun = typeof reportRuns.$inferInsert;
+
+// Credentials are returned only as a configured flag by the backend settings API.
+export const userAiSettings = pgTable("user_ai_settings", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  apiKeyEncrypted: text("api_key_encrypted"),
+  provider: text("provider").notNull().default("openai"),
+  model: text("model"),
+  automatic: boolean("automatic").notNull().default(true),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+export const aiCategorizationJobs = pgTable("ai_categorization_jobs", {
+  id: uuid("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("queued"),
+  transactionIds: jsonb("transaction_ids").notNull().default([]),
+  total: integer("total").notNull().default(0),
+  processed: integer("processed").notNull().default(0),
+  categorized: integer("categorized").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  error: text("error"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [uniqueIndex("ai_jobs_one_active_user").on(t.userId).where(sql`${t.status} IN ('queued', 'running')`)]);
+
+// Login identity stays independent from the user ID owning household finances.
+export const householdMemberships = pgTable("household_memberships", {
+  memberUserId: text("member_user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  personId: uuid("person_id").notNull().unique().references(() => people.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("household_memberships_owner_idx").on(t.ownerUserId), check("household_member_not_owner", sql`${t.memberUserId} <> ${t.ownerUserId}`)]);
+
+export const householdInvitations = pgTable("household_invitations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("household_invitations_owner_idx").on(t.ownerUserId)]);
+
+// Financial access is explicit and independent of economic ownership percentages.
+export const householdAccountShares = pgTable("household_account_shares", {
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  memberUserId: text("member_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  grantedByUserId: text("granted_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.accountId, t.memberUserId] }),
+  index("household_account_shares_member_idx").on(t.memberUserId),
+  check("household_account_shares_not_self", sql`${t.memberUserId} <> ${t.grantedByUserId}`),
+]);
+
+export const householdNetWorthShares = pgTable("household_net_worth_shares", {
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  memberUserId: text("member_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.ownerUserId, t.memberUserId] }),
+  index("household_net_worth_shares_member_idx").on(t.memberUserId),
+  check("household_net_worth_shares_not_self", sql`${t.ownerUserId} <> ${t.memberUserId}`),
+]);
 
 // On-demand categorisation trial; automatic assignments remain on transactions.
 export const categorizationSuggestions = pgTable("categorization_suggestions", {

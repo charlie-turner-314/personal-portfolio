@@ -14,6 +14,7 @@ from typing import Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.services.financial_access import account_access, value_in_actor_currency
 from app.mcp.dependencies import get_db, validate_date
 from app.models import (
     Account,
@@ -41,7 +42,7 @@ def _latest_valuations_for_user(db: Session, user_id: str):
     """Return mapping of holding_id -> latest HoldingValuation for the user."""
     holding_ids_subq = (
         db.query(Holding.id)
-        .filter(Holding.user_id == user_id)
+        .filter(account_access(Holding.account_id, user_id))
         .subquery()
     )
 
@@ -91,7 +92,7 @@ def list_holdings_impl(
         if not allowed_account_ids:
             return []
 
-    query = db.query(Holding).filter(Holding.user_id == user_id)
+    query = db.query(Holding).filter(account_access(Holding.account_id, user_id))
     if account_id:
         query = query.filter(Holding.account_id == account_id)
     if allowed_account_ids is not None:
@@ -108,14 +109,15 @@ def list_holdings_impl(
     out = []
     for h in holdings:
         v = valuations.get(h.id)
-        value_str = str(v.value_user_currency) if v else None
+        visible_value = value_in_actor_currency(db, v.value_user_currency, h.user_id, user_id, v.date) if v else None
+        value_str = str(visible_value) if visible_value is not None else None
         if single_person and v is not None and v.value_user_currency is not None:
             cache_key = (str(h.account_id), v.date)
             owners = owners_cache.setdefault(
                 cache_key, get_owners(db, "account", h.account_id, as_of=v.date)
             )
             weighted_value = attribute_amount(
-                float(v.value_user_currency), owners, person_ids[0]
+                float(visible_value), owners, person_ids[0]
             )
             value_str = str(Decimal(str(weighted_value)))
         out.append(
@@ -184,7 +186,7 @@ def get_portfolio_summary_impl(
     accounts_query = (
         db.query(Account)
         .filter(
-            Account.user_id == user_id,
+            account_access(Account.id, user_id),
             Account.account_type.in_(INVESTMENT_ACCOUNT_TYPES),
             Account.is_active == True,  # noqa: E712
         )
@@ -201,7 +203,7 @@ def get_portfolio_summary_impl(
     # Sum value per account from latest valuations of holdings in those accounts.
     holdings = (
         db.query(Holding)
-        .filter(Holding.user_id == user_id, Holding.account_id.in_(account_ids))
+        .filter(account_access(Holding.account_id, user_id), Holding.account_id.in_(account_ids))
         .all()
     ) if account_ids else []
 
@@ -212,7 +214,7 @@ def get_portfolio_summary_impl(
         v = valuations.get(h.id)
         if v is None:
             continue
-        val = Decimal(v.value_user_currency or 0)
+        val = value_in_actor_currency(db, v.value_user_currency or 0, h.user_id, user_id, v.date)
         if single_person:
             cache_key = (str(h.account_id), v.date)
             owners = owners_cache.setdefault(
@@ -285,7 +287,7 @@ def get_portfolio_history_impl(
     accounts_query = (
         db.query(Account)
         .filter(
-            Account.user_id == user_id,
+            account_access(Account.id, user_id),
             Account.account_type.in_(INVESTMENT_ACCOUNT_TYPES),
         )
     )
@@ -293,6 +295,7 @@ def get_portfolio_history_impl(
         accounts_query = accounts_query.filter(Account.id.in_(allowed_person_ids))
     account_objs = accounts_query.all()
     account_ids = [a.id for a in account_objs]
+    owners_by_account = {a.id: a.user_id for a in account_objs}
 
     if not account_ids:
         return []
@@ -312,7 +315,7 @@ def get_portfolio_history_impl(
     by_date: dict = {}
     for r in rows:
         key = r.date.isoformat() if hasattr(r.date, "isoformat") else str(r.date)
-        val = Decimal(r.balance_in_functional_currency or 0)
+        val = value_in_actor_currency(db, r.balance_in_functional_currency or 0, owners_by_account[r.account_id], user_id, r.date.date() if isinstance(r.date, datetime) else r.date)
         if single_person:
             balance_date = r.date.date() if isinstance(r.date, datetime) else r.date
             cache_key = (str(r.account_id), balance_date)
@@ -343,7 +346,7 @@ def search_symbol_impl(db: Session, user_id: str, query: str) -> list[dict]:
     pattern = f"%{query.lower()}%"
     rows = (
         db.query(Holding.symbol, Holding.name, Holding.currency, Holding.instrument_type)
-        .filter(Holding.user_id == user_id)
+        .filter(account_access(Holding.account_id, user_id))
         .filter(
             (func.lower(Holding.symbol).like(pattern))
             | (func.lower(func.coalesce(Holding.name, "")).like(pattern))
@@ -423,7 +426,7 @@ def _trades_for_user(
     """
     account_ids_subq = (
         db.query(Account.id)
-        .filter(Account.user_id == user_id)
+        .filter(account_access(Account.id, user_id))
         .subquery()
     )
     q = db.query(BrokerTrade).filter(BrokerTrade.account_id.in_(account_ids_subq))
@@ -517,7 +520,7 @@ def get_unrealized_pnl_impl(
         return []
 
     # Latest valuation per symbol — pick most recent HoldingValuation joined to Holding
-    holdings_q = db.query(Holding).filter(Holding.user_id == user_id)
+    holdings_q = db.query(Holding).filter(account_access(Holding.account_id, user_id))
     if account_id:
         holdings_q = holdings_q.filter(Holding.account_id == account_id)
     if allowed_account_ids is not None:
@@ -562,7 +565,7 @@ def get_holding_trades_impl(db: Session, user_id: str, holding_id: str) -> list[
     """Return broker trades behind a holding, chronologically, with running quantity."""
     holding = (
         db.query(Holding)
-        .filter(Holding.id == holding_id, Holding.user_id == user_id)
+        .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
         .first()
     )
     if not holding:

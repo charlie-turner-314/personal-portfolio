@@ -1,5 +1,6 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { createHash } from "node:crypto";
 import { discoverAccountAliases, routeAccountRow, type AccountRouting } from "@/lib/import/account-routing";
 import { revalidatePath } from "next/cache";
@@ -14,7 +15,7 @@ import {
   superContributions,
   transactions,
 } from "@/lib/db/schema";
-import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
+import { getAuthenticatedSession, requireAuth } from "@/lib/household/financial-auth";
 import { deleteTransactions } from "@/lib/actions/transactions";
 import { storage } from "@/lib/storage";
 import { getBackendBaseUrl } from "@/lib/backend-url";
@@ -247,7 +248,7 @@ export async function initializeCsvImport(
     const account = await db.query.accounts.findFirst({
       where: and(
         eq(accounts.id, accountId),
-        eq(accounts.userId, session.user.id)
+        accountAccess(accounts.id, session.user.id)
       ),
     });
 
@@ -573,7 +574,7 @@ export async function saveColumnMapping(
       const content = (await storage.download(filePath)).toString("utf-8");
       const { headers, rows } = parseDelimitedText(content, detectCsvDelimiter(content));
       const aliases = discoverAccountAliases(headers, rows, normalizedMapping);
-      const owned = await db.query.accounts.findMany({ where: eq(accounts.userId, userId) });
+      const owned = await db.query.accounts.findMany({ where: accountAccess(accounts.id, userId) });
       for (const alias of aliases) {
         if (!Object.hasOwn(normalizedMapping.accountMappings ?? {}, alias)) {
           return { success: false, error: `Confirm the account mapping for ${alias}` };
@@ -792,7 +793,7 @@ export async function previewImportedTransactions(
 
     const multiAccount = Boolean(mapping.sourceAccount || mapping.destinationAccount);
     const ownedAccounts = multiAccount
-      ? await db.query.accounts.findMany({ where: eq(accounts.userId, userId) }) : [];
+      ? await db.query.accounts.findMany({ where: accountAccess(accounts.id, userId) }) : [];
     if (multiAccount) {
       for (const alias of discoverAccountAliases(headers, rows, mapping)) {
         if (!Object.hasOwn(mapping.accountMappings ?? {}, alias)) return { success: false, error: `Confirm the account mapping for ${alias}` };
@@ -912,7 +913,7 @@ export async function previewImportedTransactions(
     const existingTransactions = await db.query.transactions.findMany({
       where: and(
         multiAccount ? inArray(transactions.accountId, ownedAccounts.map((account) => account.id)) : eq(transactions.accountId, importSession.accountId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
     });
 
@@ -1263,7 +1264,7 @@ export async function finalizeImport(
 
     // Get account for currency
     const account = await db.query.accounts.findFirst({
-      where: eq(accounts.id, importSession.accountId),
+      where: and(eq(accounts.id, importSession.accountId), accountAccess(accounts.id, session.user.id)),
     });
 
     if (!account) {
@@ -1501,7 +1502,7 @@ export async function enqueueBackgroundImport(
 
     // Get account for currency
     const account = await db.query.accounts.findFirst({
-      where: eq(accounts.id, importSession.accountId),
+      where: and(eq(accounts.id, importSession.accountId), accountAccess(accounts.id, session.user.id)),
     });
 
     if (!account) {
@@ -1811,7 +1812,7 @@ export async function importSuperStatement(
 
     const [account, superAccount] = await Promise.all([
       db.query.accounts.findFirst({
-        where: and(eq(accounts.id, importSession.accountId), eq(accounts.userId, userId)),
+        where: and(eq(accounts.id, importSession.accountId), accountAccess(accounts.id, userId)),
       }),
       db.query.superAccounts.findFirst({
         where: and(eq(superAccounts.accountId, importSession.accountId), eq(superAccounts.userId, userId)),
@@ -1933,7 +1934,7 @@ export async function importSuperStatement(
       await db.update(accounts).set({
         functionalBalance: latestBalance.balanceInFunctionalCurrency,
         updatedAt: new Date(),
-      }).where(and(eq(accounts.id, account.id), eq(accounts.userId, userId)));
+      }).where(and(eq(accounts.id, account.id), accountAccess(accounts.id, userId)));
     }
 
     await db.update(csvImports).set({
@@ -2014,7 +2015,7 @@ export async function getCsvImportHistory(): Promise<CsvImportWithStats[]> {
     .where(
       and(
         inArray(transactions.csvImportId, importIds),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       )
     )
     .groupBy(transactions.csvImportId);
@@ -2064,7 +2065,7 @@ export async function revertCsvImport(
   const linkedTransactions = await db
     .select({ id: transactions.id })
     .from(transactions)
-    .where(and(eq(transactions.csvImportId, importId), eq(transactions.userId, userId)));
+    .where(and(eq(transactions.csvImportId, importId), accountAccess(transactions.accountId, userId)));
 
   if (!linkedTransactions.length) {
     return { success: false, error: "No transactions linked to this import. It may predate import tracking." };

@@ -15,6 +15,8 @@ from app.db_helpers import set_request_user_id, clear_request_user_id
 from app.models import CsvImport, Account, Transaction, User, Category
 from app.services.event_publisher import EventPublisher
 from app.services.category_matcher import CategoryMatcher
+from app.services.financial_access import account_access
+from sqlalchemy import text
 from app.services.account_balance_service import AccountBalanceService
 from app.schemas import (
     TransactionInput,
@@ -61,13 +63,41 @@ def _get_categorization_instructions_from_db(db, user_id: str) -> List[str]:
     return [inst[0] for inst in instructions if inst[0]]
 
 
-def _process_transaction_batch(
+def _process_transaction_batch(db, user_id, transactions_data, user_overrides, categorization_instructions, csv_import_id=None):
+    """Recheck queued-job access, then retain each target account's canonical owner."""
+    if any(row.get("multi_account") for row in transactions_data):
+        if not all(row.get("multi_account") for row in transactions_data):
+            raise ValueError("Cannot mix routed and single-account CSV rows")
+        from app.services.multi_account_csv import import_routed_rows
+        return import_routed_rows(db, user_id, transactions_data, csv_import_id)
+    account_ids = {str(row["account_id"]) for row in transactions_data}
+    permitted = db.query(Account).filter(Account.id.in_(account_ids), account_access(Account.id, user_id)).all()
+    by_id = {str(account.id): account for account in permitted}
+    if account_ids - by_id.keys():
+        raise ValueError("Mapped account is unavailable")
+    grouped = {}
+    for row in transactions_data:
+        grouped.setdefault(by_id[str(row["account_id"])].user_id, []).append(row)
+    combined = {"inserted_count": 0, "skipped_count": 0, "inserted_transactions": [], "categorization_summary": {}}
+    for owner_id, rows in grouped.items():
+        result = _insert_owned_transaction_batch(db, owner_id, rows, user_overrides, categorization_instructions, csv_import_id, categorization_user_id=user_id)
+        for key in ("inserted_count", "skipped_count"):
+            combined[key] += result[key]
+        combined["inserted_transactions"].extend(result["inserted_transactions"])
+        for key, value in (result.get("categorization_summary") or {}).items():
+            if isinstance(value, (int, float)):
+                combined["categorization_summary"][key] = combined["categorization_summary"].get(key, 0) + value
+    return combined
+
+
+def _insert_owned_transaction_batch(
     db,
     user_id: str,
     transactions_data: List[Dict[str, Any]],
     user_overrides: List[dict],
     categorization_instructions: List[str],
     csv_import_id: Optional[str] = None,
+    categorization_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Process a batch of transactions: normalize, categorize and insert.
@@ -80,6 +110,9 @@ def _process_transaction_batch(
             raise ValueError("Cannot mix routed and single-account CSV rows")
         from app.services.multi_account_csv import import_routed_rows
         return import_routed_rows(db, user_id, transactions_data, csv_import_id)
+
+    for account_id in sorted({str(row["account_id"]) for row in transactions_data}):
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"csv-account:{account_id}"})
 
     from app.routes.categories import categorize_transactions_batch
     from decimal import Decimal
@@ -191,7 +224,7 @@ def _process_transaction_batch(
         )
 
         categorization_result: BatchCategorizeResponse = categorize_transactions_batch(
-            categorize_request, db, user_id=user_id
+            categorize_request, db, user_id=categorization_user_id or user_id
         )
 
         categorization_summary = {
@@ -402,10 +435,10 @@ def process_csv_import(
             # Import daily balances if provided (CSV-specific)
             if daily_balances:
                 balance_service = AccountBalanceService(db)
-                user = db.query(User).filter(User.id == user_id).first()
-                functional_currency = user.functional_currency if user else "EUR"
-
                 for account_id in affected_account_ids:
+                    account = db.query(Account).filter(Account.id == account_id).one()
+                    user = db.query(User).filter(User.id == account.user_id).first()
+                    functional_currency = user.functional_currency if user else "EUR"
                     balance_service.import_daily_balances(
                         account_id=account_id,
                         daily_balances=daily_balances,
@@ -413,13 +446,13 @@ def process_csv_import(
                     )
 
             # Chain to shared post-processing pipeline
-            account_ids = affected_account_ids
-            post_import_pipeline.delay(
-                user_id=user_id,
-                account_ids=account_ids,
-                transaction_ids=all_inserted_transaction_ids,
-                is_initial_sync=False,
-            )
+            by_owner = {}
+            for txn in all_inserted_transactions:
+                group = by_owner.setdefault(txn.user_id, {"accounts": set(), "transactions": []})
+                group["accounts"].add(str(txn.account_id))
+                group["transactions"].append(str(txn.id))
+            for owner_id, group in by_owner.items():
+                post_import_pipeline.delay(user_id=owner_id, account_ids=sorted(group["accounts"]), transaction_ids=group["transactions"], is_initial_sync=False)
 
         # Update CSV import record
         csv_import.status = "completed"

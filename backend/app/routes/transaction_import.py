@@ -21,6 +21,7 @@ import logging
 
 from app.database import get_db
 from app.db_helpers import get_user_id
+from app.services.financial_access import account_access
 from app.models import Transaction, Account, User, ExchangeRate
 from pydantic import BaseModel
 from app.schemas import (
@@ -83,10 +84,33 @@ class TransactionImportResponse(BaseModel):
 
 
 @router.post("/import", response_model=TransactionImportResponse)
-def import_transactions(
-    request: TransactionImportRequest,
-    db: Session = Depends(get_db)
-):
+def import_transactions(request: TransactionImportRequest, db: Session = Depends(get_db)):
+    """Authorize the actor, then process against each account's retained data owner."""
+    actor_user_id = get_user_id(request.user_id)
+    if not request.transactions:
+        raise HTTPException(status_code=400, detail="No transactions provided")
+    account_ids = {txn.account_id for txn in request.transactions}
+    permitted = db.query(Account).filter(Account.id.in_(account_ids), account_access(Account.id, actor_user_id)).all()
+    by_id = {account.id: account for account in permitted}
+    if account_ids - by_id.keys():
+        raise HTTPException(status_code=404, detail="Account not found")
+    grouped = {}
+    for txn in request.transactions:
+        grouped.setdefault(by_id[txn.account_id].user_id, []).append(txn)
+    results = [_import_owned_transactions(request.model_copy(update={"transactions": rows}), db, owner_id, actor_user_id) for owner_id, rows in grouped.items()]
+    if len(results) == 1:
+        return results[0]
+    summaries = {}
+    for result in results:
+        for key, value in (result.categorization_summary or {}).items():
+            if isinstance(value, (int, float)):
+                summaries[key] = summaries.get(key, 0) + value
+    count = sum(result.transactions_inserted for result in results)
+    return TransactionImportResponse(success=True, message=f"Successfully imported {count} transactions", transactions_inserted=count,
+        transaction_ids=[tid for result in results for tid in (result.transaction_ids or [])], categorization_summary=summaries)
+
+
+def _import_owned_transactions(request: TransactionImportRequest, db: Session, user_id: str, actor_user_id: str):
     """
     Import transactions with full processing pipeline.
     
@@ -119,7 +143,6 @@ def import_transactions(
     ```
     """
     try:
-        user_id = get_user_id(request.user_id)
         
         if not request.transactions:
             raise HTTPException(status_code=400, detail="No transactions provided")
@@ -234,7 +257,7 @@ def import_transactions(
 
             # Call the categorize/batch endpoint logic directly
             from app.routes.categories import categorize_transactions_batch
-            categorization_result: BatchCategorizeResponse = categorize_transactions_batch(categorize_request, db, user_id=user_id)
+            categorization_result: BatchCategorizeResponse = categorize_transactions_batch(categorize_request, db, user_id=actor_user_id)
 
             logger.info(
                 f"[IMPORT] Categorization complete: "

@@ -1,10 +1,11 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
 import { eq, and, desc, inArray, notInArray, sql, gte, lte, gt, asc, ne, or, ilike, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { transactions, accounts, categories, accountBalances, properties } from "@/lib/db/schema";
-import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
+import { transactions, accounts, categories, accountBalances, properties, recurringTransactions } from "@/lib/db/schema";
+import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
@@ -278,7 +279,7 @@ export async function updateTransactionCategory(
     const transaction = await db.query.transactions.findFirst({
       where: and(
         eq(transactions.id, transactionId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
     });
 
@@ -331,7 +332,7 @@ export async function updateTransactionProperty(
     const transaction = await db.query.transactions.findFirst({
       where: and(
         eq(transactions.id, transactionId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
     });
 
@@ -463,6 +464,32 @@ export interface TransactionsPageResult {
 export interface FilteredTransactionTotals {
   totalIn: number;
   totalOut: number;
+}
+
+/** Linked private resources must not leak through an otherwise shared transaction. */
+async function sanitizeTransactionRelations<T extends TransactionRowWithRelations>(rows: T[], actorUserId: string): Promise<T[]> {
+  const propertyIds = [...new Set(rows.flatMap((row) => row.propertyId ? [row.propertyId] : []))];
+  const pocketIds = [...new Set(rows.flatMap((row) => row.internalTransfer?.pocketAccount ? [row.internalTransfer.pocketAccount.id] : []))];
+  const recurringIds = [...new Set(rows.flatMap((row) => row.recurringTransactionId ? [row.recurringTransactionId] : []))];
+  const [visibleProperties, visiblePockets, visibleRecurring] = await Promise.all([
+    propertyIds.length ? db.select({ id: properties.id }).from(properties).where(and(inArray(properties.id, propertyIds), eq(properties.userId, actorUserId))) : [],
+    pocketIds.length ? db.select({ id: accounts.id }).from(accounts).where(and(inArray(accounts.id, pocketIds), accountAccess(accounts.id, actorUserId))) : [],
+    recurringIds.length ? db.select({ id: recurringTransactions.id }).from(recurringTransactions).where(and(inArray(recurringTransactions.id, recurringIds), eq(recurringTransactions.userId, actorUserId))) : [],
+  ]);
+  const propertySet = new Set(visibleProperties.map((p) => p.id));
+  const pocketSet = new Set(visiblePockets.map((a) => a.id));
+  const recurringSet = new Set(visibleRecurring.map((r) => r.id));
+  return rows.map((row) => {
+    const propertyVisible = !!row.propertyId && propertySet.has(row.propertyId);
+    const transferVisible = !!row.internalTransfer?.pocketAccount && pocketSet.has(row.internalTransfer.pocketAccount.id);
+    return { ...row,
+      propertyId: propertyVisible ? row.propertyId : null, property: propertyVisible ? row.property : null,
+      recurringTransactionId: row.recurringTransactionId && recurringSet.has(row.recurringTransactionId) ? row.recurringTransactionId : null,
+      recurringTransaction: row.recurringTransactionId && recurringSet.has(row.recurringTransactionId) ? row.recurringTransaction : null,
+      internalTransferId: transferVisible ? row.internalTransferId : null,
+      internalTransfer: transferVisible ? row.internalTransfer : null,
+    };
+  });
 }
 
 function normalizeAccountIds(accountIds: string[]): string[] {
@@ -726,7 +753,7 @@ async function getLatestTransactionDateForScope(
   userId: string,
   accountIds: string[]
 ): Promise<Date> {
-  const conditions = [eq(transactions.userId, userId)];
+  const conditions = [accountAccess(transactions.accountId, userId)];
   if (accountIds.length > 0) {
     conditions.push(inArray(transactions.accountId, accountIds));
   }
@@ -754,7 +781,7 @@ async function buildTransactionsWhereClause(
   input: TransactionsQueryState
 ): Promise<ResolvedTransactionsWhereClause> {
   const normalizedAccountIds = normalizeAccountIds(input.accountIds);
-  const conditions = [eq(transactions.userId, userId)];
+  const conditions = [accountAccess(transactions.accountId, userId)];
 
   if (normalizedAccountIds.length > 0) {
     conditions.push(inArray(transactions.accountId, normalizedAccountIds));
@@ -965,7 +992,7 @@ export async function getTransactionsPage(
         totalOut: Number.parseFloat(totalsRows[0]?.totalOut ?? "0"),
       }
     : null;
-  const hydratedRows = await hydrateTransactionRowsWithResolvedAccountLogos(rows);
+  const hydratedRows = await hydrateTransactionRowsWithResolvedAccountLogos(await sanitizeTransactionRelations(rows, userId));
 
   return {
     rows: mapTransactionRowsForUi(hydratedRows, "getTransactionsPage"),
@@ -988,7 +1015,7 @@ export async function getTransactions(): Promise<TransactionWithRelations[]> {
 
   try {
     const result = await db.query.transactions.findMany({
-      where: eq(transactions.userId, userId),
+      where: accountAccess(transactions.accountId, userId),
       orderBy: [desc(transactions.bookedAt)],
       with: {
         account: {
@@ -1024,7 +1051,7 @@ export async function getTransactions(): Promise<TransactionWithRelations[]> {
         },
       },
     });
-    const hydratedRows = await hydrateTransactionRowsWithResolvedAccountLogos(result);
+    const hydratedRows = await hydrateTransactionRowsWithResolvedAccountLogos(await sanitizeTransactionRelations(result, userId));
     return mapTransactionRowsForUi(hydratedRows, "getTransactions");
   } catch (error: unknown) {
     const normalizedError =
@@ -1059,7 +1086,7 @@ export async function getTransactionsForAccount(
   const account = await db.query.accounts.findFirst({
     where: and(
       eq(accounts.id, accountId),
-      eq(accounts.userId, userId)
+      accountAccess(accounts.id, userId)
     ),
   });
 
@@ -1070,7 +1097,7 @@ export async function getTransactionsForAccount(
   try {
     const result = await db.query.transactions.findMany({
       where: and(
-        eq(transactions.userId, userId),
+        accountAccess(transactions.accountId, userId),
         eq(transactions.accountId, accountId)
       ),
       orderBy: [desc(transactions.bookedAt)],
@@ -1108,7 +1135,7 @@ export async function getTransactionsForAccount(
         },
       },
     });
-    const hydratedRows = await hydrateTransactionRowsWithResolvedAccountLogos(result);
+    const hydratedRows = await hydrateTransactionRowsWithResolvedAccountLogos(await sanitizeTransactionRelations(result, userId));
     return mapTransactionRowsForUi(hydratedRows, "getTransactionsForAccount");
   } catch (error: unknown) {
     const normalizedError =
@@ -1171,7 +1198,7 @@ export async function bulkUpdateTransactionCategory(
       .where(
         and(
           inArray(transactions.id, transactionIds),
-          eq(transactions.userId, userId)
+          accountAccess(transactions.accountId, userId)
         )
       );
 
@@ -1198,7 +1225,7 @@ export async function updateTransactionIncludeInAnalytics(
     const transaction = await db.query.transactions.findFirst({
       where: and(
         eq(transactions.id, transactionId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
     });
 
@@ -1248,7 +1275,7 @@ export async function bulkUpdateTransactionIncludeInAnalytics(
       .where(
         and(
           inArray(transactions.id, transactionIds),
-          eq(transactions.userId, userId)
+          accountAccess(transactions.accountId, userId)
         )
       );
 
@@ -1279,7 +1306,7 @@ export async function deleteBalancingTransaction(
     const transaction = await db.query.transactions.findFirst({
       where: and(
         eq(transactions.id, transactionId),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
       with: {
         account: true,
@@ -1379,7 +1406,7 @@ export async function createOrUpdateBalancingTransaction(
     const account = await db.query.accounts.findFirst({
       where: and(
         eq(accounts.id, accountId),
-        eq(accounts.userId, userId)
+        accountAccess(accounts.id, userId)
       ),
     });
 
@@ -1506,7 +1533,7 @@ export async function createOrUpdateBalancingTransaction(
     } else {
       // Create new transaction
       const [result] = await db.insert(transactions).values({
-        userId,
+        userId: account.userId,
         accountId,
         amount: amount.toString(),
         description: "Balance adjustment",
@@ -1592,7 +1619,7 @@ export async function getDeleteImpact(
     const txRows = await db.query.transactions.findMany({
       where: and(
         inArray(transactions.id, transactionIds),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
       with: { account: true },
     });
@@ -1631,7 +1658,7 @@ export async function getDeleteImpact(
       .where(
         and(
           inArray(transactions.accountId, accountIds),
-          eq(transactions.userId, userId),
+          accountAccess(transactions.accountId, userId),
           notInArray(transactions.id, transactionIds)
         )
       )
@@ -1693,7 +1720,7 @@ export async function deleteTransactions(
     const txRows = await db.query.transactions.findMany({
       where: and(
         inArray(transactions.id, transactionIds),
-        eq(transactions.userId, userId)
+        accountAccess(transactions.accountId, userId)
       ),
       with: { account: true },
     });
@@ -1720,7 +1747,7 @@ export async function deleteTransactions(
     // Delete all transactions (userId filter ensures security)
     await db
       .delete(transactions)
-      .where(and(inArray(transactions.id, transactionIds), eq(transactions.userId, userId)));
+      .where(and(inArray(transactions.id, transactionIds), accountAccess(transactions.accountId, userId)));
 
     // Update functionalBalance and recalculate daily snapshots per affected account
     const affectedAccountIds: string[] = [];
@@ -1731,7 +1758,7 @@ export async function deleteTransactions(
       const balanceResult = await db
         .select({ total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)` })
         .from(transactions)
-        .where(and(eq(transactions.accountId, accountId), eq(transactions.userId, userId)));
+        .where(and(eq(transactions.accountId, accountId), accountAccess(transactions.accountId, userId)));
 
       const transactionSum = parseFloat(balanceResult[0]?.total || "0");
       const newFunctionalBalance = startingBalance + transactionSum;
@@ -1739,7 +1766,7 @@ export async function deleteTransactions(
       await db
         .update(accounts)
         .set({ functionalBalance: newFunctionalBalance.toFixed(2), updatedAt: new Date() })
-        .where(and(eq(accounts.id, accountId), eq(accounts.userId, userId)));
+        .where(and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)));
 
       // Rebuild daily balance snapshots from the earliest deleted transaction date
       await recalculateAccountBalancesFromDate(accountId, earliestDate, startingBalance);

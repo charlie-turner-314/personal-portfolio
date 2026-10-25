@@ -41,6 +41,8 @@ export interface AssetLiability {
 }
 
 export interface AssetsOverviewData {
+  scope?: string;
+  accountFiltered?: boolean;
   total: number;
   grossAssets: number;
   totalLiabilities: number;

@@ -1707,6 +1707,7 @@ class Person(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    linked_user_id = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     name = Column(String(255), nullable=False)
     kind = Column(String(20), nullable=False, default="member")
     color = Column(String(7), nullable=True)
@@ -1714,7 +1715,7 @@ class Person(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    user = relationship("User", backref="people")
+    user = relationship("User", backref="people", foreign_keys=[user_id])
 
     __table_args__ = (
         Index("idx_people_user", "user_id"),
@@ -1779,3 +1780,70 @@ class VehicleOwner(Base):
     person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="CASCADE"), primary_key=True)
     share = Column(Numeric(5, 4), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class UserAiSettings(Base):
+    __tablename__ = "user_ai_settings"
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    api_key_encrypted = Column(Text)
+    provider = Column(Text, nullable=False, default="openai")
+    model = Column(Text)
+    automatic = Column(Boolean, nullable=False, default=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AiCategorizationJob(Base):
+    __tablename__ = "ai_categorization_jobs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status = Column(Text, nullable=False, default="queued")
+    transaction_ids = Column(JSONB, nullable=False, default=list)
+    total = Column(Integer, nullable=False, default=0)
+    processed = Column(Integer, nullable=False, default=0)
+    categorized = Column(Integer, nullable=False, default=0)
+    skipped = Column(Integer, nullable=False, default=0)
+    error = Column(Text)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (
+        Index("ai_jobs_one_active_user", "user_id", unique=True, postgresql_where=text("status IN ('queued','running')")),
+    )
+
+
+class HouseholdMembership(Base):
+    __tablename__ = "household_memberships"
+
+    member_user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    owner_user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class HouseholdInvitation(Base):
+    __tablename__ = "household_invitations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="CASCADE"), nullable=False)
+    email = Column(Text, nullable=False)
+    token_hash = Column(Text, nullable=False, unique=True)
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class HouseholdAccountShare(Base):
+    __tablename__ = "household_account_shares"
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    member_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    granted_by_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=text("now()"))
+    __table_args__ = (CheckConstraint("member_user_id <> granted_by_user_id", name="household_account_shares_not_self"),)
+
+
+class HouseholdNetWorthShare(Base):
+    __tablename__ = "household_net_worth_shares"
+    owner_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    member_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, nullable=False, server_default=text("now()"))
+    __table_args__ = (CheckConstraint("owner_user_id <> member_user_id", name="household_net_worth_shares_not_self"),)

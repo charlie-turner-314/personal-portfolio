@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - fallback when MCP SDK is unavailable
     def get_access_token():  # type: ignore[no-redef]
         return None
 
-from app.models import User
+from app.models import User, HouseholdMembership
 from app.mcp.auth import validate_api_key
 
 INTERNAL_AUTH_USER_HEADER = "x-personal-portfolio-user-id"
@@ -209,6 +209,7 @@ def _get_authenticated_user_id(api_key: Optional[str] = None) -> Optional[str]:
     return None
 
 
+
 def get_mcp_user_id(user_id: Optional[str] = None, api_key: Optional[str] = None) -> str:
     """
     Resolve user_id for MCP tool calls.
@@ -245,6 +246,8 @@ def get_user_id(user_id: Optional[str] = None, api_key: Optional[str] = None) ->
     # Priority 1: MCP auth context or API key parameter (if present)
     resolved = _get_authenticated_user_id(api_key)
     if resolved:
+        if user_id and user_id != resolved:
+            raise HTTPException(status_code=403, detail="Provided user_id does not match authenticated user.")
         return resolved
 
     request_user_id = get_request_user_id()

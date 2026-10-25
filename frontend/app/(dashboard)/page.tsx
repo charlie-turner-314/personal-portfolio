@@ -1,9 +1,11 @@
 import { Suspense } from "react";
+import { formatCurrency } from "@/lib/utils";
 import { Header } from "@/components/layout/header";
 import { KpiSparkCard } from "@/components/charts/kpi-spark-card";
 import { ProfitLossChart } from "@/components/charts/profit-loss-chart";
 import { SpendingByCategoryChart } from "@/components/charts/spending-by-category-chart";
 import { SankeyFlowChart } from "@/components/charts/sankey-flow-chart";
+import { NetWorthTotals } from "@/components/household/net-worth-totals";
 import { AssetsOverviewCard } from "@/components/assets";
 import { PortfolioSummaryCard } from "@/components/investments/PortfolioSummaryCard";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
@@ -79,31 +81,47 @@ async function DashboardContent({
   ]);
 
   const accountSubtitle = !accountIds?.length
-    ? "Across all accounts"
+    ? "Bank and cash accounts · net of overdrafts"
     : accountIds.length === 1
-      ? "Selected account"
-      : "Selected accounts";
+      ? "Selected bank/cash account"
+      : "Selected bank/cash accounts";
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
       {/* Filters Row */}
-        <div className="flex items-center justify-between" data-walkthrough="walkthrough-filters">
+        <div className="flex flex-wrap items-center justify-between gap-2" data-walkthrough="walkthrough-filters">
           <Suspense fallback={null}>
             <DashboardFilters accounts={accounts} />
           </Suspense>
           <SearchButton />
         </div>
+        {data.activityMissingConversions > 0 && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Income and spending totals exclude {data.activityMissingConversions} transaction(s) or linked groups
+            awaiting currency conversion.
+          </p>
+        )}
         {/* Row 1: KPI Cards */}
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <div data-walkthrough="walkthrough-balance">
             <KpiSparkCard
-              title="Total Balance"
+              title="Total Cash"
             value={data.balance.total}
             currency={data.balance.currency}
             subtitle={accountSubtitle}
             sparkData={data.balanceHistory}
+            showSign
           />
           </div>
+          <KpiSparkCard
+            title="Total Liabilities"
+            value={-Math.abs(data.assetsOverview.totalLiabilities)}
+            currency={data.assetsOverview.currency}
+            subtitle="Balance owed · included in net worth"
+            sparkData={[]}
+            valueTone="liability"
+            showSign
+          />
           <div data-walkthrough="walkthrough-spending">
           <KpiSparkCard
             title={`${data.periodLabel.title} Spending`}
@@ -125,32 +143,24 @@ async function DashboardContent({
           <div data-walkthrough="walkthrough-savings">
           <KpiSparkCard
             title="Savings Rate"
-            value={data.savingsRate.amount}
+            value={data.savingsRate.percentage}
+            valueFormat="percentage"
             currency={data.savingsRate.currency}
-            subtitle={data.periodLabel.subtitle}
+            subtitle={`${formatCurrency(data.savingsRate.amount, data.savingsRate.currency, { showSign: true })} net savings · ${data.periodLabel.subtitle}`}
             sparkData={[]}
-            showSign
-            trend={
-              data.savingsRate.amount !== 0
-                ? {
-                    value: Math.abs(data.savingsRate.percentage),
-                    isPositive: data.savingsRate.amount > 0,
-                  }
-                : undefined
-            }
           />
           </div>
         </div>
 
         {/* Row 2: Charts */}
         <div className="grid gap-4 md:grid-cols-5">
-          <div data-walkthrough="walkthrough-profit-loss" className="col-span-3">
+          <div data-walkthrough="walkthrough-profit-loss" className="min-w-0 md:col-span-3">
           <ProfitLossChart
             data={data.incomeExpense}
             currency={data.balance.currency}
           />
           </div>
-          <div data-walkthrough="walkthrough-category" className="col-span-2">
+          <div data-walkthrough="walkthrough-category" className="min-w-0 md:col-span-2">
           <SpendingByCategoryChart
             data={data.spendingByCategory.categories}
             total={data.spendingByCategory.total}
@@ -166,7 +176,7 @@ async function DashboardContent({
         </div>
 
         {/* Row 3: Cash Flow Sankey */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <div data-walkthrough="walkthrough-cash-flow">
           <SankeyFlowChart
             data={data.sankeyData}
@@ -181,17 +191,18 @@ async function DashboardContent({
         </div>
 
         {/* Row 4: Upcoming Irregular Expenses */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <UpcomingPlannedExpensesCard data={data.upcomingPlannedExpenses} />
         </div>
 
         {/* Row 5: Assets Overview */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
+          <NetWorthTotals />
           <AssetsOverviewCard data={data.assetsOverview} />
         </div>
 
         {/* Row 6: Investments Summary */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <PortfolioSummaryCard />
         </div>
     </div>

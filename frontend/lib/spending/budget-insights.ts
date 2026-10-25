@@ -1,3 +1,4 @@
+import { accountAccess } from "@/lib/household/account-access";
 import {
   and,
   desc,
@@ -248,7 +249,7 @@ function buildBaseConditions(
   accountIds: string[]
 ): SQLWrapper[] {
   const conditions: SQLWrapper[] = [
-    eq(transactions.userId, userId),
+    accountAccess(transactions.accountId, userId),
     eq(transactions.transactionType, "debit"),
     eq(transactions.includeInAnalytics, true),
     isNull(transactions.internalTransferId),

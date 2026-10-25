@@ -1,8 +1,9 @@
+import { accountAccess } from "@/lib/household/account-access";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { inArray, and, eq } from "drizzle-orm";
 import { getOwnersForEntities, type EntityType } from "@/lib/people";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { db } from "@/lib/db";
 import { accounts, properties, vehicles } from "@/lib/db/schema";
 
@@ -23,7 +24,7 @@ async function filterOwnedIds(
   const rows = await db
     .select({ id: table.id })
     .from(table)
-    .where(and(eq(table.userId, userId), inArray(table.id, ids)));
+    .where(and(entityType === "account" ? accountAccess(accounts.id, userId) : eq(table.userId, userId), inArray(table.id, ids)));
   return rows.map((r) => r.id);
 }
 

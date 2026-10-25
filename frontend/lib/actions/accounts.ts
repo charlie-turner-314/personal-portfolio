@@ -1,10 +1,11 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
 import { eq, and, lte, gte, lt, desc, sql, inArray, max } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, csvImports, type NewAccount } from "@/lib/db/schema";
-import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
+import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, csvImports, householdAccountShares, type NewAccount } from "@/lib/db/schema";
+import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
@@ -138,7 +139,7 @@ export async function updateAccount(
 
   try {
     const account = await db.query.accounts.findFirst({
-      where: and(eq(accounts.id, accountId), eq(accounts.userId, userId)),
+      where: and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)),
     });
 
     if (!account) {
@@ -217,13 +218,10 @@ export async function deleteAccount(
     // Soft delete by setting isActive to false
     // Note: Transactions and balances remain associated with the deactivated account
     // Use hardDeleteAccount for complete cleanup
-    await db
-      .update(accounts)
-      .set({
-        isActive: false,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
+    await db.transaction(async (tx) => {
+      await tx.update(accounts).set({ isActive: false, updatedAt: new Date() }).where(eq(accounts.id, accountId));
+      await tx.delete(householdAccountShares).where(eq(householdAccountShares.accountId, accountId));
+    });
 
     revalidatePath("/settings");
     revalidatePath("/");
@@ -336,7 +334,7 @@ export async function getAccountsFreshness(
     db
       .select({ id: accounts.id, provider: accounts.provider, lastSyncedAt: accounts.lastSyncedAt })
       .from(accounts)
-      .where(and(eq(accounts.userId, userId), inArray(accounts.id, accountIds))),
+      .where(and(accountAccess(accounts.id, userId), inArray(accounts.id, accountIds))),
     db
       .select({
         accountId: csvImports.accountId,
@@ -355,7 +353,7 @@ export async function getAccountsFreshness(
     db
       .select({ accountId: transactions.accountId, dataThrough: max(transactions.bookedAt) })
       .from(transactions)
-      .where(and(eq(transactions.userId, userId), inArray(transactions.accountId, accountIds)))
+      .where(and(accountAccess(transactions.accountId, userId), inArray(transactions.accountId, accountIds)))
       .groupBy(transactions.accountId),
   ]);
 
@@ -404,7 +402,7 @@ export async function recalculateStartingBalance(
   try {
     // Verify account belongs to user
     const account = await db.query.accounts.findFirst({
-      where: and(eq(accounts.id, accountId), eq(accounts.userId, userId)),
+      where: and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)),
     });
 
     if (!account) {
@@ -476,7 +474,7 @@ export async function getAccountById(accountId: string) {
   const account = await db.query.accounts.findFirst({
     where: and(
       eq(accounts.id, accountId),
-      eq(accounts.userId, userId),
+      accountAccess(accounts.id, userId),
       eq(accounts.isActive, true)
     ),
     with: {
@@ -494,7 +492,8 @@ export async function getAccountById(accountId: string) {
     return null;
   }
 
-  return resolveMissingAccountLogo(account);
+  const resolved = await resolveMissingAccountLogo(account);
+  return account.userId === userId ? resolved : { ...resolved, externalId: null, externalIdCiphertext: null, externalIdHash: null, ibanCiphertext: null, ibanHash: null, bankConnectionId: null };
 }
 
 export interface BalanceHistoryPoint {
@@ -516,7 +515,7 @@ export async function getAccountBalanceHistory(
   const account = await db.query.accounts.findFirst({
     where: and(
       eq(accounts.id, accountId),
-      eq(accounts.userId, userId)
+      accountAccess(accounts.id, userId)
     ),
   });
 
@@ -637,7 +636,7 @@ export async function getAccountBalanceOnDate(
 
   // Verify the account belongs to the user
   const account = await db.query.accounts.findFirst({
-    where: and(eq(accounts.id, accountId), eq(accounts.userId, userId)),
+    where: and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)),
   });
 
   if (!account) {
@@ -700,7 +699,7 @@ export async function recalculateAccountTimeseries(
   try {
     // Verify account belongs to user
     const account = await db.query.accounts.findFirst({
-      where: and(eq(accounts.id, accountId), eq(accounts.userId, userId)),
+      where: and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)),
     });
 
     if (!account) {

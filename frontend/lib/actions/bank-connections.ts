@@ -325,7 +325,7 @@ export async function submitAccountMappings(
   connectionId: string,
   mappings: Array<{
     bank_uid: string;
-    action: "create" | "link";
+    action: "create" | "link" | "skip";
     name?: string;
     existing_account_id?: string;
   }>,
@@ -455,7 +455,7 @@ export async function getConnectionStatus(
 export type SuggestedMapping = {
   bank_uid: string;
   bank_name: string;
-  suggested_action: "link" | "create";
+  suggested_action: "link" | "create" | "skip";
   suggested_account_id: string | null;
   suggested_account_name: string | null;
 };

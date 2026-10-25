@@ -12,7 +12,7 @@ import {
 import { Header } from "@/components/layout/header";
 import { HoldingDetailView } from "@/components/investments/HoldingDetailView";
 import { rangeToDates } from "@/lib/utils/date-ranges";
-import { getAuthenticatedSession } from "@/lib/auth-helpers";
+import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail } from "@/lib/demo-access";
 
 export const dynamic = "force-dynamic";

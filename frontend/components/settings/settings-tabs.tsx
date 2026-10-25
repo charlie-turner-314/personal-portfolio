@@ -2,6 +2,7 @@
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RiUserLine, RiFolderLine, RiKeyLine, RiUploadLine, RiBankLine, RiGroupLine } from "@remixicon/react";
+import { AiSettings } from "./ai-settings";
 import { ProfileEditor } from "./profile-editor";
 import { CategoryManager } from "./category-manager";
 import { ApiKeysManager } from "./api-keys-manager";
@@ -49,6 +50,7 @@ interface SettingsTabsProps {
     createdAt: Date | null;
   }>;
   people: Person[];
+  isHouseholdOwner?: boolean;
 }
 
 export function SettingsTabs({
@@ -63,10 +65,11 @@ export function SettingsTabs({
   csvImports,
   bankConnections,
   people,
+  isHouseholdOwner = true,
 }: SettingsTabsProps) {
   return (
     <Tabs defaultValue={defaultTab} className="flex-1">
-      <TabsList variant="line" className="mb-6">
+      <TabsList variant="line" className="mb-6 max-lg:h-auto max-lg:w-full max-lg:grid max-lg:grid-cols-2 max-lg:gap-2 max-lg:[&>button]:h-11 max-lg:[&>button]:justify-start">
         <TabsTrigger value="profile" data-walkthrough="walkthrough-profile">
           <RiUserLine className="mr-1.5 h-4 w-4" />
           Profile
@@ -75,6 +78,7 @@ export function SettingsTabs({
           <RiFolderLine className="mr-1.5 h-4 w-4" />
           Categories
         </TabsTrigger>
+        {!isDemoUser && <TabsTrigger value="ai">AI</TabsTrigger>}
         <TabsTrigger value="api-keys" data-walkthrough="walkthrough-api-keys">
           <RiKeyLine className="mr-1.5 h-4 w-4" />
           API Keys
@@ -103,6 +107,8 @@ export function SettingsTabs({
         <CategoryManager initialCategories={categories} />
       </TabsContent>
 
+      {!isDemoUser && <TabsContent value="ai"><AiSettings /></TabsContent>}
+
       <TabsContent value="api-keys">
         <ApiKeysManager
           initialKeys={apiKeys}
@@ -125,7 +131,7 @@ export function SettingsTabs({
       )}
 
       <TabsContent value="household">
-        <HouseholdTab people={people} />
+        <HouseholdTab people={people} isOwner={isHouseholdOwner} />
       </TabsContent>
     </Tabs>
   );

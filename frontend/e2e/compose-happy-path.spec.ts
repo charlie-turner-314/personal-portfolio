@@ -3,6 +3,11 @@ import path from "node:path";
 import { readFileSync } from "node:fs";
 import { parseDelimitedText } from "../lib/import/parsing";
 
+async function expectPageFits(page: Page) {
+  const bounds = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
+  expect(bounds.scroll, `Page ${new URL(page.url()).pathname} must fit the viewport`).toBeLessThanOrEqual(bounds.width + 1);
+}
+
 async function registerAndReachTransactionImport(page: Page, email: string, password: string, multiAccount = false) {
   await page.goto("/register");
   await page.getByLabel("Name").fill("Compose E2E");
@@ -13,14 +18,17 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
 
   await expect(page.getByLabel("Your Name *")).toBeVisible();
   await page.getByLabel("Your Name *").fill("Compose E2E");
+  await expectPageFits(page);
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByRole("button", { name: "Reset to Defaults" })).toBeVisible();
+  await expectPageFits(page);
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByRole("button", { name: "Save & Continue" }).click();
 
   await expect(page.getByText("Set up your first bank account", { exact: true })).toBeVisible();
+  await expectPageFits(page);
   await page.getByRole("button", { name: "Create your first account" }).click();
   await page.getByLabel("Account Name").fill("E2E Savings");
   await page.getByRole("dialog").getByRole("combobox").first().click();
@@ -29,6 +37,8 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
     await page.getByRole("dialog").getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
   }
+  // Wait for the Select portal's exit animation before submitting the form.
+  await expect(page.getByRole("option")).toHaveCount(0);
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByText("E2E Savings", { exact: true })).toBeVisible();
   if (multiAccount) {
@@ -38,12 +48,14 @@ async function registerAndReachTransactionImport(page: Page, email: string, pass
     await page.getByRole("option", { name: "Savings Account" }).click();
     await page.getByRole("dialog").getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "AUD - Australian Dollar", exact: true }).click();
+    await expect(page.getByRole("option")).toHaveCount(0);
     await page.getByRole("button", { name: "Create Account" }).click();
     await expect(page.getByText("E2E Spending", { exact: true })).toBeVisible();
   }
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("Import your transactions", { exact: true })).toBeVisible();
+  await expectPageFits(page);
 }
 
 test("a new user can onboard, import transactions, and sign in again", async ({ page }) => {
@@ -69,10 +81,12 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("Map your columns", { exact: true })).toBeVisible();
+  await expectPageFits(page);
   await expect(page.getByText("Suggested mapping applied from CSV headers; AI analysis was not used.")).toBeVisible();
   await page.getByRole("button", { name: "Preview Transactions" }).click();
 
   await expect(page.getByText("Preview your import", { exact: true })).toBeVisible();
+  await expectPageFits(page);
   await expect(page.getByText("Salary payment")).toBeVisible();
   await page.getByRole("button", { name: /Import 2 Transactions/ }).click();
   await expect(page.getByRole("button", { name: "Get Started" })).toBeVisible();
@@ -81,14 +95,35 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
 
+  await page.goto("/transactions");
+  const search = page.getByPlaceholder("Search transactions...");
+  await search.fill("s");
+  await expect(page).toHaveURL(/search=s(?:&|$)/);
+  await expect(search).toBeFocused();
+  // Wait across debounced server navigations, then type navigation shortcut letters.
+  for (const letter of "abcd") {
+    await search.press(letter);
+    const value = await search.inputValue();
+    await expect.poll(() => new URL(page.url()).searchParams.get("search")).toBe(value);
+    await expect(search).toBeFocused();
+    expect(new URL(page.url()).pathname).toBe("/transactions");
+  }
+  await search.fill("");
+  await expect.poll(() => new URL(page.url()).searchParams.has("search")).toBe(false);
+  await expect(search).toBeFocused();
+
   await page.goto("/budget");
   await expect(page.getByRole("heading", { name: "Budget" })).toBeVisible();
   await expect(page.getByText("Budget failed to load")).not.toBeVisible();
-  await expect(page.getByText("Monthly Budget")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Monthly Budget", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Close walkthrough" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
 
-  await page.getByRole("button", { name: "Expand sidebar" }).click();
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  } else {
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+  }
   await page.getByRole("button", { name: /Compose E2E/ }).click();
   await page.getByRole("menuitem", { name: "Log out" }).click();
   await expect(page.getByText("Login to your account", { exact: true })).toBeVisible();
@@ -99,7 +134,13 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
 
   await page.goto("/assets");
   await page.getByRole("button", { name: "Close walkthrough" }).click();
-  await expect(page.getByText(/Update recommended/)).toBeVisible();
+  // Onboarding can finish while the queued CSV import is still processing.
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByText(/Update recommended/)).toBeVisible();
+  }).toPass({ timeout: 60_000 });
+  // Closing a walkthrough skips it for this render; a reload starts it again.
+  await page.getByRole("button", { name: "Close walkthrough" }).click();
   await page.getByRole("button", { name: "Upload CSV", exact: true }).click();
   await expect(page).toHaveURL(/\/transactions\/import\?accountId=/);
   await expect(page.getByRole("combobox")).toHaveText("E2E Savings");

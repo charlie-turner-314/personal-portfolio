@@ -13,7 +13,7 @@ import {
   type RecurringTransaction,
   type NewRecurringTransaction,
 } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 
 // ============================================================================
 // Type Aliases (keeping DB names, using "Subscription" in UI)

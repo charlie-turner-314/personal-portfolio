@@ -1,8 +1,9 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { db } from "@/lib/db";
 import { transactions } from "@/lib/db/schema";
-import { requireAuth } from "@/lib/auth-helpers";
+import { requireAuth } from "@/lib/household/financial-auth";
 import { eq, sql, gte, and, desc } from "drizzle-orm";
 
 // Note: getTotalBalance has been consolidated in lib/actions/dashboard.ts
@@ -28,7 +29,7 @@ export async function getTransactionSummary(days: number = 30) {
     .from(transactions)
     .where(
       and(
-        eq(transactions.userId, userId),
+        accountAccess(transactions.accountId, userId),
         eq(transactions.includeInAnalytics, true),
         gte(transactions.bookedAt, startDate)
       )
@@ -61,7 +62,7 @@ export async function getRecentTransactions(limit: number = 5) {
       currency: transactions.currency,
     })
     .from(transactions)
-    .where(eq(transactions.userId, userId))
+    .where(accountAccess(transactions.accountId, userId))
     .orderBy(desc(transactions.bookedAt))
     .limit(limit);
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { invitationReturnPath } from "@/lib/household/return-path";
+
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -84,6 +86,12 @@ function RegisterPageContent() {
         return;
       }
 
+      const invitationPath = invitationReturnPath(searchParams.get("redirect"));
+      if (invitationPath) {
+        // Refresh server authentication instead of reusing an anonymous prefetched page.
+        window.location.assign(invitationPath);
+        return;
+      }
       router.push("/");
       router.refresh();
     } catch {
@@ -165,7 +173,7 @@ function RegisterPageContent() {
               </Button>
               <FieldDescription className="text-center">
                 Already have an account?{" "}
-                <Link href="/login" className="underline underline-offset-4">
+                <Link href={invitationReturnPath(searchParams.get("redirect")) ? `/login?redirect=${encodeURIComponent(invitationReturnPath(searchParams.get("redirect"))!)}` : "/login"} className="underline underline-offset-4">
                   Login
                 </Link>
               </FieldDescription>

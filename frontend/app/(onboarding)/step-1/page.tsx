@@ -133,7 +133,7 @@ export default function OnboardingStep1Page() {
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit} className="flex flex-1 flex-col">
-          <CardContent className="space-y-6 flex-1 min-h-0">
+          <CardContent className="space-y-6 flex-1">
             <div className="flex flex-col items-center gap-4">
               <Label className="text-center">Profile Photo</Label>
               <ProfilePhotoUpload

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.db_helpers import get_user_id
+from app.services.financial_access import account_access, value_in_actor_currency as _value_in_actor_currency
 from app.integrations.price_provider import get_price_provider
 from app.integrations.coinspot_adapter import (
     CoinSpotAdapter,
@@ -571,14 +572,14 @@ def list_investment_income_events(
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
-    query = db.query(InvestmentIncomeEvent).filter(InvestmentIncomeEvent.user_id == user_id)
+    query = db.query(InvestmentIncomeEvent).filter(account_access(InvestmentIncomeEvent.account_id, user_id))
     if account_id is not None:
-        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        account = db.query(Account).filter(Account.id == account_id, account_access(Account.id, user_id)).first()
         if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
             raise HTTPException(status_code=404, detail="Investment account not found")
         query = query.filter(InvestmentIncomeEvent.account_id == account.id)
     if holding_id is not None:
-        holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+        holding = db.query(Holding).filter(Holding.id == holding_id, account_access(Holding.account_id, user_id)).first()
         if not holding or (account_id is not None and holding.account_id != account_id):
             raise HTTPException(status_code=404, detail="Holding not found in this investment account")
         query = query.filter(InvestmentIncomeEvent.holding_id == holding.id)
@@ -635,17 +636,17 @@ def investment_income_summary(
         func.coalesce(func.sum(InvestmentIncomeEvent.foreign_tax_paid), 0).label("foreign_tax_paid"),
         func.coalesce(func.sum(InvestmentIncomeEvent.tfn_withholding), 0).label("tfn_withholding"),
     ).filter(
-        InvestmentIncomeEvent.user_id == user_id,
+        account_access(InvestmentIncomeEvent.account_id, user_id),
         InvestmentIncomeEvent.pay_date >= start,
         InvestmentIncomeEvent.pay_date < end,
     )
     if account_id is not None:
-        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        account = db.query(Account).filter(Account.id == account_id, account_access(Account.id, user_id)).first()
         if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
             raise HTTPException(status_code=404, detail="Investment account not found")
         query = query.filter(InvestmentIncomeEvent.account_id == account.id)
     if holding_id is not None:
-        holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+        holding = db.query(Holding).filter(Holding.id == holding_id, account_access(Holding.account_id, user_id)).first()
         if not holding or (account_id is not None and holding.account_id != account_id):
             raise HTTPException(status_code=404, detail="Holding not found in this investment account")
         query = query.filter(InvestmentIncomeEvent.holding_id == holding.id)
@@ -721,7 +722,7 @@ def list_investment_cost_base_adjustments(
 ):
     user_id = get_user_id(user_id)
     query = db.query(InvestmentCostBaseAdjustment).filter(
-        InvestmentCostBaseAdjustment.user_id == user_id
+        account_access(InvestmentCostBaseAdjustment.account_id, user_id)
     )
     if account_id is not None:
         query = query.filter(InvestmentCostBaseAdjustment.account_id == account_id)
@@ -1315,7 +1316,7 @@ def create_manual_holding(
     user_id = get_user_id(user_id)
     account = (
         db.query(Account)
-        .filter(Account.id == account_id, Account.user_id == user_id)
+        .filter(Account.id == account_id, account_access(Account.id, user_id))
         .first()
     )
     if not account or account.account_type != "investment_manual":
@@ -1334,7 +1335,7 @@ def create_manual_holding(
         name = None
 
     holding = Holding(
-        user_id=user_id,
+        user_id=account.user_id,
         account_id=account.id,
         symbol=payload.symbol,
         provider_symbol=payload.provider_symbol or None,
@@ -1419,7 +1420,7 @@ def list_holdings(
             return None
         return (cost_native * Decimal(rate)).quantize(Decimal("0.01"))
 
-    query = db.query(Holding).filter(Holding.user_id == user_id)
+    query = db.query(Holding).filter(account_access(Holding.account_id, user_id))
     if account_id is not None:
         query = query.filter(Holding.account_id == account_id)
 
@@ -1449,7 +1450,7 @@ def list_holdings(
                 source=h.source,
                 current_price=latest_val.price if latest_val else None,
                 current_value_user_currency=(
-                    latest_val.value_user_currency if latest_val else None
+                    _value_in_actor_currency(db, latest_val.value_user_currency, h.user_id, user_id, latest_val.date) if latest_val else None
                 ),
                 cost_basis_user_currency=cost_basis_user,
                 is_stale=bool(latest_val.is_stale) if latest_val else False,
@@ -1469,7 +1470,7 @@ def update_holding(
     user_id = get_user_id(user_id)
     holding = (
         db.query(Holding)
-        .filter(Holding.id == holding_id, Holding.user_id == user_id)
+        .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
         .first()
     )
     if not holding:
@@ -1504,7 +1505,7 @@ def delete_holding(
     user_id = get_user_id(user_id)
     holding = (
         db.query(Holding)
-        .filter(Holding.id == holding_id, Holding.user_id == user_id)
+        .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
         .first()
     )
     if not holding:
@@ -1533,7 +1534,7 @@ def portfolio_summary(
     accounts = (
         db.query(Account)
         .filter(
-            Account.user_id == user_id,
+            account_access(Account.id, user_id),
             Account.account_type.in_(["investment_brokerage", "investment_manual"]),
         )
         .all()
@@ -1557,14 +1558,15 @@ def portfolio_summary(
                 .first()
             )
             if latest:
-                account_value += Decimal(latest.value_user_currency)
+                visible_value = _value_in_actor_currency(db, latest.value_user_currency, account.user_id, user_id, latest.date)
+                account_value += visible_value
                 allocation_by_type[h.instrument_type] = (
                     allocation_by_type.get(h.instrument_type, Decimal("0"))
-                    + Decimal(latest.value_user_currency)
+                    + visible_value
                 )
                 allocation_by_currency[h.currency] = (
                     allocation_by_currency.get(h.currency, Decimal("0"))
-                    + Decimal(latest.value_user_currency)
+                    + visible_value
                 )
 
         total_value += account_value
@@ -1593,9 +1595,7 @@ def portfolio_summary(
                 .first()
             )
             if prior_balance is not None:
-                today_change += Decimal(
-                    latest_balance.balance_in_functional_currency
-                ) - Decimal(prior_balance.balance_in_functional_currency)
+                today_change += _value_in_actor_currency(db, latest_balance.balance_in_functional_currency, account.user_id, user_id, latest_balance.date) - _value_in_actor_currency(db, prior_balance.balance_in_functional_currency, account.user_id, user_id, prior_balance.date)
 
         accounts_payload.append(
             {
@@ -1629,7 +1629,7 @@ def holding_history(
     user_id = get_user_id(user_id)
     holding = (
         db.query(Holding)
-        .filter(Holding.id == holding_id, Holding.user_id == user_id)
+        .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
         .first()
     )
     if not holding:
@@ -1649,7 +1649,7 @@ def holding_history(
         .all()
     )
     return [
-        ValuationPoint(date=r.date, value=Decimal(r.value_user_currency))
+        ValuationPoint(date=r.date, value=_value_in_actor_currency(db, r.value_user_currency, holding.user_id, user_id, r.date))
         for r in rows
     ]
 
@@ -1669,14 +1669,15 @@ def portfolio_history(
         raise HTTPException(status_code=400, detail="to must be on or after from")
 
     accounts = (
-        db.query(Account.id)
+        db.query(Account.id, Account.user_id)
         .filter(
-            Account.user_id == user_id,
+            account_access(Account.id, user_id),
             Account.account_type.in_(["investment_brokerage", "investment_manual"]),
         )
         .all()
     )
     account_ids = [a.id for a in accounts]
+    owners_by_account = {a.id: a.user_id for a in accounts}
     if not account_ids:
         return []
 
@@ -1694,7 +1695,7 @@ def portfolio_history(
     by_date: dict[date, Decimal] = {}
     for r in rows:
         d = r.date.date() if isinstance(r.date, datetime) else r.date
-        by_date[d] = by_date.get(d, Decimal("0")) + Decimal(r.balance_in_functional_currency)
+        by_date[d] = by_date.get(d, Decimal("0")) + _value_in_actor_currency(db, r.balance_in_functional_currency, owners_by_account[r.account_id], user_id, d)
 
     return [ValuationPoint(date=d, value=v) for d, v in sorted(by_date.items())]
 
@@ -1710,7 +1711,7 @@ def holding_trades(
     user_id = get_user_id(user_id)
     holding = (
         db.query(Holding)
-        .filter(Holding.id == holding_id, Holding.user_id == user_id)
+        .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
         .first()
     )
     if not holding:
@@ -1784,7 +1785,7 @@ def holding_lots(
     user_id = get_user_id(user_id)
     holding = (
         db.query(Holding)
-        .filter(Holding.id == holding_id, Holding.user_id == user_id)
+        .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
         .first()
     )
     if not holding:
@@ -1886,7 +1887,7 @@ def holding_cgt_allocations(
 ):
     """Return persisted FIFO allocation rows for disposals of this holding."""
     user_id = get_user_id(user_id)
-    holding = db.query(Holding).filter(Holding.id == holding_id, Holding.user_id == user_id).first()
+    holding = db.query(Holding).filter(Holding.id == holding_id, account_access(Holding.account_id, user_id)).first()
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
     return db.query(CgtAllocation).filter(
@@ -1903,7 +1904,7 @@ def _cgt_allocations_query(
     account_id: Optional[UUID] = None,
 ):
     query = db.query(CgtAllocation).join(Account, Account.id == CgtAllocation.account_id).filter(
-        Account.user_id == user_id,
+        account_access(Account.id, user_id),
     )
     if financial_year_start is not None:
         start, end = _financial_year_bounds(financial_year_start)
@@ -1912,7 +1913,7 @@ def _cgt_allocations_query(
             CgtAllocation.disposal_date < end,
         )
     if account_id is not None:
-        account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+        account = db.query(Account).filter(Account.id == account_id, account_access(Account.id, user_id)).first()
         if not account or account.account_type not in ("investment_manual", "investment_brokerage"):
             raise HTTPException(status_code=404, detail="Investment account not found")
         query = query.filter(CgtAllocation.account_id == account.id)

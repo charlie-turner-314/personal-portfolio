@@ -2,7 +2,7 @@ import { TransactionsClient } from "./transactions-client";
 import { getTransactionsPage, getUserAccounts } from "@/lib/actions/transactions";
 import { getUserCategories } from "@/lib/actions/categories";
 import { getProperties } from "@/lib/actions/properties";
-import { getAuthenticatedSession } from "@/lib/auth-helpers";
+import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail } from "@/lib/demo-access";
 import type { TransactionsQueryState } from "@/lib/transactions/query-state";
 

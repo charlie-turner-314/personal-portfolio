@@ -179,6 +179,22 @@ def _batch_categorize_transactions(db, user_id: str, transaction_ids: List[str])
             transactions.extend(earlier)
             logger.info("categorizer.reconsidering_previous count=%d", len(earlier))
 
+    # CSV routing and older imports may have skipped deterministic matching.
+    # Fill missing system categories without changing manual or existing matches.
+    deterministic = 0
+    for txn in transactions:
+        if txn.category_system_id is None:
+            category = matcher.match_category(
+                description=txn.description, merchant=txn.merchant,
+                amount=txn.amount, transaction_type=txn.transaction_type, use_llm=False,
+            )
+            if category:
+                txn.category_system_id = category.id
+                txn.category_confidence = None
+                deterministic += 1
+    if deterministic:
+        db.commit()
+
     batch_input = [
         {
             **transaction_record(txn),

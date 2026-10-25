@@ -25,7 +25,7 @@ export async function GET(
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/status/${connectionId}`;
+    const pathWithQuery = `/api/enable-banking/status/${encodeURIComponent(connectionId)}`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({
