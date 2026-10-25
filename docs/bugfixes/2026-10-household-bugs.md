@@ -58,8 +58,15 @@ categories and permitted transactions; keep editing options separate. Normalize
 selected IDs to one filter choice/tag. Apply the same summary and filtering rules
 to the spending-category drilldown reached from dashboard category bars.
 
-Implementation and local tests are in progress; browser, upgrade rehearsal,
-feature merge, develop verification, main promotion and final Pi delivery remain.
+At feature runtime `77b3ead`, the source build, two migration runs, health and
+populated/fresh smoke checks passed. Existing values matched 16 users/auth accounts,
+19 accounts, 3,279 transactions, 8 holdings and 8 broker trades. The browser proved
+one Housing Sankey node, both permitted underlying transaction IDs in its drilldown,
+private-account exclusion and one reporting filter option. The first browser
+attempt needed its locator scoped to the filter popover; no runtime fix was needed.
+All 98 frontend test files passed (463 tests; one skipped), including PostgreSQL
+filter execution. TypeScript and changed-file ESLint passed.
+Feature merge, exact develop verification, main promotion and Pi delivery remain.
 
 ## Remaining issues
 

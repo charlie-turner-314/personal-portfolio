@@ -42,8 +42,8 @@ test("household Housing groups into one Sankey node and filters both permitted c
     await expect(page.getByText("Shared rent", { exact: true })).toBeVisible();
     await expect(page.getByText("Hidden rent", { exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: /Filters/ }).click();
-    await page.getByRole("button", { name: "Housing", exact: true }).click();
-    // The option and its selected trigger are the only Housing buttons.
-    await expect(page.getByRole("button", { name: "Housing", exact: true })).toHaveCount(2);
+    await page.getByRole("dialog").getByRole("button", { name: "Housing", exact: true }).click();
+    const categoryChoices = page.getByRole("dialog").filter({ has: page.getByPlaceholder("Search category...") });
+    await expect(categoryChoices.getByRole("button", { name: "Housing", exact: true })).toHaveCount(1);
   } finally { await ownerContext.close(); }
 });
