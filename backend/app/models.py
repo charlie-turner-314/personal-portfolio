@@ -1854,6 +1854,15 @@ class HouseholdAccountShare(Base):
     __table_args__ = (CheckConstraint("member_user_id <> granted_by_user_id", name="household_account_shares_not_self"),)
 
 
+class HouseholdPropertyShare(Base):
+    __tablename__ = "household_property_shares"
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), primary_key=True)
+    member_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    granted_by_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=text("now()"))
+    __table_args__ = (CheckConstraint("member_user_id <> granted_by_user_id", name="household_property_shares_not_self"),)
+
+
 class HouseholdNetWorthShare(Base):
     __tablename__ = "household_net_worth_shares"
     owner_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)

@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../lib/db";
-import { accounts, accountOwners, householdAccountShares, householdMemberships, householdNetWorthShares, people, transactions, users, properties, exchangeRates, transactionLinks, accountOwnershipAllocations } from "../lib/db/schema";
+import { accounts, accountOwners, householdAccountShares, householdMemberships, householdNetWorthShares, householdPropertyShares, propertyOwners, people, transactions, users, properties, exchangeRates, transactionLinks, accountOwnershipAllocations } from "../lib/db/schema";
 import { deletePerson } from "../lib/people/mutations";
 import { getVisibleNetWorthTotals } from "../lib/household/net-worth";
-import { accountAccess, transactionAccess } from "../lib/household/account-access";
-import { setAccountSharing, setNetWorthSharing } from "../lib/household/sharing";
+import { accountAccess, propertyAccess, transactionAccess } from "../lib/household/account-access";
+import { setAccountSharing, setPropertySharing, setNetWorthSharing } from "../lib/household/sharing";
 import { acceptHouseholdInvitation, createHouseholdInvitation, leaveHousehold, revokeHouseholdAccess } from "../lib/household/invitations";
 
 async function main() {
@@ -89,9 +89,11 @@ async function main() {
     await setAccountSharing(owner, joint.id, [member]);
     await db.update(people).set({ linkedUserId: member }).where(eq(people.id, partner.id));
     await db.insert(accountOwners).values({ accountId: memberPrivate.id, personId: partner.id, share: "1" });
+    const [retainedProperty] = await db.insert(properties).values({ userId: member, name: "Retained personal property", propertyType: "residential", currency: "AUD", currentValue: "99" }).returning();
+    await db.insert(propertyOwners).values({ propertyId: retainedProperty.id, personId: partner.id, share: "1" });
     await leaveHousehold(member);
     assert.deepEqual(await visible(member), [memberPrivate.id]);
-    assert.equal(Number((await getVisibleNetWorthTotals(member)).find((t) => t.isOwn)!.total), 50, "leaving preserves linked-person economic ownership of private accounts");
+    assert.equal(Number((await getVisibleNetWorthTotals(member)).find((t) => t.isOwn)!.total), 149, "leaving preserves linked-person economic ownership of private accounts and property");
     assert.deepEqual(await visible(owner), [joint.id, ownerPrivate.id].sort());
     assert.equal((await db.select().from(householdAccountShares)).length, 0);
     assert.equal((await db.select().from(householdNetWorthShares)).length, 0);
@@ -124,6 +126,39 @@ async function main() {
       assert.equal("blockers" in error, false, "a deletion conflict must not disclose private account IDs");
       return true;
     });
+    // Property ownership does not grant detail. Property and mortgage grants are independent.
+    const rejoin = await createHouseholdInvitation(owner, partner.id, email(member));
+    await acceptHouseholdInvitation(member, rejoin.token);
+    const [home, privateHome] = await db.insert(properties).values([
+      { userId: owner, name: "Shared home", propertyType: "residential", currency: "AUD", currentValue: "800" },
+      { userId: owner, name: "Private home", propertyType: "residential", currency: "AUD", currentValue: "9000" },
+    ]).returning();
+    await db.insert(propertyOwners).values([
+      { propertyId: home.id, personId: partner.id, share: "0.5" },
+      { propertyId: home.id, personId: ownerSelf.id, share: "0.5" },
+      { propertyId: privateHome.id, personId: partner.id, share: "1" },
+    ]);
+    const visibleProperties = async (actor: string) => (await db.select({ id: properties.id }).from(properties).where(propertyAccess(properties.id, actor))).map(p => p.id).sort();
+    assert.deepEqual(await visibleProperties(member), [retainedProperty.id]);
+    await assert.rejects(setPropertySharing(member, home.id, [third]), /Only the property owner/);
+    await assert.rejects(setPropertySharing(owner, home.id, [stranger]), /current household member/);
+    const beforePropertyShare = Number((await getVisibleNetWorthTotals(member)).find(t => t.isOwn)!.total);
+    await setPropertySharing(owner, home.id, [member]);
+    assert.deepEqual(await visibleProperties(member), [home.id, retainedProperty.id].sort());
+    assert.deepEqual(await visibleProperties(third), []);
+    assert.equal(Number((await getVisibleNetWorthTotals(member)).find(t => t.isOwn)!.total), beforePropertyShare + 400);
+    await setPropertySharing(owner, home.id, []);
+    assert.deepEqual(await visibleProperties(member), [retainedProperty.id]);
+    await setPropertySharing(owner, home.id, [member]);
+    await leaveHousehold(member);
+    assert.equal((await db.select().from(householdPropertyShares).where(eq(householdPropertyShares.memberUserId, member))).length, 0);
+    const secondRejoin = await createHouseholdInvitation(owner, partner.id, email(member));
+    await acceptHouseholdInvitation(member, secondRejoin.token);
+    assert.deepEqual(await visibleProperties(member), [retainedProperty.id], "rejoining cannot revive property grants");
+    await setPropertySharing(owner, home.id, [member]);
+    await revokeHouseholdAccess(owner, partner.id);
+    assert.deepEqual(await visibleProperties(member), [retainedProperty.id]);
+    assert.equal((await db.select().from(householdPropertyShares).where(eq(householdPropertyShares.memberUserId, member))).length, 0);
     console.log("Household privacy integration: private defaults, selective symmetric sharing, shared edits, unrelated isolation, ownership separation, revoke/leave/rejoin and stale-grant defenses passed.");
   } finally {
     await db.delete(householdMemberships).where(inArray(householdMemberships.memberUserId, ids));

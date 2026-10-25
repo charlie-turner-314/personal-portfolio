@@ -2,7 +2,8 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accounts } from "@/lib/db/schema";
 import { LIABILITY_ACCOUNT_TYPE_VALUES } from "@/lib/constants/account-types";
-import { accountAccess, sameHousehold } from "./account-access";
+import { propertyOwnershipShareSql } from "@/lib/people/ownership-sql";
+import { accountAccess, propertyAccess, sameHousehold } from "./account-access";
 
 /** Economic ownership is independent of access. Resolve dated allocations first. */
 function accountShare(owner: SQL): SQL {
@@ -60,12 +61,9 @@ export async function getVisibleNetWorthTotals(actorUserId: string): Promise<Vis
         and ${accountAccess(accounts.id, owner)}
       union all
       select visible_owner.id, visible_owner.name, visible_owner.currency, coalesce(p.currency, visible_owner.currency),
-        coalesce(p.current_value, 0) * case when exists(select 1 from property_owners po where po.property_id = p.id)
-          then coalesce((select sum(coalesce(po.share, 1.0 / (select count(*) from property_owners n where n.property_id = p.id)))
-            from property_owners po join people person on person.id = po.person_id
-            where po.property_id = p.id and person.user_id = visible_owner.id and person.kind = 'self'), 0)
-          else 1 end
-      from visible_owners visible_owner join properties p on p.user_id = visible_owner.id where p.is_active = true
+        coalesce(p.current_value, 0) * ${propertyOwnershipShareSql({ userId: owner }, sql`p.id`)}
+      from visible_owners visible_owner cross join properties p
+      where p.is_active = true and ${propertyAccess(sql`p.id`, owner)}
       union all
       select visible_owner.id, visible_owner.name, visible_owner.currency, coalesce(v.currency, visible_owner.currency),
         coalesce(v.current_value, 0) * case when exists(select 1 from vehicle_owners vo where vo.vehicle_id = v.id)

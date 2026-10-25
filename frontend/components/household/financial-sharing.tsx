@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 
-type Sharing = { members: { id: string; name: string | null }[]; accounts: { id: string; name: string; sharedWith: string[] }[]; netWorthSharedWith: string[] };
-type SharingChange = { resource: "account"; accountId: string; memberUserIds: string[] } | { resource: "net-worth"; memberUserIds: string[] };
+type SharedResource = { id: string; name: string; sharedWith: string[] };
+type Sharing = { properties?: SharedResource[]; members: { id: string; name: string | null }[]; accounts: { id: string; name: string; sharedWith: string[] }[]; netWorthSharedWith: string[] };
+type SharingChange = { resource: "property"; propertyId: string; memberUserIds: string[] } | { resource: "account"; accountId: string; memberUserIds: string[] } | { resource: "net-worth"; memberUserIds: string[] };
 export function FinancialSharing() {
   const router = useRouter();
   const [data, setData] = useState<Sharing | null>(null);
@@ -22,7 +23,9 @@ export function FinancialSharing() {
     if (!data || busy) return;
     setDraft(body.resource === "account"
       ? { ...data, accounts: data.accounts.map((account) => account.id === body.accountId ? { ...account, sharedWith: body.memberUserIds } : account) }
-      : { ...data, netWorthSharedWith: body.memberUserIds });
+      : body.resource === "property"
+        ? { ...data, properties: (data.properties ?? []).map(property => property.id === body.propertyId ? { ...property, sharedWith: body.memberUserIds } : property) }
+        : { ...data, netWorthSharedWith: body.memberUserIds });
     setBusy(true); setError("");
     let denied = false;
     try {
@@ -44,8 +47,8 @@ export function FinancialSharing() {
   const toggle = (ids: string[], id: string) => ids.includes(id) ? ids.filter((v) => v !== id) : [...ids, id];
   return <section className="space-y-4 rounded-md border p-4">
     <h3 className="font-medium">Financial privacy</h3>
-    <p className="text-sm text-muted-foreground">Your accounts, net worth and bank connections are private by default. Choose who can view and edit each account. Sharing never gives access to your bank connection or token.</p>
-    <p className="text-sm text-muted-foreground">Ownership percentages affect totals. Sharing separately controls who can see and edit an account.</p>
+    <p className="text-sm text-muted-foreground">Your accounts, properties, net worth and bank connections are private by default. Choose who can view and edit each account and property. Sharing never gives access to your bank connection or token.</p>
+    <p className="text-sm text-muted-foreground">Ownership percentages affect totals. Sharing separately controls who can see and edit each account or property.</p>
     {busy && <p role="status" className="text-sm text-muted-foreground">Saving sharing settings…</p>}
     {error && <p role="alert" className="text-destructive">{error}</p>}
     {!data && !error && <p>Loading sharing settings…</p>}
@@ -57,6 +60,15 @@ export function FinancialSharing() {
         {data.members.map((member) => <label key={member.id} className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={(draft?.accounts.find((a) => a.id === account.id) ?? account).sharedWith.includes(member.id)} onChange={() => save({ resource: "account", accountId: account.id, memberUserIds: toggle(account.sharedWith, member.id) })} />
           Share {account.name} with {member.name || "Household member"}
+        </label>)}
+      </fieldset>)}
+      {(data.properties ?? []).map(property => <fieldset key={property.id} className="space-y-2 border-t pt-3" disabled={busy}>
+        <legend className="font-medium">{property.name}</legend>
+        <p className="text-sm text-muted-foreground">{property.sharedWith.length ? "Shared · selected members can view and edit property details and valuations" : "Private · only you"}</p>
+        <p className="text-sm text-muted-foreground">Share linked mortgage accounts separately in the account settings above. Property reports include only transactions from accounts each member can access.</p>
+        {data.members.map(member => <label key={member.id} className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={(draft?.properties?.find(p => p.id === property.id) ?? property).sharedWith.includes(member.id)} onChange={() => save({ resource: "property", propertyId: property.id, memberUserIds: toggle(property.sharedWith, member.id) })} />
+          Share property {property.name} with {member.name || "Household member"}
         </label>)}
       </fieldset>)}
       <fieldset className="space-y-2 border-t pt-3" disabled={busy}>

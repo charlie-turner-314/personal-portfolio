@@ -1,6 +1,6 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { householdInvitations, householdMemberships, householdAccountShares, householdNetWorthShares, people, users } from "@/lib/db/schema";
+import { householdInvitations, householdMemberships, householdAccountShares, householdNetWorthShares, householdPropertyShares, people, users } from "@/lib/db/schema";
 import { assertInvitationAcceptable, hashInvitationToken, INVITATION_LIFETIME_MS, newInvitationToken, normalizeInvitationEmail } from "./invitation-policy";
 
 // Serialize household graph changes, including reciprocal invites/acceptance.
@@ -66,6 +66,7 @@ export async function acceptHouseholdInvitation(actorUserId: string, token: stri
 /** Remove both directions so leaving/rejoining can never reactivate old consent. */
 async function clearFinancialShares(tx: Parameters<Parameters<typeof db.transaction>[0]>[0], memberUserId: string) {
   await tx.delete(householdAccountShares).where(or(eq(householdAccountShares.memberUserId, memberUserId), eq(householdAccountShares.grantedByUserId, memberUserId)));
+  await tx.delete(householdPropertyShares).where(or(eq(householdPropertyShares.memberUserId, memberUserId), eq(householdPropertyShares.grantedByUserId, memberUserId)));
   await tx.delete(householdNetWorthShares).where(or(eq(householdNetWorthShares.memberUserId, memberUserId), eq(householdNetWorthShares.ownerUserId, memberUserId)));
 }
 

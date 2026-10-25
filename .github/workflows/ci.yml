@@ -133,7 +133,7 @@ jobs:
 
     - name: Test dashboard accounting and ownership
       working-directory: ./frontend
-      run: pnpm exec vitest run lib/categories/reporting.test.ts lib/dashboard/activity.test.ts lib/dashboard/sankey.test.ts lib/actions/dashboard.activity.test.ts lib/actions/dashboard.ownership.integration.test.ts components/dashboard/person-filter.test.tsx lib/actions/dashboard.cash.test.ts lib/actions/dashboard.net-worth.test.ts lib/people/ownership-sql.test.ts lib/net-worth/calculation.test.ts components/settings/ai-settings.test.tsx components/transactions/categorization-suggestion.test.tsx lib/transactions/category-confidence.test.ts
+      run: pnpm exec vitest run lib/actions/properties.access.test.ts lib/household/property-access.test.ts lib/categories/reporting.test.ts lib/dashboard/activity.test.ts lib/dashboard/sankey.test.ts lib/actions/dashboard.activity.test.ts lib/actions/dashboard.ownership.integration.test.ts components/dashboard/person-filter.test.tsx lib/actions/dashboard.cash.test.ts lib/actions/dashboard.net-worth.test.ts lib/people/ownership-sql.test.ts lib/net-worth/calculation.test.ts components/settings/ai-settings.test.tsx components/transactions/categorization-suggestion.test.tsx lib/transactions/category-confidence.test.ts
 
     - name: Test categorisation and person-level accounting
       working-directory: ./backend

@@ -1,5 +1,7 @@
 "use server";
 
+import { householdTransaction } from "@/lib/household/invitations";
+import { propertyAccess, accountAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
 import { eq, and, desc, gte, inArray, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -191,14 +193,20 @@ export async function updateProperty(
     }
 
     const property = await db.query.properties.findFirst({
-      where: and(eq(properties.id, propertyId), eq(properties.userId, userId)),
+      where: and(eq(properties.id, propertyId), propertyAccess(properties.id, userId)),
     });
 
     if (!property) {
       return { success: false, error: "Property not found" };
     }
 
-    await db.transaction(async (tx) => {
+    if (property.userId !== userId && input.linkedLiabilityAccountIds !== undefined) {
+      return { success: false, error: "Only the property owner can change linked liabilities" };
+    }
+    await householdTransaction(async (tx) => {
+      const [permitted] = await tx.select({ id: properties.id }).from(properties)
+        .where(and(eq(properties.id, propertyId), propertyAccess(properties.id, userId))).for("update");
+      if (!permitted) throw new Error("Property not found");
       await tx
         .update(properties)
         .set({
@@ -209,11 +217,11 @@ export async function updateProperty(
           currency: input.currency,
           isRental: input.isRental,
           valuationDate: input.valuationDate,
-          valuationSource: input.valuationSource?.trim() || null,
-          notes: input.notes?.trim() || null,
+          valuationSource: input.valuationSource === undefined ? undefined : input.valuationSource?.trim() || null,
+          notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
           updatedAt: new Date(),
         })
-        .where(eq(properties.id, propertyId));
+        .where(and(eq(properties.id, propertyId), propertyAccess(properties.id, userId)));
 
       if (input.linkedLiabilityAccountIds !== undefined) {
         await tx
@@ -234,7 +242,7 @@ export async function updateProperty(
         }
       }
 
-      const valuation = buildValuationSnapshot(userId, propertyId, {
+      const valuation = buildValuationSnapshot(property.userId, propertyId, {
         ...input,
         currency: input.currency || property.currency || "EUR",
       });
@@ -276,7 +284,7 @@ export async function deleteProperty(
         isActive: false,
         updatedAt: new Date(),
       })
-      .where(eq(properties.id, propertyId));
+      .where(and(eq(properties.id, propertyId), propertyAccess(properties.id, userId)));
 
     revalidatePropertyPaths(propertyId);
     return { success: true };
@@ -294,7 +302,7 @@ export async function getProperties() {
   }
 
   return db.query.properties.findMany({
-    where: and(eq(properties.userId, userId), eq(properties.isActive, true)),
+    where: and(propertyAccess(properties.id, userId), eq(properties.isActive, true)),
     orderBy: (properties, { asc }) => [asc(properties.name)],
   });
 }
@@ -309,7 +317,7 @@ export async function getProperty(propertyId: string) {
   return db.query.properties.findFirst({
     where: and(
       eq(properties.id, propertyId),
-      eq(properties.userId, userId),
+      propertyAccess(properties.id, userId),
       eq(properties.isActive, true)
     ),
   });
@@ -322,7 +330,7 @@ export async function getPropertyLiabilityLinks(propertyIds?: string[]) {
     return [];
   }
 
-  const conditions = [eq(propertyLiabilityLinks.userId, userId)];
+  const conditions = [propertyAccess(propertyLiabilityLinks.propertyId, userId), accountAccess(propertyLiabilityLinks.accountId, userId)];
   if (propertyIds && propertyIds.length > 0) {
     conditions.push(inArray(propertyLiabilityLinks.propertyId, propertyIds));
   }
@@ -340,7 +348,7 @@ export async function getPropertyValuations(propertyIds?: string[]) {
     return [];
   }
 
-  const conditions = [eq(propertyValuations.userId, userId)];
+  const conditions = [propertyAccess(propertyValuations.propertyId, userId)];
   if (propertyIds && propertyIds.length > 0) {
     conditions.push(inArray(propertyValuations.propertyId, propertyIds));
   }
@@ -385,7 +393,7 @@ export async function getPropertyTaggedTransactions(
   const property = await db.query.properties.findFirst({
     where: and(
       eq(properties.id, propertyId),
-      eq(properties.userId, userId),
+      propertyAccess(properties.id, userId),
       eq(properties.isActive, true),
     ),
   });
@@ -414,7 +422,7 @@ export async function getPropertyTaggedTransactions(
       sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
     )
     .where(and(
-      eq(transactions.userId, userId),
+      accountAccess(transactions.accountId, userId),
       eq(transactions.propertyId, propertyId),
     ))
     .orderBy(desc(transactions.bookedAt))
@@ -446,7 +454,7 @@ export async function getPropertyTaxYearSummary(
   const property = await db.query.properties.findFirst({
     where: and(
       eq(properties.id, propertyId),
-      eq(properties.userId, userId),
+      propertyAccess(properties.id, userId),
       eq(properties.isActive, true),
     ),
   });
@@ -472,7 +480,7 @@ export async function getPropertyTaxYearSummary(
       sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`,
     )
     .where(and(
-      eq(transactions.userId, userId),
+      accountAccess(transactions.accountId, userId),
       eq(transactions.propertyId, propertyId),
       eq(transactions.includeInAnalytics, true),
       gte(transactions.bookedAt, rangeStart),
