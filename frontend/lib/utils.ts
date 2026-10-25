@@ -48,7 +48,7 @@ export function formatCurrency(
  * @param currency - ISO 4217 currency code
  */
 export function formatAmount(amount: number, currency: string): string {
-  const formatted = new Intl.NumberFormat("nl-NL", {
+  const formatted = new Intl.NumberFormat("en-AU", {
     style: "currency",
     currency,
     minimumFractionDigits: 2,

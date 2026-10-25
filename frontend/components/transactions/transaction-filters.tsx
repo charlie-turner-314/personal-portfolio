@@ -396,9 +396,13 @@ export function TransactionFilters({
   onClearFilters,
 }: TransactionFiltersProps) {
   const [searchInput, setSearchInput] = React.useState(filters.search ?? "");
+  const searchRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
-    setSearchInput(filters.search ?? "");
+    // A completed navigation may contain an older search than the current draft.
+    if (document.activeElement !== searchRef.current) {
+      setSearchInput(filters.search ?? "");
+    }
   }, [filters.search]);
 
   React.useEffect(() => {
@@ -593,6 +597,7 @@ export function TransactionFilters({
           <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none" data-walkthrough="walkthrough-search">
             <RiSearchLine className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              ref={searchRef}
               placeholder="Search transactions..."
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
@@ -620,7 +625,10 @@ export function TransactionFilters({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={onClearFilters}
+                    onClick={() => {
+                      setSearchInput("");
+                      onClearFilters();
+                    }}
                     className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
                   >
                     Clear all
