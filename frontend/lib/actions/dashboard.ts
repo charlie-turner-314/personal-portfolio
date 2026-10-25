@@ -1,5 +1,6 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { db } from "@/lib/db";
 import { accounts, transactions, categories, users, properties, vehicles, transactionLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
@@ -46,7 +47,7 @@ const t2BookedAt = sql.raw("t2.booked_at");
 
 async function getLatestTransactionDate(userId: string, accountIds?: string[]): Promise<Date> {
   const normalizedAccountIds = normalizeAccountIds(accountIds);
-  const conditions = [eq(transactions.userId, userId)];
+  const conditions = [accountAccess(transactions.accountId, userId)];
   if (normalizedAccountIds?.length) {
     conditions.push(inArray(transactions.accountId, normalizedAccountIds));
   }
@@ -81,7 +82,7 @@ export async function getAvailableMonths() {
       month: sql<number>`EXTRACT(MONTH FROM ${transactions.bookedAt})::int`,
     })
     .from(transactions)
-    .where(eq(transactions.userId, session.user.id))
+    .where(accountAccess(transactions.accountId, session.user.id))
     .groupBy(
       sql`EXTRACT(YEAR FROM ${transactions.bookedAt})`,
       sql`EXTRACT(MONTH FROM ${transactions.bookedAt})`
@@ -103,7 +104,7 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
   if (!session?.user?.id) return { total: 0, currency: "EUR" };
 
   const conditions = [
-    eq(accounts.userId, session.user.id),
+    accountAccess(accounts.id, session.user.id),
     eq(accounts.isActive, true),
     inArray(accounts.accountType, [...CASH_ACCOUNT_TYPE_VALUES]),
   ];
@@ -131,7 +132,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   if (!session?.user?.id) return [];
 
   const conditions = [
-    eq(accounts.userId, session.user.id),
+    accountAccess(accounts.id, session.user.id),
     eq(accounts.isActive, true),
     inArray(accounts.accountType, [...CASH_ACCOUNT_TYPE_VALUES]),
   ];
@@ -168,7 +169,7 @@ async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: s
   if (!session?.user?.id) return summarizeActivity([]);
   const normalizedAccountIds = normalizeAccountIds(accountIds);
   const conditions = [
-    eq(transactions.userId, session.user.id),
+    accountAccess(transactions.accountId, session.user.id),
     eq(transactions.includeInAnalytics, true),
     isNull(transactions.internalTransferId),
     gte(transactions.bookedAt, startDate),
@@ -274,10 +275,10 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         superAccounts,
         and(
           eq(superAccounts.accountId, accounts.id),
-          eq(superAccounts.userId, session.user.id),
+          accountAccess(superAccounts.accountId, session.user.id),
         ),
       )
-      .where(and(eq(accounts.userId, session.user.id), eq(accounts.isActive, true))),
+      .where(and(accountAccess(accounts.id, session.user.id), eq(accounts.isActive, true))),
     db
       .select({
         id: properties.id,
@@ -347,7 +348,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
 
   return {
     ...calculateNetWorthOverview(entries, currency),
-    scope: personId ? "Selected person’s share" : "Whole household",
+    scope: personId ? "Selected person’s share of visible accounts" : "Your visible finances",
     accountFiltered: Boolean(selectedIds),
   };
 }

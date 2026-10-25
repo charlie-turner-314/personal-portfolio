@@ -16,6 +16,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.financial_access import account_access
 from app.models import (
     Account,
     CgtAllocation,
@@ -77,7 +78,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     start, end = financial_year_bounds(financial_year_start)
     income_events = (
         db.query(InvestmentIncomeEvent)
-        .filter(InvestmentIncomeEvent.user_id == user_id,
+        .filter(account_access(InvestmentIncomeEvent.account_id, user_id),
                 InvestmentIncomeEvent.pay_date >= start.date(),
                 InvestmentIncomeEvent.pay_date < end.date())
         .order_by(InvestmentIncomeEvent.pay_date, InvestmentIncomeEvent.id)
@@ -114,7 +115,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     cgt_events = (
         db.query(CgtAllocation)
         .join(Account, Account.id == CgtAllocation.account_id)
-        .filter(Account.user_id == user_id, CgtAllocation.disposal_date >= start.date(), CgtAllocation.disposal_date < end.date())
+        .filter(account_access(Account.id, user_id), CgtAllocation.disposal_date >= start.date(), CgtAllocation.disposal_date < end.date())
         .order_by(CgtAllocation.disposal_date, CgtAllocation.id)
         .all()
     )
@@ -149,7 +150,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
         db.query(InvestmentCostBaseAdjustment)
         .join(Account, Account.id == InvestmentCostBaseAdjustment.account_id)
         .filter(
-            Account.user_id == user_id,
+            account_access(Account.id, user_id),
             InvestmentCostBaseAdjustment.effective_date >= start.date(),
             InvestmentCostBaseAdjustment.effective_date < end.date(),
         )
@@ -205,7 +206,8 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     # as excluded instead of guessing.
     linked_ids = {
         transaction_id for (transaction_id,) in db.query(TransactionLink.transaction_id)
-        .filter(TransactionLink.user_id == user_id).all()
+        .join(Transaction, Transaction.id == TransactionLink.transaction_id)
+        .filter(account_access(Transaction.account_id, user_id)).all()
     }
     matched_income_transaction_ids = {
         event.matched_transaction_id for event in income_events if event.matched_transaction_id
@@ -213,7 +215,7 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
     transactions = (
         db.query(Transaction)
         .options(joinedload(Transaction.property))
-        .filter(Transaction.user_id == user_id, Transaction.booked_at >= start, Transaction.booked_at < end)
+        .filter(account_access(Transaction.account_id, user_id), Transaction.booked_at >= start, Transaction.booked_at < end)
         .order_by(Transaction.booked_at, Transaction.id).all()
     )
     transaction_rows, excluded = [], []
@@ -231,7 +233,8 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             excluded.append({"source_id": str(transaction.id), "reason": "reimbursement_link"})
             continue
         category = transaction.category or transaction.category_system
-        is_rental = bool(transaction.property and transaction.property.is_rental)
+        visible_property = transaction.property if transaction.property and transaction.property.user_id == user_id else None
+        is_rental = bool(visible_property and visible_property.is_rental)
         transaction_rows.append({
             "source_id": str(transaction.id), "account_id": str(transaction.account_id),
             "booked_at": transaction.booked_at.isoformat(), "transaction_type": transaction.transaction_type,
@@ -239,9 +242,9 @@ def build_australian_tax_report(db: Session, user_id: str, financial_year_start:
             "currency": transaction.currency, "category_id": str(category.id) if category else None,
             "category_name": category.name if category else None,
             "category_type": category.category_type if category else None,
-            "property_id": str(transaction.property_id) if transaction.property_id else None,
+            "property_id": str(visible_property.id) if visible_property else None,
             "tax_treatment": "unclassified", "interest_treatment": "unavailable",
-            "rental_treatment": "recorded_property_cashflow" if is_rental else ("unavailable" if transaction.property_id else "not_property_linked"),
+            "rental_treatment": "recorded_property_cashflow" if is_rental else ("unavailable" if visible_property else "not_property_linked"),
             "is_rental_property": is_rental,
         })
 

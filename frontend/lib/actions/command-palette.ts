@@ -1,5 +1,6 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { eq, and, desc, ilike, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accounts, properties, vehicles, transactions } from "@/lib/db/schema";
@@ -61,7 +62,7 @@ export async function getCommandPaletteData(): Promise<CommandPaletteData> {
   // Fetch all data in parallel
   const [accountsData, propertiesData, vehiclesData] = await Promise.all([
     db.query.accounts.findMany({
-      where: and(eq(accounts.userId, userId), eq(accounts.isActive, true)),
+      where: and(accountAccess(accounts.id, userId), eq(accounts.isActive, true)),
       orderBy: [desc(accounts.createdAt)],
       with: {
         logo: {
@@ -147,7 +148,7 @@ export async function searchCommandPaletteTransactions(
 
   const transactionRows = await db.query.transactions.findMany({
     where: and(
-      eq(transactions.userId, userId),
+      accountAccess(transactions.accountId, userId),
       or(
         ilike(transactions.merchant, `%${normalizedQuery}%`),
         ilike(transactions.description, `%${normalizedQuery}%`)

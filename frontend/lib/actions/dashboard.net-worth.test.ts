@@ -27,7 +27,7 @@ describe("net worth account and ownership orchestration", () => {
   });
   it("reports gross property and debt once instead of reporting only equity", async () => {
     const result = await getAssetsOverview();
-    expect(result).toMatchObject({ grossAssets: 775000, totalLiabilities: 520000, netWorth: 255000, scope: "Whole household" });
+    expect(result).toMatchObject({ grossAssets: 775000, totalLiabilities: 520000, netWorth: 255000, scope: "Your visible finances" });
     expect(result.categories.find((c) => c.key === "property")?.value).toBe(750000);
     expect(result.liabilities).toHaveLength(1);
   });
@@ -36,7 +36,7 @@ describe("net worth account and ownership orchestration", () => {
     mocks.rows.vehicles = [{ id: "car", name: "Car", currentValue: 10000, currency: "AUD" }];
     mocks.owners.mockImplementation(async (entity: string) => new Map([[entity === "property" ? "home" : "car", [{ personId: "self", share: 0.5 }, { personId: "partner", share: 0.5 }]]]));
     const result = await getAssetsOverview(undefined, "self");
-    expect(result).toMatchObject({ grossAssets: 392500, totalLiabilities: 130000, netWorth: 262500, scope: "Selected person’s share" });
+    expect(result).toMatchObject({ grossAssets: 392500, totalLiabilities: 130000, netWorth: 262500, scope: "Selected person’s share of visible accounts" });
     const selection = mocks.selections.find((s) => s.ownershipShare);
     const query = new PgDialect().sqlToQuery(selection!.ownershipShare as Parameters<PgDialect["sqlToQuery"]>[0]);
     expect(query.params).toContain("self"); expect(query.sql).toContain("CURRENT_DATE");

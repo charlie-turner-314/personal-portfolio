@@ -8,9 +8,10 @@ import { requireAuth } from "@/lib/auth-helpers";
 export async function GET() {
   const userId = await requireAuth();
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const rows = await getPeople((await getHouseholdAccess(userId)).ownerUserId);
+  const access = await getHouseholdAccess(userId);
+  const rows = await getPeople(access.ownerUserId);
   return NextResponse.json({
-    people: rows.map((p) => ({ ...p, avatarUrl: avatarUrl(p.avatarPath) })),
+    people: rows.map((p) => ({ ...p, kind: access.personId ? (p.id === access.personId ? "self" : "member") : p.kind, avatarUrl: avatarUrl(p.avatarPath) })),
   });
 }
 

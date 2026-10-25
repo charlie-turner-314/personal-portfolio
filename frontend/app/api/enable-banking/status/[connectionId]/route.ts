@@ -1,4 +1,3 @@
-import { getHouseholdAccess } from "@/lib/household/access";
 import { NextRequest, NextResponse } from "next/server";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
@@ -19,14 +18,14 @@ export async function GET(
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
-    userId = (await getHouseholdAccess(session.user.id)).ownerUserId;
+    userId = session.user.id;
   } catch {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   try {
     const backendBase = getBackendBaseUrl().replace(/\/+$/, "");
-    const pathWithQuery = `/api/enable-banking/status/${connectionId}`;
+    const pathWithQuery = `/api/enable-banking/status/${encodeURIComponent(connectionId)}`;
     const url = `${backendBase}${pathWithQuery}`;
 
     const signatureHeaders = createInternalAuthHeaders({

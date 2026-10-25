@@ -21,6 +21,7 @@ import logging
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.services.financial_access import account_access
 from app.models import (
     Account,
     AccountBalance,
@@ -174,7 +175,7 @@ def import_trades(
     """Import a batch of broker trades. See spec §"New MCP tools"."""
     account = (
         db.query(Account)
-        .filter(Account.id == account_id, Account.user_id == user_id)
+        .filter(Account.id == account_id, account_access(Account.id, user_id))
         .first()
     )
     if account is None:
@@ -544,7 +545,7 @@ def remove_trade(
     commit: bool = True,
 ) -> bool:
     """Delete an owned trade and rebuild its holding through the same FIFO path."""
-    account = db.query(Account).filter(Account.id == account_id, Account.user_id == user_id).first()
+    account = db.query(Account).filter(Account.id == account_id, account_access(Account.id, user_id)).first()
     if account is None:
         raise ImportError(f"account not found or not owned by user: {account_id}")
     trade = db.query(BrokerTrade).filter(BrokerTrade.id == trade_id, BrokerTrade.account_id == account.id).first()

@@ -1,14 +1,15 @@
 // Cached read layer. NOT a "use server" module.
 // Two cache layers:
 // - React.cache: per-request dedup (no TTL, scoped to a single render).
-// - unstable_cache: cross-request, keyed by userId, invalidated by tag.
+// - unstable_cache: personal categories/onboarding only. Account access is checked live.
 // Mutations MUST call revalidateTag(...) for the relevant tag below.
 
+import { accountAccess } from "@/lib/household/account-access";
 import { cache } from "react";
 import { unstable_cache } from "next/cache";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, categories, users } from "@/lib/db/schema";
+import { accounts, categories, users, householdAccountShares } from "@/lib/db/schema";
 import { getAuthenticatedSession as getFinancialSession } from "@/lib/household/financial-auth";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";
@@ -59,16 +60,11 @@ async function fetchAccountsForUser(userId: string) {
       currency: accounts.currency,
     })
     .from(accounts)
-    .where(and(eq(accounts.userId, userId), eq(accounts.isActive, true)))
+    .where(and(accountAccess(accounts.id, userId), eq(accounts.isActive, true)))
     .orderBy(accounts.name);
 }
 
-const getCachedAccountsByUser = (userId: string) =>
-  unstable_cache(
-    () => fetchAccountsForUser(userId),
-    ["accounts", userId],
-    { tags: [CACHE_TAGS.accounts(userId)] },
-  )();
+const getCachedAccountsByUser = fetchAccountsForUser;
 
 export const getCachedUserAccounts = cache(async () => {
   const session = await getFinancialSession();
@@ -81,7 +77,7 @@ export const getCachedUserAccounts = cache(async () => {
 
 async function fetchFullAccountsForUser(userId: string) {
   const accountRows = await db.query.accounts.findMany({
-    where: and(eq(accounts.userId, userId), eq(accounts.isActive, true)),
+    where: and(accountAccess(accounts.id, userId), eq(accounts.isActive, true)),
     orderBy: (accounts, { asc }) => [asc(accounts.name)],
     with: {
       logo: {
@@ -93,15 +89,19 @@ async function fetchFullAccountsForUser(userId: string) {
       },
     },
   });
-  return resolveMissingAccountLogos(accountRows);
+  const resolved = await resolveMissingAccountLogos(accountRows);
+  // Provider identifiers and connection linkage are personal integration metadata.
+  const ownedIds = resolved.filter((account) => account.userId === userId).map((account) => account.id);
+  const shares = ownedIds.length ? await db.select({ accountId: householdAccountShares.accountId }).from(householdAccountShares)
+    .where(and(inArray(householdAccountShares.accountId, ownedIds), eq(householdAccountShares.grantedByUserId, userId))) : [];
+  const sharedIds = new Set(shares.map((share) => share.accountId));
+  return resolved.map((account) => account.userId === userId
+    ? { ...account, accessMode: "owner" as const, visibility: sharedIds.has(account.id) ? "Shared" : "Private" }
+    : { ...account, accessMode: "shared" as const, visibility: "Shared with you", externalId: null, externalIdCiphertext: null, externalIdHash: null,
+      ibanCiphertext: null, ibanHash: null, bankConnectionId: null });
 }
 
-const getCachedFullAccountsByUser = (userId: string) =>
-  unstable_cache(
-    () => fetchFullAccountsForUser(userId),
-    ["accounts:full", userId],
-    { tags: [CACHE_TAGS.accounts(userId)] },
-  )();
+const getCachedFullAccountsByUser = fetchFullAccountsForUser;
 
 export const getCachedFullUserAccounts = cache(async () => {
   const session = await getFinancialSession();

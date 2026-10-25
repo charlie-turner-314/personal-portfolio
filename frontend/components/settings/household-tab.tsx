@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { FinancialSharing } from "@/components/household/financial-sharing";
 import { HouseholdAccess } from "@/components/household/household-access";
 import { PeopleList } from "@/components/household/people-list";
 
@@ -22,6 +23,7 @@ export function HouseholdTab({ people, isOwner = true }: { people: Person[]; isO
         </p>
       </div>
       <PeopleList initialPeople={people} readOnly={!isOwner} onPeopleChange={setCurrentPeople} />
+      <FinancialSharing />
       <HouseholdAccess people={currentPeople} />
     </div>
   );

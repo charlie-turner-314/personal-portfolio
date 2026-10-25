@@ -166,7 +166,7 @@ class TestSuggestedMappings(unittest.TestCase):
             call_count = [0]
             def first_side_effect():
                 call_count[0] += 1
-                if call_count[0] == 1:
+                if call_count[0] == 2:
                     return existing_account  # bank-uid-1 matches
                 return None  # bank-uid-2 does not match
 

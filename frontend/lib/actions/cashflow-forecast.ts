@@ -1,5 +1,6 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
 import {
   and,
@@ -177,7 +178,7 @@ async function getUserCurrency(userId: string): Promise<string> {
 }
 
 async function getForecastAccounts(userId: string, accountIds: string[]) {
-  const conditions = [eq(accounts.userId, userId), eq(accounts.isActive, true)];
+  const conditions = [accountAccess(accounts.id, userId), eq(accounts.isActive, true)];
   if (accountIds.length) conditions.push(inArray(accounts.id, accountIds));
 
   return db
@@ -408,7 +409,7 @@ async function getRecurringEntries(
       .from(transactions)
       .where(
         and(
-          eq(transactions.userId, userId),
+          accountAccess(transactions.accountId, userId),
           isNotNull(transactions.recurringTransactionId),
           ...(accountIds.length ? [inArray(transactions.accountId, accountIds)] : [])
         )
@@ -423,7 +424,7 @@ async function getRecurringEntries(
       .from(transactions)
       .where(
         and(
-          eq(transactions.userId, userId),
+          accountAccess(transactions.accountId, userId),
           isNotNull(transactions.recurringTransactionId),
           ...(accountIds.length ? [inArray(transactions.accountId, accountIds)] : [])
         )
@@ -511,7 +512,7 @@ async function getIncomePatternEntries(
     )
     .where(
       and(
-        eq(transactions.userId, userId),
+        accountAccess(transactions.accountId, userId),
         eq(transactions.transactionType, "credit"),
         eq(transactions.includeInAnalytics, true),
         isNull(transactions.internalTransferId),
@@ -691,7 +692,7 @@ export async function getCashflowOverrideFormOptions(): Promise<CashflowForecast
     db
       .select({ id: accounts.id, name: accounts.name })
       .from(accounts)
-      .where(and(eq(accounts.userId, userId), eq(accounts.isActive, true)))
+      .where(and(accountAccess(accounts.id, userId), eq(accounts.isActive, true)))
       .orderBy(asc(accounts.name)),
     db
       .select({
@@ -747,7 +748,7 @@ async function validateOverrideOwnership(
   const accountRows = await db
     .select({ id: accounts.id })
     .from(accounts)
-    .where(and(eq(accounts.id, input.accountId), eq(accounts.userId, userId)))
+    .where(and(eq(accounts.id, input.accountId), accountAccess(accounts.id, userId)))
     .limit(1);
 
   if (!accountRows[0]) return "Account could not be found";

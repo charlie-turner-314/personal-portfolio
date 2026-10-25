@@ -6,7 +6,7 @@ const dbContainer = process.env.HOUSEHOLD_UAT_DB_CONTAINER;
 test.skip(!dbContainer, "Requires an explicitly selected isolated release-lab database");
 const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
-test("placeholder gains an independent login; revocation and leaving preserve both datasets", async ({ page: owner, browser, baseURL }) => {
+test("household logins preserve privacy, explicit shared edits and aggregate-only net worth; revoke and leave remove access", async ({ page: owner, browser, baseURL }) => {
   test.setTimeout(180_000);
   const origin = new URL(baseURL!).origin;
   expect(["localhost", "127.0.0.1"]).toContain(new URL(origin).hostname);
@@ -20,10 +20,12 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
   expect(signup.ok()).toBeTruthy();
   const ownerId = (await signup.json()).user.id as string;
   const sharedId = randomUUID();
+  const ownerPrivateId = randomUUID();
   psql(`BEGIN; UPDATE users SET onboarding_status='completed', functional_currency='AUD' WHERE id=${literal(ownerId)} AND email=${literal(ownerEmail)};
-    INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${sharedId}',${literal(ownerId)},'Household Shared Savings','savings','AUD','manual',1000,1000); COMMIT;`);
+    INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${sharedId}',${literal(ownerId)},'Household Shared Savings','savings','AUD','manual',1000,1000);
+    INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${ownerPrivateId}',${literal(ownerId)},'Owner Private Savings','savings','AUD','manual',400,400); COMMIT;`);
   await owner.addInitScript(({ userId }) => {
-    localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["home", "settings"], userId }, version: 0 }));
+    localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["home", "settings", "assets", "transactions"], userId }, version: 0 }));
   }, { userId: ownerId });
   await owner.goto("/settings?tab=household");
   await owner.getByRole("button", { name: "Add household person", exact: true }).click();
@@ -56,18 +58,48 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
     await expect(member.getByRole("button", { name: "Accept invitation" })).toBeVisible();
     const memberId = (await (await member.request.get("/api/auth/get-session")).json()).user.id as string;
     const privateId = randomUUID();
-    psql(`INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${privateId}',${literal(memberId)},'Preserved Personal Savings','savings','AUD','manual',200,200);`);
+    psql(`UPDATE users SET onboarding_status='completed', functional_currency='AUD' WHERE id=${literal(memberId)} AND email=${literal(memberEmail)}; INSERT INTO accounts(id,user_id,name,account_type,currency,provider,starting_balance,functional_balance) VALUES ('${privateId}',${literal(memberId)},'Preserved Personal Savings','savings','AUD','manual',200,200);`);
     await member.addInitScript(({ userId }) => {
-      localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["home", "settings"], userId }, version: 0 }));
+      localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["home", "settings", "assets", "transactions"], userId }, version: 0 }));
     }, { userId: memberId });
     await member.getByRole("button", { name: "Accept invitation" }).click();
     await expect(member.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
     const loginIdentity = await (await member.request.get("/api/auth/get-session")).json();
     expect(loginIdentity.user.id).toBe(memberId);
     expect(loginIdentity.user.email).toBe(memberEmail);
-    const shared = await (await member.request.get("/api/accounts")).json();
-    expect(JSON.stringify(shared)).toContain(sharedId);
-    expect(JSON.stringify(shared)).not.toContain(privateId);
+    const personal = await (await member.request.get("/api/accounts")).json();
+    expect(JSON.stringify(personal)).not.toContain(sharedId);
+    expect(JSON.stringify(personal)).toContain(privateId);
+    expect(JSON.stringify(personal)).not.toContain(ownerPrivateId);
+    expect((await member.request.get(`/api/accounts/${ownerPrivateId}`)).status()).toBe(404);
+    await owner.reload();
+    await owner.getByRole("checkbox", { name: "Share Household Shared Savings with Partner Login", exact: true }).check();
+    await expect.poll(async () => JSON.stringify(await (await member.request.get("/api/accounts")).json())).toContain(sharedId);
+    expect(JSON.stringify(await (await member.request.get("/api/accounts")).json())).toContain(privateId);
+    expect(JSON.stringify(await (await owner.request.get("/api/accounts")).json())).not.toContain(privateId);
+    expect((await (await member.request.get("/api/household/net-worth")).json()).totals).toHaveLength(1);
+    await owner.getByRole("checkbox", { name: "Share your net worth total with Partner Login", exact: true }).check();
+    await expect.poll(async () => (await (await member.request.get("/api/household/net-worth")).json()).totals.length).toBe(2);
+    const totals = (await (await member.request.get("/api/household/net-worth")).json()).totals;
+    expect(Number(totals.find((total: { userId: string }) => total.userId === ownerId).total)).toBe(400);
+    expect(JSON.stringify(totals)).not.toContain(ownerPrivateId);
+    await member.goto("/assets");
+    await expect(member.getByText("Owner Private Savings", { exact: true })).toHaveCount(0);
+    const sharedRow = member.getByTestId(`account-${sharedId}`);
+    await expect(sharedRow.getByText("Shared with you", { exact: true })).toBeVisible();
+    await sharedRow.getByRole("button").last().click();
+    await expect(member.getByRole("menuitem", { name: "Delete", exact: true })).toHaveCount(0);
+    await member.getByRole("menuitem", { name: "Edit", exact: true }).click();
+    await member.getByLabel("Account Name", { exact: true }).fill("Edited Shared Savings");
+    await member.getByRole("button", { name: "Save Changes", exact: true }).click();
+    await expect(member.getByRole("dialog")).toHaveCount(0);
+    await expect.poll(async () => JSON.stringify(await (await owner.request.get("/api/accounts")).json())).toContain("Edited Shared Savings");
+    // Warm account views, then remove a grant and verify the next request loses it.
+    await owner.getByRole("checkbox", { name: "Share Household Shared Savings with Partner Login", exact: true }).uncheck();
+    await expect.poll(async () => JSON.stringify(await (await member.request.get("/api/accounts")).json())).not.toContain(sharedId);
+    await owner.reload();
+    await owner.getByRole("checkbox", { name: "Share Edited Shared Savings with Partner Login", exact: true }).check();
+    await expect.poll(async () => JSON.stringify(await (await member.request.get("/api/accounts")).json())).toContain(sharedId);
     const forbidden = await member.request.post("/api/household", { data: { action: "invite", personId, email: "other@example.test" }, headers: { Origin: origin } });
     expect(forbidden.status()).toBe(409);
     const mutatePerson = await member.request.patch(`/api/people/${personId}`, { multipart: { name: "Not permitted" } });
@@ -82,6 +114,10 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
     const afterRevoke = await (await member.request.get("/api/accounts")).json();
     expect(JSON.stringify(afterRevoke)).not.toContain(sharedId);
     expect(JSON.stringify(afterRevoke)).toContain(privateId);
+    expect((await (await member.request.get("/api/household/net-worth")).json()).totals).toHaveLength(1);
+    const historyDeletion = await owner.request.delete(`/api/people/${personId}`);
+    expect(historyDeletion.status()).toBe(409);
+    expect(JSON.stringify(await historyDeletion.json())).not.toContain(privateId);
     const replay = await member.request.post("/api/household", { headers: { Origin: origin }, data: { action: "accept", token: new URL(link).searchParams.get("token") } });
     expect(replay.status()).toBe(409);
     const nextLink = await invite();
@@ -93,6 +129,7 @@ test("placeholder gains an independent login; revocation and leaving preserve bo
     await expect(member.getByRole("button", { name: "Accept invitation" })).toBeVisible();
     await member.getByRole("button", { name: "Accept invitation" }).click();
     await expect(member.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+    expect(JSON.stringify(await (await member.request.get("/api/accounts")).json())).not.toContain(sharedId);
     await member.goto("/settings?tab=household");
     await member.getByRole("button", { name: "Leave household" }).click();
     await expect.poll(async () => JSON.stringify(await (await member.request.get("/api/accounts")).json())).not.toContain(sharedId);

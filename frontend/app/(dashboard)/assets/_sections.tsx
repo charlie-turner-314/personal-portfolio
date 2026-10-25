@@ -7,6 +7,7 @@ import {
 import { getVehicles } from "@/lib/actions/vehicles";
 import { getPeople, getOwnersForEntities } from "@/lib/people";
 import { avatarUrl } from "@/lib/people/avatars";
+import { getHouseholdAccess } from "@/lib/household/access";
 import { requireAuth } from "@/lib/household/financial-auth";
 import { AssetManagement } from "./asset-management";
 
@@ -22,12 +23,13 @@ function ownerIdsByEntity(
 
 export async function AssetsSection() {
   const userId = await requireAuth();
+  const access = userId ? await getHouseholdAccess(userId) : null;
 
   const [accounts, properties, vehicles, peopleRows] = await Promise.all([
     getAccounts(),
     getProperties(),
     getVehicles(),
-    userId ? getPeople(userId) : Promise.resolve([]),
+    access ? getPeople(access.ownerUserId).then((rows) => rows.map((person) => ({ ...person, kind: access.personId ? (person.id === access.personId ? "self" : "member") : person.kind }))) : Promise.resolve([]),
   ]);
 
   // Batch-fetch owners for all visible entities in parallel — avoids N waterfall

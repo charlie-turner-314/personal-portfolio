@@ -12,6 +12,7 @@ from typing import Optional, Literal
 from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import joinedload
 
+from app.services.financial_access import account_access
 from app.mcp.dependencies import get_db, validate_uuid, validate_date
 from app.models import Transaction, Account, Category
 
@@ -144,7 +145,7 @@ def list_transactions(
     with get_db() as db:
         query = (
             db.query(Transaction)
-            .filter(Transaction.user_id == user_id)
+            .filter(account_access(Transaction.account_id, user_id))
             .options(joinedload(Transaction.account), joinedload(Transaction.category))
         )
         if account_uuid:
@@ -242,7 +243,7 @@ def get_transaction(user_id: str, transaction_id: str) -> dict | None:
             db.query(Transaction)
             .filter(
                 Transaction.id == txn_uuid,
-                Transaction.user_id == user_id
+                account_access(Transaction.account_id, user_id)
             )
             .options(joinedload(Transaction.account), joinedload(Transaction.category))
             .first()
@@ -375,7 +376,7 @@ def search_transactions(
     with get_db() as db:
         # Build base query with user filter
         base_filter = and_(
-            Transaction.user_id == user_id,
+            account_access(Transaction.account_id, user_id),
             _build_search_filter(query_str, match_mode)
         )
 
@@ -524,7 +525,7 @@ def search_transactions_multi(
 
         # Combine all query filters with OR
         combined_filter = and_(
-            Transaction.user_id == user_id,
+            account_access(Transaction.account_id, user_id),
             or_(*query_filters)
         )
 
@@ -571,7 +572,7 @@ def search_transactions_multi(
             q_str = q[:500] if q else ""
             if q_str:
                 q_filter = and_(
-                    Transaction.user_id == user_id,
+                    account_access(Transaction.account_id, user_id),
                     _build_search_filter(q_str, match_mode)
                 )
                 if account_uuid:
@@ -647,7 +648,7 @@ def update_transaction_category(
         # Verify transaction belongs to user
         txn = db.query(Transaction).filter(
             Transaction.id == txn_uuid,
-            Transaction.user_id == user_id
+            account_access(Transaction.account_id, user_id)
         ).first()
 
         if not txn:
@@ -740,7 +741,7 @@ def bulk_update_transaction_categories(
         found = (
             db.query(Transaction)
             .filter(
-                Transaction.user_id == user_id,
+                account_access(Transaction.account_id, user_id),
                 Transaction.id.in_(valid_uuids),
             )
             .options(joinedload(Transaction.category))
@@ -788,7 +789,7 @@ def bulk_update_transaction_categories(
             updated = 0
             if change_uuids:
                 updated = db.query(Transaction).filter(
-                    Transaction.user_id == user_id,
+                    account_access(Transaction.account_id, user_id),
                     Transaction.id.in_(change_uuids),
                 ).update({Transaction.category_id: cat_uuid}, synchronize_session=False)
                 db.commit()

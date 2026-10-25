@@ -1,4 +1,3 @@
-import { getHouseholdAccess } from "@/lib/household/access";
 import { NextRequest, NextResponse } from "next/server";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import {
@@ -54,7 +53,7 @@ export async function GET(req: NextRequest) {
         `${baseUrl}/login?redirect=${encodeURIComponent("/settings/connect-bank")}`
       );
     }
-    userId = (await getHouseholdAccess(session.user.id)).ownerUserId;
+    userId = session.user.id;
   } catch {
     return NextResponse.redirect(
       `${baseUrl}/login?redirect=${encodeURIComponent("/settings/connect-bank")}`
