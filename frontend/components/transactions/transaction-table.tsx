@@ -88,7 +88,7 @@ function mapSortColumnIdToSortField(id: string): TransactionSortField {
 }
 
 function formatSummaryAmount(amount: number): string {
-  return amount.toLocaleString(undefined, {
+  return amount.toLocaleString("en-AU", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
