@@ -57,7 +57,7 @@ test("property consent shares detail and edits, mortgage consent stays separate,
     await owner.getByRole("checkbox", { name: "Share Home Mortgage Fixture with Property Member", exact: true }).check();
     await expect.poll(async () => (await member.request.get(`/api/accounts/${mortgage}`)).status()).toBe(200);
     await member.reload();
-    await expect(member.getByText("Home Mortgage Fixture", { exact: true })).toBeVisible();
+    await expect(member.getByText("Home Mortgage Fixture", { exact: true }).first()).toBeVisible();
     await expect(member.getByText("Visible property payment", { exact: true })).toBeVisible();
     await expect(member.getByText("Private property payment", { exact: true })).toHaveCount(0);
     expect(Number(await memberTotal())).toBe(117000);

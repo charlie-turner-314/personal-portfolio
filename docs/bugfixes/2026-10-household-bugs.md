@@ -93,6 +93,9 @@ harness exposed a pre-existing create_transaction assignment to the collaborator
 instead of the canonical account owner (unchanged by the property feature). The
 existing canonical-ownership assertion failed; the route now assigns account.user_id.
 This preserves shared property-account activity and joint-account history.
+The browser also proved the existing property detail page crashed by calling
+buttonVariants from a client module in server rendering. The shared style helper
+now lives in a server-compatible module, with the client Button importing it.
 
 ## Remaining issues
 
