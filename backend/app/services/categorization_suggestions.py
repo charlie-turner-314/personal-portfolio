@@ -85,13 +85,6 @@ def request_suggestion(db, user_id, transaction_id):
         client = matcher._get_openai_client()
         if not client:
             raise ValueError("Provider unavailable")
-        # Use the benchmarked native protocol for the panel, honoring the existing
-        # user's provider/model and the deployment-owned private endpoint.
-        if getattr(matcher, "_ai_provider", None) == "ollama":
-            from app.services.ai_settings import ollama_url
-            from app.services.ollama_categorizer import OllamaCategorizerClient
-            client = OllamaCategorizerClient(ollama_url(), os.getenv("OLLAMA_API_KEY", "ollama"))
-            matcher._openai_client = client
         config = configuration(matcher, client, matcher._category_cache, context_mode)
         suggestion.provider, suggestion.model = config["provider"], config["model"]
         suggestion.config_fingerprint = digest(config)

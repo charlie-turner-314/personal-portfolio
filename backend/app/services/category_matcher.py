@@ -372,7 +372,12 @@ class CategoryMatcher:
                     return None
                 self.LLM_MODEL = config['model']
                 self._ai_provider = config['provider']
-                self._openai_client = ollama_client() if self._ai_provider == 'ollama' else openai_client(config['key'])
+                if self._ai_provider == 'ollama' and getattr(self, 'capture_inference', False):
+                    from app.services.ai_settings import ollama_url
+                    from app.services.ollama_categorizer import OllamaCategorizerClient
+                    self._openai_client = OllamaCategorizerClient(ollama_url(), os.getenv('OLLAMA_API_KEY') or 'ollama')
+                else:
+                    self._openai_client = ollama_client() if self._ai_provider == 'ollama' else openai_client(config['key'])
                 logger.info("OpenAI client initialized successfully")
             except ImportError:
                 logger.warning("OpenAI library not installed, LLM categorization will be unavailable")
