@@ -1,0 +1,69 @@
+// @vitest-environment node
+import { execFileSync } from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
+const container = process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER;
+const fixture = `
+BEGIN;
+CREATE TEMP TABLE users(id text, functional_currency text);
+CREATE TEMP TABLE accounts(id text, user_id text, is_active boolean);
+CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
+CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
+CREATE TEMP TABLE people(id text, user_id text, kind text);
+CREATE TEMP TABLE account_owners(account_id text, person_id text, share numeric);
+CREATE TEMP TABLE account_ownership_allocations(account_id text, person_id text, effective_from date, share numeric);
+CREATE TEMP TABLE categories(id text, name text, category_type text, icon text, color text);
+CREATE TEMP TABLE transaction_links(transaction_id text, group_id text, link_role text);
+CREATE TEMP TABLE transactions(id text, account_id text, user_id text, booked_at timestamp,
+ amount numeric, functional_amount numeric, currency text, category_id text, category_system_id text,
+ include_in_analytics boolean, internal_transfer_id text);
+INSERT INTO users VALUES ('member','AUD');
+INSERT INTO accounts VALUES ('shared','owner',true),('savings','owner',true),('own','member',true),('private','owner',true);
+INSERT INTO household_memberships VALUES ('member','owner','linked');
+INSERT INTO household_account_shares VALUES ('shared','member','owner'),('savings','member','owner');
+INSERT INTO people VALUES ('linked','owner','member'),('owner-self','owner','self'),('own-self','member','self');
+INSERT INTO account_ownership_allocations VALUES ('shared','linked','2026-01-01',0.5),('shared','owner-self','2026-01-01',0.5);
+INSERT INTO account_owners VALUES ('savings','linked',NULL),('savings','owner-self',NULL);
+INSERT INTO categories VALUES ('spend','Spending','expense',NULL,NULL),('invest','Investments','expense',NULL,NULL),('income','Income','income',NULL,NULL),('transfer','Transfer','transfer',NULL,NULL);
+INSERT INTO transactions VALUES
+ ('shared-spend','shared','owner','2026-10-01',-6551.16,-6551.16,'AUD','spend',NULL,true,NULL),
+ ('own-spend','own','member','2026-10-01',-1061.65,-1061.65,'AUD','spend',NULL,true,NULL),
+ ('investment','own','member','2026-10-01',-2794.90,-2794.90,'AUD','invest',NULL,true,NULL),
+ ('salary','own','member','2026-10-01',5153.43,5153.43,'AUD','income',NULL,true,NULL),
+ ('interest','savings','owner','2026-10-01',9.36,9.36,'AUD','income',NULL,true,NULL),
+ ('internal','shared','owner','2026-10-01',462,462,'AUD','income',NULL,true,'internal'),
+ ('private','private','owner','2026-10-01',99999,99999,'AUD','income',NULL,true,NULL);
+`;
+vi.mock("@/lib/db", async () => {
+  const { drizzle } = await import("drizzle-orm/pg-proxy");
+  return { db: drizzle(async (query: string, params: unknown[]) => {
+    const literal = query.replace(/\$(\d+)/g, (_, n) => {
+      const value = params[Number(n) - 1];
+      return value === null ? "NULL" : typeof value === "boolean" ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
+    });
+    const wrapped = `SELECT COALESCE(json_agg(json_build_array(date, category_id, category_name, category_type, icon, color, amount)), '[]') FROM (${literal}) rows(date, category_id, category_name, category_type, icon, color, amount);`;
+    const output = execFileSync("docker", ["exec", "-i", process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER!, "psql", "-U", "postgres", "-d", "postgres", "-qAt", "-v", "ON_ERROR_STOP=1"], { input: fixture + wrapped + "ROLLBACK;", encoding: "utf8" });
+    return { rows: JSON.parse(output.trim()) };
+  }) };
+});
+vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: async () => ({ user: { id: "member" }, householdPersonId: "linked" }) }));
+vi.mock("@/lib/data/cached", () => ({ getCachedUserAccounts: vi.fn() }));
+vi.mock("@/lib/api/investments", () => ({ getPortfolio: vi.fn() }));
+vi.mock("@/lib/actions/planned-expenses", () => ({ getUpcomingPlannedExpenses: vi.fn() }));
+import { getSankeyData } from "./dashboard";
+const start = new Date("2026-09-26T00:00:00Z");
+const end = new Date("2026-10-25T23:59:59Z");
+describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL", () => {
+  it("reproduces the reported whole-account gap and fixes the default without hiding investments", async () => {
+    const whole = await getSankeyData(start, end, undefined, "all");
+    const personal = await getSankeyData(start, end);
+    const selectedMember = await getSankeyData(start, end, undefined, "linked");
+    expect(selectedMember).toEqual(personal);
+    const total = (data: typeof whole, name: string) => data.nodes.find(node => node.name === name)?.total;
+    expect(total(whole, "Funding Gap")).toBeCloseTo(5244.92, 2);
+    expect(total(personal, "Funding Gap")).toBeCloseTo(1974.02, 2);
+    expect(total(personal, "Income")).toBeCloseTo(5158.11, 2);
+    expect(total(personal, "Spending")).toBeCloseTo(4337.23, 2);
+    expect(total(personal, "Investments")).toBeCloseTo(2794.90, 2);
+    expect(total(whole, "Investments")).toBeCloseTo(2794.90, 2);
+  });
+});

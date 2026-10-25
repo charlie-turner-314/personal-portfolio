@@ -76,7 +76,7 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
     const quote = (value: unknown) => typeof value === "boolean" ? String(value)
       : value === null ? "NULL" : `'${String(value).replaceAll("'", "''")}'`;
     const bind = (query: string, params: unknown[]) => query.replace(/\$(\d+)/g, (_, n) => quote(params[Number(n) - 1]));
-    await getTotalBalance();
+    await getTotalBalance(undefined, "all");
     const totalCall = mocks.execute.mock.calls.find(([query]) => query.includes("SUM"))!;
     mocks.execute.mockClear();
     await getTotalBalance(undefined, "person-half");
@@ -84,11 +84,13 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
     mocks.execute.mockClear();
     const end = new Date();
     const start = new Date(end.getTime() - 2 * 86_400_000);
-    await getBalanceHistory(start, end);
+    await getBalanceHistory(start, end, undefined, "all");
     const historyCall = mocks.execute.mock.calls[0];
     const fixture = `
       BEGIN;
       CREATE TEMP TABLE accounts(id text, user_id text, is_active boolean, account_type text, functional_balance numeric);
+      CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
+      CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
       CREATE TEMP TABLE account_balances(account_id text, date timestamp, balance_in_functional_currency numeric);
       CREATE TEMP TABLE people(id text, user_id text, kind text);
       CREATE TEMP TABLE account_owners(account_id text, person_id text, share numeric);
@@ -110,6 +112,7 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
         ('checking', CURRENT_DATE + 1, 123456),
         ('savings', CURRENT_DATE - 1, 2000),
         ('overdraft', CURRENT_DATE - 5, -250);
+      INSERT INTO people VALUES ('person-half', 'current-user', 'self');
       INSERT INTO account_ownership_allocations
         SELECT id, 'person-half', CURRENT_DATE - 30, 0.5 FROM accounts;
       ${bind(totalCall[0], totalCall[1])};

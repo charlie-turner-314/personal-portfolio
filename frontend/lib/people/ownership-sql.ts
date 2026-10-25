@@ -1,18 +1,33 @@
 import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import { accountOwnershipAllocations, accountOwners, accounts, people } from "@/lib/db/schema";
 
+export type OwnershipScope = string | { userId: string; householdPersonId?: string | null };
+
 /** Resolve a complete dated set before looking up its member; removed owners get zero. */
 export function ownershipShareSql(
-  personId: string | undefined,
+  personId: OwnershipScope | undefined,
   accountId: SQLWrapper,
   asOf: SQLWrapper,
 ): SQL<unknown> {
   if (!personId) return sql`1`;
+  const identities = typeof personId === "string"
+    ? sql`SELECT identity.id FROM ${people} identity WHERE identity.id = ${personId}
+        OR (identity.kind = 'self' AND identity.user_id IN (
+          SELECT member_user_id FROM household_memberships WHERE person_id = ${personId}
+        ))`
+    : sql`SELECT identity.id FROM ${people} identity
+        WHERE (identity.user_id = ${personId.userId} AND identity.kind = 'self')
+          OR identity.id = ${personId.householdPersonId ?? null}`;
+  const ownsUnallocatedAccount = typeof personId === "string"
+    ? sql`EXISTS (SELECT 1 FROM ${accounts} owned JOIN ${people} person ON person.user_id = owned.user_id
+        WHERE owned.id = ${accountId} AND person.id IN (${identities}) AND person.kind = 'self')`
+    : sql`EXISTS (SELECT 1 FROM ${accounts} owned
+        WHERE owned.id = ${accountId} AND owned.user_id = ${personId.userId})`;
   return sql`CASE WHEN EXISTS (
     SELECT 1 FROM ${accountOwnershipAllocations} history WHERE history.account_id = ${accountId}
   ) THEN COALESCE((
-    SELECT allocation.share FROM ${accountOwnershipAllocations} allocation
-    WHERE allocation.account_id = ${accountId} AND allocation.person_id = ${personId}
+    SELECT SUM(allocation.share) FROM ${accountOwnershipAllocations} allocation
+    WHERE allocation.account_id = ${accountId} AND allocation.person_id IN (${identities})
       AND allocation.effective_from = (
         SELECT MAX(latest.effective_from) FROM ${accountOwnershipAllocations} latest
         WHERE latest.account_id = ${accountId} AND latest.effective_from <= (${asOf})::date
@@ -20,10 +35,7 @@ export function ownershipShareSql(
   ), 0) WHEN EXISTS (
     SELECT 1 FROM ${accountOwners} legacy WHERE legacy.account_id = ${accountId}
   ) THEN COALESCE((
-    SELECT COALESCE(owner.share, 1.0 / (SELECT COUNT(*) FROM ${accountOwners} members WHERE members.account_id = ${accountId}))
-    FROM ${accountOwners} owner WHERE owner.account_id = ${accountId} AND owner.person_id = ${personId}
-  ), 0) ELSE CASE WHEN EXISTS (
-    SELECT 1 FROM ${accounts} owned JOIN ${people} person ON person.user_id = owned.user_id
-    WHERE owned.id = ${accountId} AND person.id = ${personId} AND person.kind = 'self'
-  ) THEN 1 ELSE 0 END END`;
+    SELECT SUM(COALESCE(owner.share, 1.0 / (SELECT COUNT(*) FROM ${accountOwners} members WHERE members.account_id = ${accountId})))
+    FROM ${accountOwners} owner WHERE owner.account_id = ${accountId} AND owner.person_id IN (${identities})
+  ), 0) ELSE CASE WHEN ${ownsUnallocatedAccount} THEN 1 ELSE 0 END END`;
 }
