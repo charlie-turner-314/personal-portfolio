@@ -46,7 +46,7 @@ def run():
         db.add(AccountBalance(account_id=source,date=now,balance_in_account_currency=100,balance_in_functional_currency=100))
         home = Property(user_id=member,name='Joint home',property_type='residential',currency='AUD',current_value=1000)
         db.add(home);db.flush()
-        db.add(PropertyLiabilityLink(property_id=home.id,account_id=source))
+        db.add(PropertyLiabilityLink(user_id=member,property_id=home.id,account_id=source))
         db.commit()
         pair = [{'source_account_id':source,'canonical_account_id':target}]
         preview = reconciliation_preview(db,member,member_connection,pair)
