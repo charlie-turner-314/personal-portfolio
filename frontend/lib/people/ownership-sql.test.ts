@@ -13,7 +13,7 @@ CREATE TEMP TABLE accounts (id text, user_id text);
 CREATE TEMP TABLE people (id text, user_id text, kind text);
 CREATE TEMP TABLE account_owners (account_id text, person_id text, share numeric);
 CREATE TEMP TABLE account_ownership_allocations (account_id text, person_id text, effective_from date, share numeric);
-INSERT INTO accounts VALUES ('dated','household'),('legacy','household'),('default','household'),('future','household'),('personal','member-login');
+INSERT INTO accounts VALUES ('dated','household'),('legacy','household'),('default','household'),('future','household'),('personal','member-login'),('new-account','new-login');
 INSERT INTO people VALUES ('self','household','self'),('partner','household','member'),('outsider','another','self'),('member-self','member-login','self');
 INSERT INTO account_owners VALUES ('legacy','self',NULL),('legacy','partner',NULL),('future','self',1);
 INSERT INTO account_ownership_allocations VALUES
@@ -51,6 +51,10 @@ describe.skipIf(!container)("dated ownership SQL against isolated PostgreSQL", (
     expect(share(viewer, "personal", "2026-01-01")).toBe(1);
     expect(share("partner", "personal", "2026-01-01")).toBe(1);
     expect(share(viewer, "default", "2026-01-01")).toBe(0);
+  });
+  it("retains a new login's unallocated own accounts before a self record exists", () => {
+    expect(share({ userId: "new-login" }, "new-account", "2026-01-01")).toBe(1);
+    expect(share({ userId: "new-login" }, "default", "2026-01-01")).toBe(0);
   });
   it("keeps household scope at full value", () => {
     expect(share(undefined, "dated", "2026-07-01")).toBe(1);

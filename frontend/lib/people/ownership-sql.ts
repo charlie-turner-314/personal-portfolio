@@ -18,6 +18,11 @@ export function ownershipShareSql(
     : sql`SELECT identity.id FROM ${people} identity
         WHERE (identity.user_id = ${personId.userId} AND identity.kind = 'self')
           OR identity.id = ${personId.householdPersonId ?? null}`;
+  const ownsUnallocatedAccount = typeof personId === "string"
+    ? sql`EXISTS (SELECT 1 FROM ${accounts} owned JOIN ${people} person ON person.user_id = owned.user_id
+        WHERE owned.id = ${accountId} AND person.id IN (${identities}) AND person.kind = 'self')`
+    : sql`EXISTS (SELECT 1 FROM ${accounts} owned
+        WHERE owned.id = ${accountId} AND owned.user_id = ${personId.userId})`;
   return sql`CASE WHEN EXISTS (
     SELECT 1 FROM ${accountOwnershipAllocations} history WHERE history.account_id = ${accountId}
   ) THEN COALESCE((
@@ -32,8 +37,5 @@ export function ownershipShareSql(
   ) THEN COALESCE((
     SELECT SUM(COALESCE(owner.share, 1.0 / (SELECT COUNT(*) FROM ${accountOwners} members WHERE members.account_id = ${accountId})))
     FROM ${accountOwners} owner WHERE owner.account_id = ${accountId} AND owner.person_id IN (${identities})
-  ), 0) ELSE CASE WHEN EXISTS (
-    SELECT 1 FROM ${accounts} owned JOIN ${people} person ON person.user_id = owned.user_id
-    WHERE owned.id = ${accountId} AND person.id IN (${identities}) AND person.kind = 'self'
-  ) THEN 1 ELSE 0 END END`;
+  ), 0) ELSE CASE WHEN ${ownsUnallocatedAccount} THEN 1 ELSE 0 END END`;
 }
