@@ -12,6 +12,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { format } from "date-fns";
+import { categoryConfidenceLabel } from "@/lib/transactions/category-confidence";
 import { AccountLogo } from "@/components/ui/account-logo";
 import { parseGlobalFiltersFromSearchParams } from "@/lib/filters/global-filters";
 import { buildCategorySpendingQuery } from "@/lib/category-spending/query-params";
@@ -256,6 +257,28 @@ export const transactionColumns: ColumnDef<TransactionWithRelations>[] = [
     },
   },
   {
+    accessorKey: "categoryConfidence",
+    header: ({ column }) => (
+      <button
+        type="button"
+        className="flex items-center gap-1"
+        title="Sort category confidence. Unscored transactions come first; manually categorised transactions come last."
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        Confidence
+        {column.getIsSorted() === "asc" ? <RiArrowUpLine className="h-4 w-4" /> :
+          column.getIsSorted() === "desc" ? <RiArrowDownLine className="h-4 w-4" /> : null}
+      </button>
+    ),
+    cell: ({ row }) => (
+      <span title="Estimated confidence in the automatic category, not a measured probability. Open the transaction to review or change its category.">
+        {categoryConfidenceLabel(row.original)}
+      </span>
+    ),
+    size: 160,
+    sortDescFirst: false,
+  },
+  {
     accessorKey: "amount",
     header: ({ column }) => {
       const sorted = column.getIsSorted();
@@ -419,6 +442,7 @@ export const categorySpendingTransactionColumns: ColumnDef<TransactionWithRelati
 
     return ![
       "merchant",
+      "categoryConfidence",
       "recurringTransaction",
       "transactionLink",
       "pending",

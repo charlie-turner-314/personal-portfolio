@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     // Only clear category_system_id where user hasn't manually overridden (category_id is null)
     await db
       .update(transactions)
-      .set({ categorySystemId: null })
+      .set({ categorySystemId: null, categoryConfidence: null })
       .where(
         and(
           eq(transactions.userId, userId),

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from decimal import Decimal
 from functools import lru_cache
 import time
+import math
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 
@@ -1469,7 +1470,7 @@ Category name:"""
         self,
         transactions: List[Dict],
         max_batch_size: int = 50
-    ) -> Tuple[Dict[int, Tuple[Category, float]], int, float]:
+    ) -> Tuple[Dict[int, Tuple[Category, Optional[float]]], int, float]:
         """
         Batch categorize multiple transactions in a single LLM call.
 
@@ -1668,12 +1669,13 @@ Response:"""
                             logger.debug(f"Batch LLM returned UNKNOWN for transaction {idx} (LLM couldn't confidently categorize)")
                             continue
 
-                        # Parse confidence (default to 50 if not provided)
-                        confidence = 50.0
+                        # Missing/invalid scores are unknown, not invented confidence.
+                        confidence = None
                         if len(parts) >= 3:
                             try:
-                                confidence = float(parts[2].strip())
-                                confidence = max(0.0, min(100.0, confidence))  # Clamp to 0-100
+                                parsed_confidence = float(parts[2].strip())
+                                if math.isfinite(parsed_confidence) and 0 <= parsed_confidence <= 100:
+                                    confidence = parsed_confidence
                             except ValueError:
                                 pass
 

@@ -700,6 +700,7 @@ export const transactions = pgTable(
     counterpartyIbanHash: varchar("counterparty_iban_hash", { length: 64 }),
     internalTransferId: uuid("internal_transfer_id"), // FK to internal_transfers.id (enforced at DB level in migration 0017)
     categoryId: uuid("category_id").references(() => categories.id), // User-overridden category
+    categoryConfidence: integer("category_confidence"), // Estimated score, 0–100; null means not scored
     categorySystemId: uuid("category_system_id").references(() => categories.id), // AI-assigned category (never updated by user)
     propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
     bookedAt: timestamp("booked_at").notNull(),

@@ -2241,6 +2241,7 @@ class DemoSeedService:
         for idx in uncategorized_indices:
             transactions[idx].category_id = None
             transactions[idx].category_system_id = None
+            transactions[idx].category_confidence = None
 
         override_pool = [idx for idx in eligible_indices if idx not in uncategorized_indices]
         override_count = max(1, int(len(eligible_indices) * 0.03))
