@@ -129,8 +129,8 @@ export function activitySankey(summary: ActivitySummary) {
   };
   movement("Investments", summary.investments);
   movement("Loan principal", summary.loanPrincipal);
-  if (summary.transfersIn) income.push({ categoryName: "Transfers into your share", total: summary.transfersIn, categoryType: "income" });
-  if (summary.transfersOut) expense.push({ categoryName: "Transfers out of your share", total: summary.transfersOut, categoryType: "expense" });
+  if (summary.transfersIn) income.push({ categoryName: "Transfers in", total: summary.transfersIn, categoryType: "income" });
+  if (summary.transfersOut) expense.push({ categoryName: "Transfers out", total: summary.transfersOut, categoryType: "expense" });
   return buildConservativeSankey(income, expense);
 }
 

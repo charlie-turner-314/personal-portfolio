@@ -124,7 +124,7 @@ describe("cash flow separates consumption, allocations and ownership transfers",
     const chart = activitySankey(result);
     expect(chart.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Loan principal", total: 35000 }),
-      expect.objectContaining({ name: "Transfers into your share", total: 35000 }),
+      expect.objectContaining({ name: "Transfers in", total: 35000 }),
       expect.objectContaining({ name: "Cash retained", total: 4000 }),
     ]));
     expect(chart.nodes.some(n => n.name === "Cash required")).toBe(false);
