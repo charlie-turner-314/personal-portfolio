@@ -28,6 +28,17 @@ describe("dashboard activity", () => {
     ]));
   });
 
+  it("combines equivalent household categories while retaining different types", () => {
+    const result = summarizeActivity([
+      row(-100, { categoryId: "charlie-housing", categoryName: "Housing", categoryType: "expense" }),
+      row(-200, { categoryId: "jessica-housing", categoryName: "Housing", categoryType: "expense" }),
+      row(500, { categoryId: "housing-income", categoryName: "Housing", categoryType: "income" }),
+    ]);
+    expect(result.categories).toHaveLength(2);
+    expect(result.categories.find(c => c.type === "expense")?.amount).toBe(300);
+    expect(activitySankey(result).nodes.filter(n => n.name === "Housing")).toHaveLength(2);
+  });
+
   it("keeps category exclusions and zeroed secondary/fully reimbursed amounts excluded", () => {
     const result = summarizeActivity([
       row(200, { categoryType: "transfer" }), row(-200, { categoryType: "transfer" }),

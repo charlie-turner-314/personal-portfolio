@@ -14,7 +14,7 @@ import type {
   FilteredTransactionTotals,
   TransactionWithRelations,
 } from "@/lib/actions/transactions";
-import type { CategoryDisplay, AccountForFilter } from "@/types";
+import type { CategoryDisplay, CategoryForFilter, AccountForFilter } from "@/types";
 import type { Property } from "@/lib/db/schema";
 import { TransactionSheet } from "./transaction-sheet";
 import { transactionColumns } from "./columns";
@@ -36,6 +36,7 @@ interface TransactionTableProps {
   filteredTotals: FilteredTransactionTotals | null;
   queryState: TransactionsQueryState;
   categories?: CategoryDisplay[];
+  filterCategories?: CategoryForFilter[];
   accounts?: AccountForFilter[];
   properties?: Property[];
   onUpdateTransaction?: (id: string, updates: Partial<TransactionWithRelations>) => void;
@@ -100,6 +101,7 @@ export function TransactionTable({
   filteredTotals,
   queryState,
   categories = [],
+  filterCategories,
   accounts = [],
   properties = [],
   onUpdateTransaction,
@@ -268,7 +270,7 @@ export function TransactionTable({
             ? () => (
                 <TransactionFilters
                   filters={queryState}
-                  categories={categories}
+                  categories={filterCategories ?? categories}
                   accounts={accounts}
                   recurringOptions={recurringOptions}
                   action={action}

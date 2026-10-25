@@ -1,5 +1,7 @@
 "use server";
 
+import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
+import { getSpendingByCategory } from "@/lib/actions/dashboard";
 import { accountAccess } from "@/lib/household/account-access";
 import {
   endOfDay,
@@ -27,7 +29,7 @@ import { db } from "@/lib/db";
 import { categories, transactions, users } from "@/lib/db/schema";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";
 import type { TransactionWithRelations } from "@/lib/actions/transactions";
-import { fetchCategoryActualAmounts } from "@/lib/spending/category-actuals";
+
 import type {
   CategorySpendingSortField,
   CategorySpendingSortOrder,
@@ -477,24 +479,16 @@ export async function getCategorySpendingData(
   const { comparisonStart, comparisonEnd } = computePreviousWindow(startDate, endDate);
 
   const [currentCategories, previousCategories] = await Promise.all([
-    fetchCategoryActualAmounts(session.user.id, {
-      startDate,
-      endDate,
-      accountIds: normalizedAccountIds,
-    }),
-    fetchCategoryActualAmounts(session.user.id, {
-      startDate: comparisonStart,
-      endDate: comparisonEnd,
-      accountIds: normalizedAccountIds,
-    }),
+    getSpendingByCategory(startDate, endDate, normalizedAccountIds, Number.MAX_SAFE_INTEGER, "all").then(result => result.categories),
+    getSpendingByCategory(comparisonStart, comparisonEnd, normalizedAccountIds, Number.MAX_SAFE_INTEGER, "all").then(result => result.categories),
   ]);
 
-  const previousById = new Map(previousCategories.map((item) => [item.id, item.amount]));
+  const previousById = new Map(previousCategories.map((item) => [item.name.trim().toLowerCase(), item.amount]));
   const totalSpend = currentCategories.reduce((sum, item) => sum + item.amount, 0);
   const monthCount = Math.max(1, getTouchedMonthKeys(startDate, endDate).length);
 
   const categoriesWithMetrics: CategorySpendingCategory[] = currentCategories.map((item, index) => {
-    const previousAmount = previousById.get(item.id) ?? 0;
+    const previousAmount = previousById.get(item.name.trim().toLowerCase()) ?? 0;
     const deltaAmount = item.amount - previousAmount;
     const deltaPct =
       previousAmount > 0
@@ -570,12 +564,6 @@ export async function getCategorySpendingTransactionsPage(
   const referenceDate = await getLatestTransactionDate(userId, normalizedAccountIds);
   const { startDate, endDate } = resolvePrimaryRange(filters, referenceDate);
 
-  const expenseCategories = await db
-    .select({ id: categories.id })
-    .from(categories)
-    .where(and(eq(categories.userId, userId), eq(categories.categoryType, "expense")));
-
-  const expenseCategoryIds = expenseCategories.map((category) => category.id);
   const uncategorizedCondition = and(
     isNull(transactions.categoryId),
     isNull(transactions.categorySystemId)
@@ -593,19 +581,11 @@ export async function getCategorySpendingTransactionsPage(
     conditions.push(inArray(transactions.accountId, normalizedAccountIds));
   }
 
-  if (expenseCategoryIds.length > 0) {
-    conditions.push(
-      or(
-        uncategorizedCondition,
-        sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId}) IN (${sql.join(
-          expenseCategoryIds.map((id) => sql`${id}`),
-          sql`, `
-        )})`
-      )!
-    );
-  } else {
-    conditions.push(uncategorizedCondition);
-  }
+  conditions.push(or(uncategorizedCondition,
+    sql`EXISTS (SELECT 1 FROM ${categories} expense_category
+      WHERE expense_category.id = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})
+        AND expense_category.category_type = 'expense')`,
+  )!);
 
   if (normalizedCategoryIds.length > 0) {
     const includesUncategorized = normalizedCategoryIds.includes("uncategorized");
@@ -614,10 +594,7 @@ export async function getCategorySpendingTransactionsPage(
 
     if (concreteIds.length > 0) {
       selectedConditions.push(
-        sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId}) IN (${sql.join(
-          concreteIds.map((id) => sql`${id}`),
-          sql`, `
-        )})`
+        reportingCategoryFilter(sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`, concreteIds)
       );
     }
 

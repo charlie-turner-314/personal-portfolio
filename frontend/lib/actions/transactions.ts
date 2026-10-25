@@ -1,5 +1,6 @@
 "use server";
 
+import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
 import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
 import { eq, and, desc, inArray, notInArray, sql, gte, lte, gt, asc, ne, or, ilike, isNull } from "drizzle-orm";
@@ -832,13 +833,9 @@ async function buildTransactionsWhereClause(
   if (categoryIds.length > 0 || includeUncategorized) {
     const categoryConditions = [];
     if (categoryIds.length > 0) {
-      categoryConditions.push(inArray(transactions.categoryId, categoryIds));
-      categoryConditions.push(
-        and(
-          isNull(transactions.categoryId),
-          inArray(transactions.categorySystemId, categoryIds)
-        )
-      );
+      categoryConditions.push(reportingCategoryFilter(
+        sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`, categoryIds,
+      ));
     }
     if (includeUncategorized) {
       categoryConditions.push(
