@@ -97,6 +97,16 @@ The browser also proved the existing property detail page crashed by calling
 buttonVariants from a client module in server rendering. The shared style helper
 now lives in a server-compatible module, with the client Button importing it.
 
+PPF-58 feature verification: source runtime `fa4d454` built successfully, migrated
+twice, and preserved 31 users/auth accounts, 38 accounts, 3,299 transactions,
+8 holdings and 8 broker trades. The full owner/member Chromium journey passed:
+private defaults, explicit sharing, separate mortgage consent, owner/member edit
+boundaries, valuation and ownership/link preservation, permitted rental activity,
+net-worth attribution (377,000 → 117,000 → 142,000 fixture totals), live unsharing,
+leave/rejoin and no revived grants. The backend privacy harness and 135 regression
+tests passed; the extended frontend harness also proves private property economic
+attribution survives leaving. Final develop verification and promotion remain.
+
 ## Remaining issues
 
 - PPF-57: prevent/reconcile joint Up duplicate account mappings without losing
