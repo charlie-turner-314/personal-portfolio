@@ -202,7 +202,7 @@ export async function deleteCategory(
     // Clear categoryId references on transactions before deleting
     await db
       .update(transactions)
-      .set({ categoryId: null })
+      .set({ categoryId: null, categoryVerifiedAt: null })
       .where(
         and(
           eq(transactions.userId, userId),
@@ -372,7 +372,7 @@ export async function deleteCategoryWithReassignment(
     // Reassign transactions with user-assigned categoryId
     await db
       .update(transactions)
-      .set({ categoryId: reassignToCategoryId })
+      .set({ categoryId: reassignToCategoryId, categoryVerifiedAt: reassignToCategoryId ? new Date() : null })
       .where(
         and(
           eq(transactions.userId, userId),

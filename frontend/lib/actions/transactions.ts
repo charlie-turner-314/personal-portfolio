@@ -305,6 +305,7 @@ export async function updateTransactionCategory(
       .update(transactions)
       .set({
         categoryId,
+        categoryVerifiedAt: categoryId ? new Date() : null,
         updatedAt: new Date(),
       })
       .where(eq(transactions.id, transactionId));
@@ -1191,6 +1192,7 @@ export async function bulkUpdateTransactionCategory(
       .update(transactions)
       .set({
         categoryId,
+        categoryVerifiedAt: categoryId ? new Date() : null,
         updatedAt: new Date(),
       })
       .where(

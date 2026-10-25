@@ -666,6 +666,7 @@ def update_transaction_category(
         # Update the transaction's category with error handling
         try:
             txn.category_id = cat_uuid
+            txn.category_verified_at = datetime.utcnow()
             db.commit()
             db.refresh(txn)
         except Exception as e:

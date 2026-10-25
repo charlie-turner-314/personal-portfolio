@@ -368,6 +368,7 @@ class Transaction(Base):
         nullable=True,
     )
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)  # User-overridden category
+    category_verified_at = Column(DateTime, nullable=True)  # Explicit category confirmation; never set by auto-classification
     category_system_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)  # AI-assigned category
     property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)
     booked_at = Column(DateTime, nullable=False, index=True)
@@ -405,6 +406,46 @@ class Transaction(Base):
         UniqueConstraint("account_id", "external_id", name="transactions_account_external_id"),
         Index("idx_transactions_user_counterparty_iban", "user_id", "counterparty_iban_hash"),
     )
+
+
+class CategorizationSuggestion(Base):
+    """Requested suggestions and explicit reviews; never an automatic category write."""
+    __tablename__ = "categorization_suggestions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_fingerprint = Column(String(64), nullable=False)
+    config_fingerprint = Column(String(64))
+    inference_status = Column(String(30), nullable=False, default="completed")
+    record = Column(JSONB, nullable=False, default=dict)
+    shown_at = Column(DateTime)
+    suggested_category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"))
+    reviewed_category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"))
+    provider = Column(String(40), nullable=False)
+    model = Column(String(100), nullable=False)
+    context_mode = Column(String(30), nullable=False, default="examples_only")
+    evidence = Column(JSONB, nullable=False)
+    model_score = Column(Numeric(5, 2))  # Uncalibrated; kept for evaluation, not displayed as probability.
+    generation_ms = Column(Integer, nullable=False)
+    review_duration_ms = Column(Integer)
+    review_outcome = Column(String(20))
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    reviewed_at = Column(DateTime)
+    __table_args__ = (CheckConstraint("review_outcome IS NULL OR review_outcome IN ('accepted', 'corrected', 'dismissed')"),)
+
+class CategorizationFeedback(Base):
+    """Append-only observations written by the manual-category database trigger."""
+    __tablename__ = "categorization_feedback"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False)
+    suggestion_id = Column(UUID(as_uuid=True), ForeignKey("categorization_suggestions.id", ondelete="SET NULL"))
+    source = Column(String(40), nullable=False)
+    snapshot = Column(JSONB, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (Index("categorization_feedback_user_transaction_idx", "user_id", "transaction_id", "created_at"),)
+
 
 
 class Report(Base):

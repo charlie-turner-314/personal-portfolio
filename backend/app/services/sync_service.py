@@ -273,13 +273,25 @@ class SyncService:
         updated_transaction_ids: List[str] = []
 
         for transaction_data in transaction_data_list:
+            # Step 1: exact external_id match
+            existing_transaction = self.db.query(Transaction).filter(
+                Transaction.user_id == self.user_id,
+                Transaction.account_id == account.id,
+                Transaction.external_id == transaction_data.external_id,
+            ).first()
+
             # Try to auto-categorize the transaction
             category = self.category_matcher.match_category(
                 description=transaction_data.description,
                 merchant=transaction_data.merchant,
                 amount=transaction_data.amount,
                 transaction_type=transaction_data.transaction_type,
-                use_llm=self.use_llm_categorization
+                use_llm=self.use_llm_categorization,
+                context={"id": existing_transaction.id if existing_transaction else None,
+                         "account_id": account.id, "booked_at": transaction_data.booked_at,
+                           "currency": transaction_data.currency,
+                           "creditor": getattr(transaction_data, "creditor", None),
+                           "debtor": getattr(transaction_data, "debtor", None)}
             )
 
             # Try to extract/improve merchant from description if empty
@@ -296,13 +308,6 @@ class SyncService:
                     amount=Decimal(str(transaction_data.amount)),
                     account_id=str(account.id),
                 )
-
-            # Step 1: exact external_id match
-            existing_transaction = self.db.query(Transaction).filter(
-                Transaction.user_id == self.user_id,
-                Transaction.account_id == account.id,
-                Transaction.external_id == transaction_data.external_id,
-            ).first()
 
             if existing_transaction:
                 # Update mutable fields; preserve any existing category
@@ -471,6 +476,7 @@ class SyncService:
                     if eb_row:
                         if not eb_row.category_id and orphan.category_id:
                             eb_row.category_id = orphan.category_id
+                            eb_row.category_verified_at = orphan.category_verified_at
                         if not eb_row.category_system_id and orphan.category_system_id:
                             eb_row.category_system_id = orphan.category_system_id
                             eb_row.category_confidence = orphan.category_confidence
@@ -607,13 +613,25 @@ class SyncService:
         if not account:
             raise ValueError(f"Account {account_id} not found for user {self.user_id}")
 
+        # Check if transaction already exists
+        existing_transaction = self.db.query(Transaction).filter(
+            Transaction.user_id == self.user_id,
+            Transaction.account_id == account.id,
+            Transaction.external_id == transaction_data.external_id
+        ).first()
+
         # Try to auto-categorize the transaction
         category = self.category_matcher.match_category(
             description=transaction_data.description,
             merchant=transaction_data.merchant,
             amount=transaction_data.amount,
             transaction_type=transaction_data.transaction_type,
-            use_llm=self.use_llm_categorization
+            use_llm=self.use_llm_categorization,
+            context={"id": existing_transaction.id if existing_transaction else None,
+                     "account_id": account_id, "booked_at": transaction_data.booked_at,
+                       "currency": transaction_data.currency,
+                       "creditor": getattr(transaction_data, "creditor", None),
+                       "debtor": getattr(transaction_data, "debtor", None)}
         )
 
         # Try to extract/improve merchant from description if empty
@@ -630,13 +648,6 @@ class SyncService:
                 amount=Decimal(str(transaction_data.amount)),
                 account_id=str(account.id),
             )
-
-        # Check if transaction already exists
-        existing_transaction = self.db.query(Transaction).filter(
-            Transaction.user_id == self.user_id,
-            Transaction.account_id == account.id,
-            Transaction.external_id == transaction_data.external_id
-        ).first()
 
         if existing_transaction:
             # Update existing transaction

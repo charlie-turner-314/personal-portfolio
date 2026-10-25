@@ -68,6 +68,7 @@ postgres_data/
 *.pem
 .release-lab/
 .release-backups/
+.categorizer-lab/
 
 # User uploads (frontend)
 frontend/public/uploads/

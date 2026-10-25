@@ -117,7 +117,7 @@ def test_cleanup_only_empty_owned_eligible_rows_and_preserves_edits(setup):
     job=run(s)
     assert (job.status,job.total,job.processed,job.categorized)==('completed',1,1,1)
     assert s.db.get(Transaction,empty.id).category_system_id==s.cats[0].id
-    assert s.db.get(Transaction,empty.id).category_confidence == 100
+    assert s.db.get(Transaction,empty.id).category_confidence == 95  # Actual provider score, not a merchant-wide manual override.
     assert s.db.get(Transaction,manual.id).category_id==s.cats[0].id
     assert s.db.get(Transaction,system.id).category_system_id==s.cats[0].id
     assert s.db.get(Transaction,hidden.id).category_system_id is None
