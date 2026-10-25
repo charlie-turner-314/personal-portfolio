@@ -213,7 +213,7 @@ export async function deleteCategory(
     // Clear categorySystemId references on transactions as well
     await db
       .update(transactions)
-      .set({ categorySystemId: null })
+      .set({ categorySystemId: null, categoryConfidence: null })
       .where(
         and(
           eq(transactions.userId, userId),
@@ -383,7 +383,7 @@ export async function deleteCategoryWithReassignment(
     // Reassign transactions with system-assigned categorySystemId
     await db
       .update(transactions)
-      .set({ categorySystemId: reassignToCategoryId })
+      .set({ categorySystemId: reassignToCategoryId, categoryConfidence: null })
       .where(
         and(
           eq(transactions.userId, userId),

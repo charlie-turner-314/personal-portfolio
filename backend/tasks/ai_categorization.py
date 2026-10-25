@@ -39,7 +39,7 @@ def categorize_uncategorized(job_id):
                            for i, t in enumerate(rows)]
                 results, _, _ = matcher.match_categories_batch_llm(payload) if payload else ({}, 0, 0)
                 assigned = 0
-                for i, (category, _) in results.items():
+                for i, (category, confidence) in results.items():
                     if i < 0 or i >= len(rows):
                         continue
                     # Validate ownership independently of model output; conditionally update
@@ -51,7 +51,9 @@ def categorize_uncategorized(job_id):
                         Transaction.id == rows[i].id, Transaction.user_id == job.user_id,
                         Transaction.category_id.is_(None), Transaction.category_system_id.is_(None),
                         Transaction.include_in_analytics.is_(True), Transaction.internal_transfer_id.is_(None),
-                    ).update({'category_system_id': category.id}, synchronize_session=False)
+                    ).update({'category_system_id': category.id,
+                             'category_confidence': round(confidence) if confidence is not None else None},
+                            synchronize_session=False)
                 job.processed += len(ids)
                 job.categorized += assigned
                 job.skipped += len(ids) - len(rows)

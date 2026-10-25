@@ -384,6 +384,8 @@ class Transaction(Base):
     user = relationship("User", back_populates="transactions")
     account = relationship("Account", back_populates="transactions")
     category = relationship("Category", foreign_keys=[category_id], back_populates="transactions")
+    category_confidence = Column(Integer, nullable=True)  # Estimated score, 0–100; unknown for legacy rows
+
     category_system = relationship("Category", foreign_keys=[category_system_id], back_populates="system_transactions")
     property = relationship("Property", back_populates="transactions")
     recurring_transaction = relationship("RecurringTransaction", back_populates="linked_transactions")

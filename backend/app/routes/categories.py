@@ -127,7 +127,7 @@ def delete_category(
     db.query(Transaction).filter(
         Transaction.user_id == user_id,
         Transaction.category_system_id == category_id
-    ).update({"category_system_id": None}, synchronize_session=False)
+    ).update({"category_system_id": None, "category_confidence": None}, synchronize_session=False)
     
     db.commit()
 

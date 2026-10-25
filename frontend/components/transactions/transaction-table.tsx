@@ -81,14 +81,14 @@ function mergeManagedQueryParams(
 }
 
 function mapSortColumnIdToSortField(id: string): TransactionSortField {
-  if (id === "amount" || id === "description" || id === "merchant") {
+  if (id === "amount" || id === "description" || id === "merchant" || id === "categoryConfidence") {
     return id;
   }
   return "bookedAt";
 }
 
 function formatSummaryAmount(amount: number): string {
-  return amount.toLocaleString(undefined, {
+  return amount.toLocaleString("en-AU", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -178,7 +178,7 @@ export function TransactionTable({
           sort: mapSortColumnIdToSortField(nextSort.id),
           order: nextSort.desc ? "desc" : "asc",
         },
-        { resetPage: false }
+        { resetPage: true }
       );
     },
     [sortingState, updateQueryState]
@@ -246,7 +246,7 @@ export function TransactionTable({
     <>
       <DataTable
         getRowId={(transaction) => transaction.id}
-        mobileSortColumns={["bookedAt", "description", "merchant", "amount"]}
+        mobileSortColumns={["bookedAt", "description", "merchant", "amount", "categoryConfidence"]}
         mobileColumnLabels={transactionFieldLabels}
         mobileRow={(row) => <MobileTransactionCard row={row} onOpen={setSelectedTransaction} />}
         columns={columns ?? transactionColumns}
