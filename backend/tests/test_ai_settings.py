@@ -117,6 +117,7 @@ def test_cleanup_only_empty_owned_eligible_rows_and_preserves_edits(setup):
     job=run(s)
     assert (job.status,job.total,job.processed,job.categorized)==('completed',1,1,1)
     assert s.db.get(Transaction,empty.id).category_system_id==s.cats[0].id
+    assert s.db.get(Transaction,empty.id).category_confidence == 95
     assert s.db.get(Transaction,manual.id).category_id==s.cats[0].id
     assert s.db.get(Transaction,system.id).category_system_id==s.cats[0].id
     assert s.db.get(Transaction,hidden.id).category_system_id is None
@@ -137,6 +138,7 @@ def test_manual_edit_during_provider_request_wins(setup):
     assert job.categorized==0
     assert s.db.get(Transaction,row.id).category_id==s.cats[0].id
     assert s.db.get(Transaction,row.id).category_system_id is None
+    assert s.db.get(Transaction,row.id).category_confidence is None
 
 
 def test_duplicate_jobs_rejected_and_status_is_user_scoped(setup):
@@ -154,6 +156,7 @@ def test_provider_quota_failure_is_visible_and_safe(setup,caplog):
     assert job.status=='failed' and 'quota' in job.error
     assert KEY not in job.error and KEY not in caplog.text
     assert s.db.get(Transaction,row.id).category_system_id is None
+    assert s.db.get(Transaction,row.id).category_confidence is None
 
 
 def test_queue_failure_and_stalled_worker_are_retryable(setup):

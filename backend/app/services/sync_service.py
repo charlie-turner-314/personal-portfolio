@@ -329,6 +329,7 @@ class SyncService:
                     existing_transaction.counterparty_iban_hash = None
                 if not existing_transaction.category_id and not existing_transaction.category_system_id and category:
                     existing_transaction.category_system_id = category.id
+                    existing_transaction.category_confidence = None
                 if not existing_transaction.recurring_transaction_id and matched_subscription:
                     existing_transaction.recurring_transaction_id = matched_subscription.id
                 updated_transaction_ids.append(str(existing_transaction.id))
@@ -364,6 +365,7 @@ class SyncService:
                         pending_match.counterparty_iban_hash = None
                     if not pending_match.category_id and not pending_match.category_system_id and category:
                         pending_match.category_system_id = category.id
+                        pending_match.category_confidence = None
                     if not pending_match.recurring_transaction_id and matched_subscription:
                         pending_match.recurring_transaction_id = matched_subscription.id
                     self.db.flush()
@@ -471,6 +473,7 @@ class SyncService:
                             eb_row.category_id = orphan.category_id
                         if not eb_row.category_system_id and orphan.category_system_id:
                             eb_row.category_system_id = orphan.category_system_id
+                            eb_row.category_confidence = orphan.category_confidence
 
                 self.db.delete(orphan)
                 _logger.info(
@@ -656,6 +659,7 @@ class SyncService:
             # Only set category if neither user override nor AI category is already present.
             if not existing_transaction.category_id and not existing_transaction.category_system_id and category:
                 existing_transaction.category_system_id = category.id
+                existing_transaction.category_confidence = None
 
             # Only set subscription link if not already set (preserve manual links)
             if not existing_transaction.recurring_transaction_id and matched_subscription:

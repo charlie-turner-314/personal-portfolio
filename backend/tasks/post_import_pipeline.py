@@ -176,6 +176,7 @@ def _batch_categorize_transactions(db, user_id: str, transaction_ids: List[str])
             )
             if category:
                 txn.category_system_id = category.id
+                txn.category_confidence = None
                 deterministic += 1
     if deterministic:
         db.commit()
@@ -205,8 +206,9 @@ def _batch_categorize_transactions(db, user_id: str, transaction_ids: List[str])
     assigned = 0
     for i, txn in enumerate(transactions):
         if i in results:
-            category, _confidence = results[i]
+            category, confidence = results[i]
             txn.category_system_id = category.id
+            txn.category_confidence = round(confidence) if confidence is not None else None
             assigned += 1
         # When LLM ran but returned no match for a transaction, leave the existing
         # system category intact rather than wiping it.

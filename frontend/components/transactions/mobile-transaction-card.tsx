@@ -5,7 +5,7 @@ import type { TransactionWithRelations } from "@/lib/actions/transactions";
 
 export const transactionFieldLabels: Record<string, string> = {
   bookedAt: "Date", description: "Description", merchant: "Merchant", category: "Category",
-  amount: "Amount", account: "Account", recurringTransaction: "Subscription",
+  categoryConfidence: "Confidence", amount: "Amount", account: "Account", recurringTransaction: "Subscription",
   subscription: "Subscription", transactionType: "Type", transactionLink: "Linked transactions", linkedTransaction: "Linked transactions", link: "Linked transactions",
   pending: "Status", includeInAnalytics: "Analytics", status: "Status", analytics: "Analytics",
 };
