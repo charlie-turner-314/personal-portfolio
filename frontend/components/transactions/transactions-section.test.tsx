@@ -24,6 +24,7 @@ vi.mock("@/lib/actions/transactions", () => ({
 
 vi.mock("@/lib/actions/categories", () => ({
   getUserCategories: vi.fn().mockResolvedValue([]),
+  getReportingCategories: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@/lib/actions/properties", () => ({

@@ -1,7 +1,8 @@
 "use server";
 
+import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
-import { eq, and, count } from "drizzle-orm";
+import { eq, and, count, sql, or, asc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { categories, transactions, type Category, type NewCategory } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/household/financial-auth";
@@ -236,6 +237,19 @@ export async function deleteCategory(
 
 export async function getCategories(): Promise<Category[]> {
   return getCachedUserCategories() as Promise<Category[]>;
+}
+
+/** Live filter metadata from own categories and categories on permitted transactions. */
+export async function getReportingCategories() {
+  const userId = await requireAuth();
+  if (!userId) return [];
+  return db.select({ id: categories.id, name: categories.name, color: categories.color,
+    categoryType: categories.categoryType }).from(categories).where(or(
+      eq(categories.userId, userId),
+      sql`EXISTS (SELECT 1 FROM ${transactions} visible_transaction
+        WHERE COALESCE(visible_transaction.category_id, visible_transaction.category_system_id) = ${categories.id}
+          AND ${accountAccess(sql`visible_transaction.account_id`, userId)})`,
+    )).orderBy(asc(categories.name));
 }
 
 // Alias for backward compatibility

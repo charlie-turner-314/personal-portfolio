@@ -1,6 +1,6 @@
 import { TransactionsClient } from "./transactions-client";
 import { getTransactionsPage, getUserAccounts } from "@/lib/actions/transactions";
-import { getUserCategories } from "@/lib/actions/categories";
+import { getUserCategories, getReportingCategories } from "@/lib/actions/categories";
 import { getProperties } from "@/lib/actions/properties";
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail } from "@/lib/demo-access";
@@ -11,12 +11,13 @@ export async function TransactionsSection({
 }: {
   queryState: TransactionsQueryState;
 }) {
-  const [session, pageData, categories, accounts, properties] = await Promise.all([
+  const [session, pageData, categories, accounts, properties, filterCategories] = await Promise.all([
     getAuthenticatedSession(),
     getTransactionsPage(queryState),
     getUserCategories(),
     getUserAccounts(),
     getProperties(),
+    getReportingCategories(),
   ]);
 
   const canImportCsv = !isDemoRestrictedUserEmail(session?.user.email);
@@ -29,6 +30,7 @@ export async function TransactionsSection({
       filteredTotals={pageData.filteredTotals}
       initialQueryState={queryState}
       categories={categories}
+      filterCategories={filterCategories}
       accounts={accounts}
       properties={properties}
       canImportCsv={canImportCsv}

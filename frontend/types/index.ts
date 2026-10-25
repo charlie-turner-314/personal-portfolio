@@ -24,6 +24,7 @@ export interface AccountForFilter {
  * Minimal category type for filter components
  */
 export interface CategoryForFilter {
+  categoryType?: string | null;
   id: string;
   name: string;
   color: string | null;
