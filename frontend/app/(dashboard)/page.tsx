@@ -5,6 +5,7 @@ import { KpiSparkCard } from "@/components/charts/kpi-spark-card";
 import { ProfitLossChart } from "@/components/charts/profit-loss-chart";
 import { SpendingByCategoryChart } from "@/components/charts/spending-by-category-chart";
 import { SankeyFlowChart } from "@/components/charts/sankey-flow-chart";
+import { NetWorthTotals } from "@/components/household/net-worth-totals";
 import { AssetsOverviewCard } from "@/components/assets";
 import { PortfolioSummaryCard } from "@/components/investments/PortfolioSummaryCard";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
@@ -196,6 +197,7 @@ async function DashboardContent({
 
         {/* Row 5: Assets Overview */}
         <div className="grid min-w-0 grid-cols-1 gap-4">
+          <NetWorthTotals />
           <AssetsOverviewCard data={data.assetsOverview} />
         </div>
 

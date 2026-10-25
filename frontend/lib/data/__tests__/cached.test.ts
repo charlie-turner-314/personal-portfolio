@@ -11,6 +11,8 @@ vi.mock("@/lib/household/financial-auth", () => ({
   getAuthenticatedSession: vi.fn(),
 }));
 
+vi.mock("@/lib/auth-helpers", () => ({ getAuthenticatedSession: vi.fn() }));
+
 vi.mock("next/cache", () => ({
   unstable_cache: <T extends (...args: any[]) => any>(fn: T) => fn,
   revalidateTag: vi.fn(),

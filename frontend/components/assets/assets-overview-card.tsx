@@ -27,12 +27,12 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex flex-wrap items-center gap-3">
-            <CardTitle>Net Worth</CardTitle>
+            <CardTitle>Assets and liabilities</CardTitle>
             <AddAssetDialog onAssetAdded={handleAssetAdded} />
           </div>
           <div className="min-w-0 text-left sm:text-right">
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Net worth
+              Visible balance
             </div>
             <div className="break-words text-3xl font-bold leading-tight sm:text-2xl">
               {formatCurrency(netWorth, data.currency, { showSign: true })}
@@ -40,7 +40,7 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
           </div>
         </div>
         <p className="text-sm text-muted-foreground">
-          {data.scope || "Whole household"} · Current values{data.accountFiltered ? " · Selected accounts only" : ""}
+          {data.scope || "Your visible finances"} · Current values{data.accountFiltered ? " · Selected accounts only" : ""}
         </p>
       </CardHeader>
       <CardContent className="space-y-6">

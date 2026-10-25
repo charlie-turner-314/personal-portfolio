@@ -1,3 +1,4 @@
+import { accountAccess } from "@/lib/household/account-access";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getOwners, setOwners, type EntityType } from "@/lib/people";
@@ -8,10 +9,10 @@ import { eq, and } from "drizzle-orm";
 
 const ENTITY_TYPES = ["account", "property", "vehicle"] as const;
 
-async function userOwnsEntity(userId: string, entityType: EntityType, entityId: string): Promise<boolean> {
+async function userOwnsEntity(userId: string, entityType: EntityType, entityId: string, allowShared = false): Promise<boolean> {
   const table = entityType === "account" ? accounts : entityType === "property" ? properties : vehicles;
   const [row] = await db.select({ id: table.id }).from(table)
-    .where(and(eq(table.id, entityId), eq(table.userId, userId))).limit(1);
+    .where(and(eq(table.id, entityId), allowShared && entityType === "account" ? accountAccess(accounts.id, userId) : eq(table.userId, userId))).limit(1);
   return !!row;
 }
 
@@ -25,7 +26,7 @@ export async function GET(
   if (!ENTITY_TYPES.includes(entityType as EntityType)) {
     return NextResponse.json({ error: "invalid entityType" }, { status: 400 });
   }
-  if (!(await userOwnsEntity(userId, entityType as EntityType, entityId))) {
+  if (!(await userOwnsEntity(userId, entityType as EntityType, entityId, true))) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
   const owners = await getOwners(entityType as EntityType, entityId);

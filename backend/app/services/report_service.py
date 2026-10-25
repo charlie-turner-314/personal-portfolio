@@ -11,6 +11,7 @@ from uuid import UUID
 import pydantic
 from sqlalchemy.orm import Session
 
+from app.services.financial_access import account_access
 from app.models import Account, Report, ReportRun
 from app.schemas import ReportCreate, ReportUpdate
 from app.services.report_schedule_service import compute_next_run_at
@@ -49,14 +50,14 @@ def _validate_account_ids(account_ids: list[str], user_id: str, db: Session) -> 
         try:
             parsed_ids.append(UUID(raw_id))
         except ValueError:
-            raise ReportValidationError("One or more account_ids are invalid or not owned by this user")
+            raise ReportValidationError("One or more account_ids are invalid or not accessible to this user")
     owned_count = (
         db.query(Account)
-        .filter(Account.user_id == user_id, Account.id.in_(parsed_ids))
+        .filter(account_access(Account.id, user_id), Account.id.in_(parsed_ids))
         .count()
     )
     if owned_count != len(set(parsed_ids)):
-        raise ReportValidationError("One or more account_ids are invalid or not owned by this user")
+        raise ReportValidationError("One or more account_ids are invalid or not accessible to this user")
 
 
 def _recompute_next_run(report: Report) -> None:

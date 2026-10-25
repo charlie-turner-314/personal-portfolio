@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/db", () => ({ db: {} }));
-vi.mock("@/lib/household/financial-auth", () => ({
+vi.mock("@/lib/auth-helpers", () => ({
   requireAuth: vi.fn(),
   getAuthenticatedSession: async () => ({ user: { id: "user", email: "user@example.test" } }),
 }));

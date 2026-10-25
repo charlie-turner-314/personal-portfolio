@@ -3,6 +3,7 @@ Account tools for the MCP server.
 """
 from typing import Optional
 
+from app.services.financial_access import account_access
 from app.mcp.dependencies import get_db, validate_uuid, validate_date
 from app.mcp.tools._asset_class import account_type_to_asset_class
 from app.models import Account, AccountBalance
@@ -52,7 +53,7 @@ def list_accounts(
         balance, asset_class, etc.
     """
     with get_db() as db:
-        query = db.query(Account).filter(Account.user_id == user_id)
+        query = db.query(Account).filter(account_access(Account.id, user_id))
 
         if not include_inactive:
             query = query.filter(Account.is_active == True)
@@ -145,7 +146,7 @@ def get_account(user_id: str, account_id: str) -> dict | None:
     with get_db() as db:
         account = db.query(Account).filter(
             Account.id == account_uuid,
-            Account.user_id == user_id
+            account_access(Account.id, user_id)
         ).first()
 
         if not account:
@@ -204,7 +205,7 @@ def get_account_balance_history(
         # First verify the account belongs to the user
         account = db.query(Account).filter(
             Account.id == account_uuid,
-            Account.user_id == user_id
+            account_access(Account.id, user_id)
         ).first()
 
         if not account:

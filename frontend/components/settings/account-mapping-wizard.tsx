@@ -52,7 +52,7 @@ interface LinkableAccount {
 
 interface AccountMapping {
   bank_uid: string;
-  action: "create" | "link";
+  action: "create" | "link" | "skip";
   name?: string;
   existing_account_id?: string;
 }
@@ -89,6 +89,7 @@ export function AccountMappingWizard({
   const [mappings, setMappings] = useState<AccountMapping[]>(
     bankAccounts.map((account) => {
       const suggestion = suggestionByUid[account.uid];
+      if (suggestion?.suggested_action === "skip") return { bank_uid: account.uid, action: "skip" as const };
       if (suggestion?.suggested_action === "link" && suggestion.suggested_account_id) {
         return {
           bank_uid: account.uid,
@@ -126,8 +127,10 @@ export function AccountMappingWizard({
     );
   }
 
-  function handleActionSelect(action: "create" | "link") {
-    if (action === "create") {
+  function handleActionSelect(action: "create" | "link" | "skip") {
+    if (action === "skip") {
+      updateCurrentMapping({ action: "skip", name: undefined, existing_account_id: undefined });
+    } else if (action === "create") {
       updateCurrentMapping({
         action: "create",
         name: currentAccount?.name || "",
@@ -143,7 +146,7 @@ export function AccountMappingWizard({
   }
 
   function canProceed(): boolean {
-    if (!currentMapping) return true;
+    if (!currentMapping || currentMapping.action === "skip") return true;
     if (currentMapping.action === "create") {
       return !!(currentMapping.name && currentMapping.name.trim().length > 0);
     }
@@ -233,6 +236,11 @@ export function AccountMappingWizard({
               What would you like to do with this account?
             </Label>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button type="button" onClick={() => handleActionSelect("skip")}
+                className={`border p-4 text-left ${currentMapping.action === "skip" ? "border-primary bg-muted/30" : "border-border"}`}>
+                <p className="text-sm font-medium">Skip this account</p>
+                <p className="mt-1 text-xs text-muted-foreground">Use this for a joint account already shared with you. It keeps its existing sync connection and avoids a second balance.</p>
+              </button>
               {/* Create new */}
               <button
                 type="button"
@@ -281,6 +289,10 @@ export function AccountMappingWizard({
               </button>
             </div>
           </div>
+
+          {suggestionByUid[currentAccount.uid]?.suggested_action === "skip" && <p className="text-sm text-muted-foreground">
+            This account is already shared with you as {suggestionByUid[currentAccount.uid].suggested_account_name}. Keep Skip selected to use that account and its existing sync connection.
+          </p>}
 
           {/* Create: name input */}
           {currentMapping.action === "create" && (
@@ -385,7 +397,7 @@ export function AccountMappingWizard({
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <RiArrowRightLine className="h-4 w-4 text-muted-foreground" />
-                      {mapping.action === "create" ? (
+                      {mapping.action === "skip" ? <Badge variant="outline">Skipped · no duplicate account</Badge> : mapping.action === "create" ? (
                         <div className="text-right">
                           <Badge variant="secondary" className="mb-1">
                             New

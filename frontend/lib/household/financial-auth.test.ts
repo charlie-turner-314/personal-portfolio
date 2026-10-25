@@ -11,11 +11,11 @@ describe("financial authorization boundary", () => {
     expect(await requireAuth()).toBeNull();
     expect(mocks.access).not.toHaveBeenCalled();
   });
-  it("uses household scope without inheriting owner login privileges", async () => {
+  it("keeps personal financial identity even while joined", async () => {
     mocks.session.mockResolvedValue({ user: { id: "member", email: "member@example.test", role: "user" }, session: { userId: "member" } });
     mocks.access.mockResolvedValue({ ownerUserId: "owner", personId: "existing-person" });
     const result = await getAuthenticatedSession();
-    expect(result?.user).toEqual({ id: "owner", email: "member@example.test", role: "user" });
+    expect(result?.user).toEqual({ id: "member", email: "member@example.test", role: "user" });
     expect(result?.actorUserId).toBe("member");
     expect(result?.session.userId).toBe("member");
     expect(result?.householdPersonId).toBe("existing-person");
@@ -23,7 +23,7 @@ describe("financial authorization boundary", () => {
   it("rechecks access after revocation instead of caching the membership", async () => {
     mocks.session.mockResolvedValue({ user: { id: "member" } });
     mocks.access.mockResolvedValueOnce({ ownerUserId: "owner" }).mockResolvedValueOnce({ ownerUserId: "member" });
-    expect(await requireAuth()).toBe("owner");
+    expect(await requireAuth()).toBe("member");
     expect(await requireAuth()).toBe("member");
     expect(mocks.access).toHaveBeenCalledTimes(2);
   });

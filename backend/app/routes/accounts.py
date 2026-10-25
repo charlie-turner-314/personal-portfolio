@@ -10,8 +10,9 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.database import get_db
-from app.models import Account, Transaction
+from app.models import Account, Transaction, HouseholdAccountShare
 from app.db_helpers import get_user_id
+from app.services.financial_access import account_access
 from app.schemas import (
     AccountCreate,
     AccountOwnershipAllocationResponse,
@@ -181,7 +182,7 @@ def unlink_internal_transfer(
     return None
 
 
-def _serialize_account(account: Account) -> AccountResponse:
+def _serialize_account(account: Account, actor_user_id: Optional[str] = None) -> AccountResponse:
     return AccountResponse(
         id=account.id,
         name=account.name,
@@ -191,7 +192,7 @@ def _serialize_account(account: Account) -> AccountResponse:
         is_active=account.is_active,
         alias_patterns=account.alias_patterns or [],
         provider=account.provider,
-        external_id=decrypt_with_fallback(account.external_id_ciphertext, account.external_id),
+        external_id=decrypt_with_fallback(account.external_id_ciphertext, account.external_id) if actor_user_id is None or account.user_id == actor_user_id else None,
         liability_interest_rate=account.liability_interest_rate,
         liability_repayment_amount=account.liability_repayment_amount,
         liability_repayment_frequency=account.liability_repayment_frequency,
@@ -216,7 +217,7 @@ def list_accounts(
         user_id: User ID (optional, defaults to system user)
     """
     user_id = get_user_id(user_id)
-    query = db.query(Account).filter(Account.user_id == user_id)
+    query = db.query(Account).filter(account_access(Account.id, user_id))
     
     if not include_inactive:
         # Only show active accounts if explicitly requested
@@ -243,7 +244,7 @@ def list_accounts(
         )
 
     accounts = query.order_by(Account.created_at.desc()).all()
-    return [_serialize_account(account) for account in accounts]
+    return [_serialize_account(account, user_id) for account in accounts]
 
 
 @router.get("/{account_id}", response_model=AccountResponse)
@@ -256,11 +257,11 @@ def get_account(
     user_id = get_user_id(user_id)
     account = db.query(Account).filter(
         Account.id == account_id,
-        Account.user_id == user_id
+        account_access(Account.id, user_id)
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    return _serialize_account(account)
+    return _serialize_account(account, user_id)
 
 
 def _allocation_set_response(rows) -> AccountOwnershipAllocationSetResponse:
@@ -358,7 +359,7 @@ def create_account(
     db.add(db_account)
     db.commit()
     db.refresh(db_account)
-    return _serialize_account(db_account)
+    return _serialize_account(db_account, user_id)
 
 
 @router.patch("/{account_id}", response_model=AccountResponse)
@@ -372,18 +373,22 @@ def update_account(
     user_id = get_user_id(user_id)
     account = db.query(Account).filter(
         Account.id == account_id,
-        Account.user_id == user_id
+        account_access(Account.id, user_id)
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    if account.user_id != user_id and "is_active" in updates.model_fields_set:
+        raise HTTPException(status_code=403, detail="Only the account owner can remove or restore an account")
     update_data = updates.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(account, field, value)
 
+    if "is_active" in update_data and update_data["is_active"] is not True:
+        db.query(HouseholdAccountShare).filter(HouseholdAccountShare.account_id == account_id).delete(synchronize_session=False)
     db.commit()
     db.refresh(account)
-    return _serialize_account(account)
+    return _serialize_account(account, user_id)
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -472,14 +477,14 @@ def recalculate_account_balance(
 
     account = db.query(Account).filter(
         Account.id == account_id,
-        Account.user_id == user_id
+        account_access(Account.id, user_id)
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
     # Calculate balance from sum of all transactions
     balance_sum = db.query(func.sum(Transaction.amount)).filter(
-        Transaction.user_id == user_id,
+        Transaction.user_id == account.user_id,
         Transaction.account_id == account.id
     ).scalar() or 0
 
@@ -517,14 +522,14 @@ def recalculate_starting_balance(
 
     account = db.query(Account).filter(
         Account.id == account_id,
-        Account.user_id == user_id
+        account_access(Account.id, user_id)
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
     # Calculate sum of all transactions for this account
     transaction_sum = db.query(func.sum(Transaction.amount)).filter(
-        Transaction.user_id == user_id,
+        Transaction.user_id == account.user_id,
         Transaction.account_id == account.id
     ).scalar() or Decimal("0")
 
@@ -572,14 +577,14 @@ def recalculate_account_timeseries(
     # Verify account exists and belongs to user
     account = db.query(Account).filter(
         Account.id == account_id,
-        Account.user_id == user_id
+        account_access(Account.id, user_id)
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
     # Calculate timeseries for this specific account
     balance_service = AccountBalanceService(db)
-    result = balance_service.calculate_account_timeseries(user_id, account_ids=[account_id])
+    result = balance_service.calculate_account_timeseries(account.user_id, account_ids=[account_id])
 
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])

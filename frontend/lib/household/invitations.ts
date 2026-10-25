@@ -1,11 +1,11 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { householdInvitations, householdMemberships, people, users } from "@/lib/db/schema";
+import { householdInvitations, householdMemberships, householdAccountShares, householdNetWorthShares, people, users } from "@/lib/db/schema";
 import { assertInvitationAcceptable, hashInvitationToken, INVITATION_LIFETIME_MS, newInvitationToken, normalizeInvitationEmail } from "./invitation-policy";
 
 // Serialize household graph changes, including reciprocal invites/acceptance.
 // The transaction-scoped lock is released on both success and rollback.
-async function householdTransaction<T>(work: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
+export async function householdTransaction<T>(work: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(73194, 1)`);
     return work(tx);
@@ -20,6 +20,10 @@ export async function createHouseholdInvitation(actorUserId: string, personId: s
     if (member) throw new Error("Only the household owner can invite members");
     const [person] = await tx.select().from(people).where(and(eq(people.id, personId), eq(people.userId, actorUserId)));
     if (!person || person.kind !== "member") throw new Error("Choose a household placeholder");
+    if (person.linkedUserId) {
+      const [identity] = await tx.select({ email: users.email }).from(users).where(eq(users.id, person.linkedUserId));
+      if (!identity || normalizeInvitationEmail(identity.email) !== normalizedEmail) throw new Error("This person already has a login identity. Invite their current email or create a different household person");
+    }
     const [linked] = await tx.select().from(householdMemberships).where(eq(householdMemberships.personId, personId));
     if (linked) throw new Error("This person already has a linked login");
     const [actor] = await tx.select().from(users).where(eq(users.id, actorUserId));
@@ -49,6 +53,8 @@ export async function acceptHouseholdInvitation(actorUserId: string, token: stri
     if (memberships.some((m) => m.personId === invitation.personId)) throw new Error("This person already has a linked login");
     const [person] = await tx.select().from(people).where(and(eq(people.id, invitation.personId), eq(people.userId, invitation.ownerUserId), eq(people.kind, "member")));
     if (!person) throw new Error("This household person is no longer available");
+    if (person.linkedUserId && person.linkedUserId !== actorUserId) throw new Error("This household person is already linked to another login");
+    await tx.update(people).set({ linkedUserId: actorUserId }).where(eq(people.id, person.id));
     await tx.insert(householdMemberships).values({ memberUserId: actorUserId, ownerUserId: invitation.ownerUserId, personId: invitation.personId });
     await tx.update(householdInvitations).set({ consumedAt: new Date() }).where(eq(householdInvitations.id, invitation.id));
     // Joining cannot leave outstanding invitations capable of creating nested households.
@@ -57,10 +63,18 @@ export async function acceptHouseholdInvitation(actorUserId: string, token: stri
   });
 }
 
+/** Remove both directions so leaving/rejoining can never reactivate old consent. */
+async function clearFinancialShares(tx: Parameters<Parameters<typeof db.transaction>[0]>[0], memberUserId: string) {
+  await tx.delete(householdAccountShares).where(or(eq(householdAccountShares.memberUserId, memberUserId), eq(householdAccountShares.grantedByUserId, memberUserId)));
+  await tx.delete(householdNetWorthShares).where(or(eq(householdNetWorthShares.memberUserId, memberUserId), eq(householdNetWorthShares.ownerUserId, memberUserId)));
+}
+
 export async function revokeHouseholdAccess(actorUserId: string, personId: string) {
   await householdTransaction(async (tx) => {
     const [person] = await tx.select().from(people).where(and(eq(people.id, personId), eq(people.userId, actorUserId)));
     if (!person || person.kind !== "member") throw new Error("Only the household owner can revoke access");
+    const linked = await tx.select().from(householdMemberships).where(and(eq(householdMemberships.ownerUserId, actorUserId), eq(householdMemberships.personId, personId)));
+    for (const member of linked) await clearFinancialShares(tx, member.memberUserId);
     await tx.delete(householdMemberships).where(and(eq(householdMemberships.ownerUserId, actorUserId), eq(householdMemberships.personId, personId)));
     await tx.update(householdInvitations).set({ consumedAt: new Date() }).where(and(eq(householdInvitations.ownerUserId, actorUserId), eq(householdInvitations.personId, personId), isNull(householdInvitations.consumedAt)));
   });
@@ -68,6 +82,7 @@ export async function revokeHouseholdAccess(actorUserId: string, personId: strin
 
 export async function leaveHousehold(actorUserId: string) {
   await householdTransaction(async (tx) => {
+    await clearFinancialShares(tx, actorUserId);
     await tx.delete(householdMemberships).where(eq(householdMemberships.memberUserId, actorUserId));
   });
 }

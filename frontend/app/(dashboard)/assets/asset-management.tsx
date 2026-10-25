@@ -125,6 +125,8 @@ interface AssetManagementProps {
 }
 
 type AccountWithLogo = Account & {
+  accessMode?: "owner" | "shared";
+  visibility?: string;
   logo?: {
     id: string;
     logoUrl: string | null;
@@ -366,6 +368,12 @@ export function AssetManagement({
           : undefined,
       });
 
+      if (result.success && editingAccount.accessMode === "shared") {
+        toast.success("Account updated");
+        setEditingAccount(null);
+        handleRefresh();
+        return;
+      }
       if (result.success) {
         // Update owners — require at least one owner
         if (editAccountOwners.length === 0) {
@@ -664,7 +672,7 @@ export function AssetManagement({
           ) : (
             <div className="divide-y">
               {initialAccounts.map((account) => (
-                <div key={account.id} className="flex items-center justify-between py-4 first:pt-0 last:pb-0">
+                <div key={account.id} data-testid={`account-${account.id}`} className="flex items-center justify-between py-4 first:pt-0 last:pb-0">
                   <div className="flex min-w-0 flex-1 items-center gap-3">
                     <AccountLogo
                       name={account.name}
@@ -675,6 +683,7 @@ export function AssetManagement({
                     <div>
                       <div className="flex items-center gap-2">
                         <p className="font-medium">{account.name}</p>
+                        {account.visibility && <span className="text-xs text-muted-foreground">{account.visibility}</span>}
                         <OwnerBadges
                           entityType="account"
                           entityId={account.id}
@@ -728,10 +737,10 @@ export function AssetManagement({
                           <RiCalculatorLine className="mr-2 h-4 w-4" />
                           Recalculate balance
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => setDeletingAccount(account)}>
+                        {account.accessMode !== "shared" && <DropdownMenuItem className="text-destructive" onClick={() => setDeletingAccount(account)}>
                           <RiDeleteBinLine className="mr-2 h-4 w-4" />
                           Delete
-                        </DropdownMenuItem>
+                        </DropdownMenuItem>}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -1099,7 +1108,7 @@ export function AssetManagement({
                   </SelectContent>
                 </Select>
               </div>
-              {people.length > 1 && (
+              {editingAccount?.accessMode !== "shared" && people.length > 1 && (
                 <OwnersField
                   people={people}
                   value={editAccountOwners}

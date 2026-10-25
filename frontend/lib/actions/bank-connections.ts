@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq, and, desc, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bankConnections, accounts } from "@/lib/db/schema";
-import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
+import { requireAuth, getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getBackendBaseUrl } from "@/lib/backend-url";
 import { createInternalAuthHeaders } from "@/lib/internal-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
@@ -325,7 +325,7 @@ export async function submitAccountMappings(
   connectionId: string,
   mappings: Array<{
     bank_uid: string;
-    action: "create" | "link";
+    action: "create" | "link" | "skip";
     name?: string;
     existing_account_id?: string;
   }>,
@@ -455,7 +455,7 @@ export async function getConnectionStatus(
 export type SuggestedMapping = {
   bank_uid: string;
   bank_name: string;
-  suggested_action: "link" | "create";
+  suggested_action: "link" | "create" | "skip";
   suggested_account_id: string | null;
   suggested_account_name: string | null;
 };

@@ -5,6 +5,7 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
+from app.services.financial_access import account_access
 from app.database import get_db
 from app.models import Transaction, Category, Account
 from app.db_helpers import get_user_id
@@ -30,7 +31,7 @@ def get_monthly_cashflow(
         func.sum(case((Transaction.amount > 0, Transaction.amount), else_=0)).label("income"),
         func.sum(case((Transaction.amount < 0, func.abs(Transaction.amount)), else_=0)).label("expenses"),
     ).filter(
-        Transaction.user_id == user_id,
+        account_access(Transaction.account_id, user_id),
         Transaction.include_in_analytics == True
     )
 
@@ -88,7 +89,7 @@ def get_sankey_data(
 
     # Get total income
     income_query = db.query(func.sum(Transaction.amount)).filter(
-        Transaction.user_id == user_id,
+        account_access(Transaction.account_id, user_id),
         Transaction.amount > 0,
         Transaction.include_in_analytics == True
     )
@@ -109,7 +110,7 @@ def get_sankey_data(
         Category,
         (Transaction.category_id == Category.id) | (Transaction.category_system_id == Category.id)
     ).filter(
-        Transaction.user_id == user_id,
+        account_access(Transaction.account_id, user_id),
         Transaction.amount > 0,
         Transaction.include_in_analytics == True
     )
@@ -136,7 +137,7 @@ def get_sankey_data(
         Category,
         (Transaction.category_id == Category.id) | (Transaction.category_system_id == Category.id)
     ).filter(
-        Transaction.user_id == user_id,
+        account_access(Transaction.account_id, user_id),
         Transaction.amount < 0,
         Transaction.include_in_analytics == True
     )
@@ -240,7 +241,7 @@ def get_account_balances(
     user_id = get_user_id(user_id)
     # Base query for accounts
     accounts_query = db.query(Account).filter(
-        Account.user_id == user_id,
+        account_access(Account.id, user_id),
         Account.is_active == True
     )
     
@@ -256,7 +257,7 @@ def get_account_balances(
         # If category filter is provided, check if this account has transactions in that category
         if category_id:
             has_transactions = db.query(Transaction).filter(
-                Transaction.user_id == user_id,
+                account_access(Transaction.account_id, user_id),
                 Transaction.account_id == account.id,
                 (
                     (Transaction.category_id == category_id) |
@@ -267,7 +268,7 @@ def get_account_balances(
                 continue
         elif uncategorized:
             has_transactions = db.query(Transaction).filter(
-                Transaction.user_id == user_id,
+                account_access(Transaction.account_id, user_id),
                 Transaction.account_id == account.id,
                 Transaction.category_id.is_(None),
                 Transaction.category_system_id.is_(None)
@@ -280,7 +281,7 @@ def get_account_balances(
             # Calculate balance at end of period
             # Balance at to_date = current_balance - sum(transactions after to_date)
             transactions_after = db.query(func.sum(Transaction.amount)).filter(
-                Transaction.user_id == user_id,
+                account_access(Transaction.account_id, user_id),
                 Transaction.account_id == account.id,
                 Transaction.booked_at > to_date
             ).scalar() or 0
@@ -288,7 +289,7 @@ def get_account_balances(
             # If category filter, only consider transactions in that category
             if category_id:
                 transactions_after = db.query(func.sum(Transaction.amount)).filter(
-                    Transaction.user_id == user_id,
+                    account_access(Transaction.account_id, user_id),
                     Transaction.account_id == account.id,
                     Transaction.booked_at > to_date,
                     (
@@ -298,7 +299,7 @@ def get_account_balances(
                 ).scalar() or 0
                 # For category filter, calculate net change in period
                 transactions_in_period = db.query(func.sum(Transaction.amount)).filter(
-                    Transaction.user_id == user_id,
+                    account_access(Transaction.account_id, user_id),
                     Transaction.account_id == account.id,
                     Transaction.booked_at >= (from_date or datetime.min),
                     Transaction.booked_at <= to_date,
@@ -310,7 +311,7 @@ def get_account_balances(
                 balance = float(transactions_in_period)
             elif uncategorized:
                 transactions_after = db.query(func.sum(Transaction.amount)).filter(
-                    Transaction.user_id == user_id,
+                    account_access(Transaction.account_id, user_id),
                     Transaction.account_id == account.id,
                     Transaction.booked_at > to_date,
                     Transaction.category_id.is_(None),
@@ -318,7 +319,7 @@ def get_account_balances(
                 ).scalar() or 0
                 # For uncategorized filter, calculate net change in period
                 transactions_in_period = db.query(func.sum(Transaction.amount)).filter(
-                    Transaction.user_id == user_id,
+                    account_access(Transaction.account_id, user_id),
                     Transaction.account_id == account.id,
                     Transaction.booked_at >= (from_date or datetime.min),
                     Transaction.booked_at <= to_date,
@@ -333,7 +334,7 @@ def get_account_balances(
         elif from_date:
             # Calculate balance change during period (from from_date to now)
             balance_query = db.query(func.sum(Transaction.amount)).filter(
-                Transaction.user_id == user_id,
+                account_access(Transaction.account_id, user_id),
                 Transaction.account_id == account.id,
                 Transaction.booked_at >= from_date
             )
@@ -355,7 +356,7 @@ def get_account_balances(
         elif category_id:
             # Category filter only: show net change for transactions in that category
             balance = db.query(func.sum(Transaction.amount)).filter(
-                Transaction.user_id == user_id,
+                account_access(Transaction.account_id, user_id),
                 Transaction.account_id == account.id,
                 (
                     (Transaction.category_id == category_id) |
@@ -366,7 +367,7 @@ def get_account_balances(
         elif uncategorized:
             # Uncategorized filter only: show net change for uncategorized transactions
             balance = db.query(func.sum(Transaction.amount)).filter(
-                Transaction.user_id == user_id,
+                account_access(Transaction.account_id, user_id),
                 Transaction.account_id == account.id,
                 Transaction.category_id.is_(None),
                 Transaction.category_system_id.is_(None)
