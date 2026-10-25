@@ -5,7 +5,7 @@ using actor ownership, not these collaborator predicates.
 """
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import aliased
-from app.models import Account, HouseholdAccountShare, HouseholdMembership, User
+from app.models import Account, Property, HouseholdPropertyShare, HouseholdAccountShare, HouseholdMembership, User
 from datetime import date
 from decimal import Decimal
 from sqlalchemy.orm import Session
@@ -32,6 +32,19 @@ def account_access(account_id_column, actor_user_id: str):
     )))
     permitted = select(account.id).where(or_(account.user_id == actor_user_id, granted))
     return account_id_column.in_(permitted)
+
+
+def property_access(property_id_column, actor_user_id: str):
+    property_row = aliased(Property)
+    grant = aliased(HouseholdPropertyShare)
+    granted = exists(select(grant.property_id).where(and_(
+        grant.property_id == property_row.id,
+        grant.member_user_id == actor_user_id,
+        grant.granted_by_user_id == property_row.user_id,
+        property_row.is_active.is_(True),
+        household_root(property_row.user_id) == household_root(actor_user_id),
+    )))
+    return property_id_column.in_(select(property_row.id).where(or_(property_row.user_id == actor_user_id, granted)))
 
 
 def value_in_actor_currency(db: Session, value, owner_user_id: str, actor_user_id: str, on: date) -> Decimal:

@@ -68,6 +68,32 @@ All 98 frontend test files passed (463 tests; one skipped), including PostgreSQL
 filter execution. TypeScript and changed-file ESLint passed.
 Feature merge, exact develop verification, main promotion and Pi delivery remain.
 
+PPF-60 delivery: feature PR #90 merged as develop `8d8749e`. Its source build,
+migration reruns and preservation checks passed (22 users/auth accounts, 27
+accounts, 3,289 transactions, 8 holdings, 8 broker trades). Fifty-seven focused
+tests, authenticated smoke and both browser regressions passed on the merged
+revision. Promotion PR #91 merged main `71de04e`; PR #92 synchronized ancestry to
+develop `5a40563`. Required checks were restored and verified after each bypass.
+
+## PPF-58: explicit property sharing
+
+Starting develop: `5a40563`. New list/detail query regression failed because both
+queries used login ownership alone and had no grant predicate.
+
+Plan: separate property grants from economic ownership and mortgage-account
+permission. Owner-controlled property sharing enables shared detail and valuation
+edits, with owner-only ownership/link/sharing/deletion controls. List, detail,
+valuations, tagged activity, rental reports, transaction tagging, search, ownership
+badges, net worth and MCP must use the same access boundary. Mortgage and tagged
+transaction detail additionally require account permission. Revocation/leave must
+remove grants and never revive them on rejoin. Never transfer or duplicate property
+rows. Serialize shared edits with grant revocation. Keep original property and
+valuation user IDs. UI and backend implementation/tests are in progress. The broader backend privacy
+harness exposed a pre-existing create_transaction assignment to the collaborator
+instead of the canonical account owner (unchanged by the property feature). The
+existing canonical-ownership assertion failed; the route now assigns account.user_id.
+This preserves shared property-account activity and joint-account history.
+
 ## Remaining issues
 
 - PPF-57: prevent/reconcile joint Up duplicate account mappings without losing

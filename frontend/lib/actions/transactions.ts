@@ -1,7 +1,7 @@
 "use server";
 
 import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
-import { accountAccess } from "@/lib/household/account-access";
+import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
 import { eq, and, desc, inArray, notInArray, sql, gte, lte, gt, asc, ne, or, ilike, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -345,7 +345,7 @@ export async function updateTransactionProperty(
       const property = await db.query.properties.findFirst({
         where: and(
           eq(properties.id, propertyId),
-          eq(properties.userId, userId),
+          propertyAccess(properties.id, userId),
           eq(properties.isActive, true)
         ),
       });
@@ -473,7 +473,7 @@ async function sanitizeTransactionRelations<T extends TransactionRowWithRelation
   const pocketIds = [...new Set(rows.flatMap((row) => row.internalTransfer?.pocketAccount ? [row.internalTransfer.pocketAccount.id] : []))];
   const recurringIds = [...new Set(rows.flatMap((row) => row.recurringTransactionId ? [row.recurringTransactionId] : []))];
   const [visibleProperties, visiblePockets, visibleRecurring] = await Promise.all([
-    propertyIds.length ? db.select({ id: properties.id }).from(properties).where(and(inArray(properties.id, propertyIds), eq(properties.userId, actorUserId))) : [],
+    propertyIds.length ? db.select({ id: properties.id }).from(properties).where(and(inArray(properties.id, propertyIds), propertyAccess(properties.id, actorUserId))) : [],
     pocketIds.length ? db.select({ id: accounts.id }).from(accounts).where(and(inArray(accounts.id, pocketIds), accountAccess(accounts.id, actorUserId))) : [],
     recurringIds.length ? db.select({ id: recurringTransactions.id }).from(recurringTransactions).where(and(inArray(recurringTransactions.id, recurringIds), eq(recurringTransactions.userId, actorUserId))) : [],
   ]);

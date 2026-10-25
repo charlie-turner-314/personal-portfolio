@@ -2219,3 +2219,14 @@ export const categorizationFeedback = pgTable("categorization_feedback", {
   snapshot: jsonb("snapshot").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, table => [index("categorization_feedback_user_transaction_idx").on(table.userId, table.transactionId, table.createdAt)]);
+
+export const householdPropertyShares = pgTable("household_property_shares", {
+  propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+  memberUserId: text("member_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  grantedByUserId: text("granted_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.propertyId, t.memberUserId] }),
+  index("household_property_shares_member_idx").on(t.memberUserId),
+  check("household_property_shares_not_self", sql`${t.memberUserId} <> ${t.grantedByUserId}`),
+]);

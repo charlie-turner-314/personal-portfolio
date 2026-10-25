@@ -92,7 +92,7 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
       CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
       CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
       CREATE TEMP TABLE account_balances(account_id text, date timestamp, balance_in_functional_currency numeric);
-      CREATE TEMP TABLE people(id text, user_id text, kind text);
+      CREATE TEMP TABLE people(id text, user_id text, kind text, linked_user_id text);
       CREATE TEMP TABLE account_owners(account_id text, person_id text, share numeric);
       CREATE TEMP TABLE account_ownership_allocations(account_id text, person_id text, effective_from date, share numeric);
       INSERT INTO accounts VALUES
@@ -112,7 +112,7 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
         ('checking', CURRENT_DATE + 1, 123456),
         ('savings', CURRENT_DATE - 1, 2000),
         ('overdraft', CURRENT_DATE - 5, -250);
-      INSERT INTO people VALUES ('person-half', 'current-user', 'self');
+      INSERT INTO people(id,user_id,kind) VALUES ('person-half', 'current-user', 'self');
       INSERT INTO account_ownership_allocations
         SELECT id, 'person-half', CURRENT_DATE - 30, 0.5 FROM accounts;
       ${bind(totalCall[0], totalCall[1])};

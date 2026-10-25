@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { accounts, householdAccountShares, householdNetWorthShares, users } from "@/lib/db/schema";
+import { accounts, properties, householdPropertyShares, householdAccountShares, householdNetWorthShares, users } from "@/lib/db/schema";
 import { householdTransaction } from "./invitations";
 import { sameHousehold } from "./account-access";
 
@@ -21,6 +21,25 @@ export async function setAccountSharing(actorUserId: string, accountId: string, 
     if (targets.length) await tx.insert(householdAccountShares).values(targets.map((memberUserId) => ({
       accountId, memberUserId, grantedByUserId: actorUserId,
     })));
+  });
+}
+
+/** Mortgage access remains a separate explicit account grant. */
+export async function setPropertySharing(actorUserId: string, propertyId: string, memberUserIds: string[]) {
+  const targets = [...new Set(memberUserIds)];
+  if (targets.length > 100) throw new Error("Choose fewer household members");
+  return householdTransaction(async tx => {
+    const [property] = await tx.select({ id: properties.id }).from(properties)
+      .where(and(eq(properties.id, propertyId), eq(properties.userId, actorUserId), eq(properties.isActive, true))).for("update");
+    if (!property) throw new Error("Only the property owner can change sharing");
+    for (const memberUserId of targets) {
+      if (memberUserId === actorUserId) throw new Error("Choose another household member");
+      const [member] = await tx.select({ id: users.id }).from(users)
+        .where(and(eq(users.id, memberUserId), sameHousehold(actorUserId, memberUserId)));
+      if (!member) throw new Error("Choose a current household member");
+    }
+    await tx.delete(householdPropertyShares).where(eq(householdPropertyShares.propertyId, propertyId));
+    if (targets.length) await tx.insert(householdPropertyShares).values(targets.map(memberUserId => ({ propertyId, memberUserId, grantedByUserId: actorUserId })));
   });
 }
 

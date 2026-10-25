@@ -12,6 +12,12 @@ whole-workspace household authorization model.
   account balance, transactions and categorization. Budgets and future plans remain
   personal; actual spending from a shared account is visible to its collaborators.
   Only the owner can change economic ownership or access, delete the account, or manage its credentials.
+- Properties also start private. The property owner can explicitly share detail,
+  valuations and rental reports with selected current household members. Shared
+  members can edit property details and record valuations. Only the owner changes
+  economic ownership, linked liabilities, sharing or deletion. Linked mortgage
+  balances and tagged transactions additionally require a separate account grant.
+  Property grants never expose another private property or account.
 - Ownership percentages describe economic ownership, not permission. A placeholder
   or an ownership split never grants access automatically.
 - Bank and brokerage connections, Up tokens, AI keys, API keys, import source
@@ -41,7 +47,7 @@ whole-workspace household authorization model.
 
 Keep each resource's original user_id. Replace owner-ID impersonation with
 account-access predicates: own account OR explicit grant to a current member of
-the same household. Non-account personal resources remain actor-scoped.
+the same household. Property reads use the corresponding explicit property-access predicate. Other non-account personal resources remain actor-scoped.
 
 Sharing grants are explicit database rows, separate from ownership allocations.
 Grant management and membership mutations use the same advisory transaction lock

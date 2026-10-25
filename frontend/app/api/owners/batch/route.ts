@@ -1,4 +1,4 @@
-import { accountAccess } from "@/lib/household/account-access";
+import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { inArray, and, eq } from "drizzle-orm";
@@ -24,7 +24,7 @@ async function filterOwnedIds(
   const rows = await db
     .select({ id: table.id })
     .from(table)
-    .where(and(entityType === "account" ? accountAccess(accounts.id, userId) : eq(table.userId, userId), inArray(table.id, ids)));
+    .where(and(entityType === "account" ? accountAccess(accounts.id, userId) : entityType === "property" ? propertyAccess(properties.id, userId) : eq(table.userId, userId), inArray(table.id, ids)));
   return rows.map((r) => r.id);
 }
 

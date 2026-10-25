@@ -52,9 +52,10 @@ def main():
             schema = run(['docker', 'exec', containers['postgres'], 'pg_dump', '-U', user, '-d', source_database, '--schema-only', '--no-owner', '--no-acl']).stdout
             run(['docker', 'exec', '-i', containers['postgres'], 'psql', '-U', user, '-d', dbname, '-v', 'ON_ERROR_STOP=1'], input=schema)
         print('Applying additive privacy migration twice', flush=True)
-        migration = (ROOT / 'frontend/lib/db/migrations/0046_household_financial_privacy.manual.sql').read_text()
-        for _ in range(2):
-            sql(dbname, migration)
+        for filename in ('0046_household_financial_privacy.manual.sql', '0051_household_property_sharing.manual.sql'):
+            migration = (ROOT / 'frontend/lib/db/migrations' / filename).read_text()
+            for _ in range(2):
+                sql(dbname, migration)
         bundle = ROOT / '.release-lab/household-privacy-integration.cjs'
         run([str(ROOT / 'frontend/node_modules/.bin/esbuild'), 'frontend/scripts/test-household-financial-privacy.ts', '--bundle', '--platform=node', '--format=cjs', f'--outfile={bundle}', '--tsconfig=frontend/tsconfig.json'], cwd=ROOT)
         def test_runner(service, entrypoint, command, files):

@@ -3,7 +3,7 @@ People and household tools for the MCP server.
 """
 from __future__ import annotations
 
-from app.services.financial_access import account_access, household_root
+from app.services.financial_access import account_access, property_access, household_root
 from app.mcp.dependencies import get_db
 from app.models import Account, Person, Property, Vehicle
 from app.services.net_worth_service import calculate_net_worth, classify_account_amount
@@ -65,7 +65,7 @@ def get_household_summary(
         )
         properties = (
             db.query(Property)
-            .filter(Property.user_id == user_id, Property.is_active.is_(True))
+            .filter(property_access(Property.id, user_id), Property.is_active.is_(True))
             .all()
         )
         vehicles = (
@@ -130,4 +130,4 @@ def get_household_summary(
                 "net_worth": round(net_worth, 2),
                 "total": round(net_worth, 2),
             })
-        return {"people": out, "scope": "Visible accounts and your private assets; other members’ private net worth is excluded"}
+        return {"people": out, "scope": "Visible accounts and properties plus your private vehicles; other members’ private assets are excluded"}
