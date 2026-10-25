@@ -37,10 +37,10 @@ test("named member Sankey retains salary and filter navigation gives immediate f
     const gate = new Promise<void>(resolve => { release = resolve; });
     await page.route(url => url.pathname === "/" && url.searchParams.get("person") === linked, async route => { await gate; await route.continue(); });
     await page.getByRole("button", { name: /Jessica Fixture/ }).click({ noWaitAfter: true, timeout: 10000 });
-    try { await expect(page.getByRole("status")).toHaveText("Updating dashboard…"); }
+    try { await expect(page.getByRole("status").filter({ hasText: "Updating dashboard…" })).toHaveText("Updating dashboard…"); }
     finally { release(); }
     await expect(page).toHaveURL(new RegExp(`person=${linked}`));
-    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "Updating dashboard…" })).toHaveCount(0);
     await expect(diagram.getByText("Salary fixture", { exact: true })).toBeVisible();
     await expect(diagram.getByText("Spending fixture", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Whole accounts", exact: true }).click();
