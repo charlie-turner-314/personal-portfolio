@@ -3,7 +3,7 @@ Service for syncing bank data (accounts and transactions).
 """
 import logging as _logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from decimal import Decimal
@@ -98,6 +98,7 @@ class SyncService:
         query = self.db.query(Account).filter(
             Account.user_id == self.user_id,
             Account.provider == provider,
+            Account.consolidated_into_account_id.is_(None),
         )
 
         # A blank external_id is not an identity. `Account.external_id == None`
@@ -244,6 +245,11 @@ class SyncService:
         account: Account,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        *,
+        preloaded_transactions: Optional[List[TransactionData]] = None,
+        commit: bool = True,
+        preserve_manual_edits: bool = False,
+        cleanup_csv_duplicates: bool = True,
     ) -> tuple[int, int, List[str], List[str]]:
         """
         Sync transactions for an account.
@@ -261,7 +267,7 @@ class SyncService:
         if not resolved_account_external_id:
             raise ValueError(f"Account {account.id} is missing provider external_id.")
 
-        transaction_data_list = adapter.fetch_transactions(
+        transaction_data_list = preloaded_transactions if preloaded_transactions is not None else adapter.fetch_transactions(
             resolved_account_external_id,
             start_date=start_date,
             end_date=end_date,
@@ -309,7 +315,24 @@ class SyncService:
                     account_id=str(account.id),
                 )
 
+            provider_fields = {
+                "amount": transaction_data.amount, "currency": transaction_data.currency,
+                "description": transaction_data.description, "merchant": merchant or transaction_data.merchant,
+                "creditor": transaction_data.creditor, "debtor": transaction_data.debtor,
+                "booked_at": transaction_data.booked_at, "transaction_type": transaction_data.transaction_type,
+            }
+            def normalized(value):
+                if isinstance(value, Decimal):
+                    return str(value.normalize())
+                if isinstance(value, datetime):
+                    return (value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)).isoformat()
+                return value
+            provider_snapshot = {key: normalized(value) for key, value in provider_fields.items()}
             if existing_transaction:
+                previous_provider = (existing_transaction.enrichment_data or {}).get("up_provider_fields") or {}
+                retained_edits = {key: getattr(existing_transaction, key) for key in provider_fields
+                    if preserve_manual_edits and getattr(existing_transaction, key) is not None
+                    and (key not in previous_provider or normalized(getattr(existing_transaction, key)) != previous_provider[key])}
                 # Update mutable fields; preserve any existing category
                 existing_transaction.amount = transaction_data.amount
                 existing_transaction.currency = transaction_data.currency
@@ -321,6 +344,12 @@ class SyncService:
                 existing_transaction.booked_at = transaction_data.booked_at
                 existing_transaction.transaction_type = transaction_data.transaction_type
                 existing_transaction.pending = transaction_data.pending
+                if preserve_manual_edits:
+                    for field, original in retained_edits.items():
+                        setattr(existing_transaction, field, original)
+                    existing_transaction.enrichment_data = {
+                        **(existing_transaction.enrichment_data or {}), "up_provider_fields": provider_snapshot,
+                    }
                 if transaction_data.metadata:
                     existing_transaction.enrichment_data = {
                         **(existing_transaction.enrichment_data or {}),
@@ -415,7 +444,8 @@ class SyncService:
                 pending=transaction_data.pending,
                 category_system_id=category.id if category else None,
                 recurring_transaction_id=matched_subscription.id if matched_subscription else None,
-                enrichment_data={"provider": transaction_data.metadata} if transaction_data.metadata else None,
+                enrichment_data={**({"provider": transaction_data.metadata} if transaction_data.metadata else {}),
+                    **({"up_provider_fields": provider_snapshot} if preserve_manual_edits else {})} or None,
                 counterparty_iban_ciphertext=encrypt_value(transaction_data.counterparty_iban) if transaction_data.counterparty_iban else None,
                 counterparty_iban_hash=blind_index(transaction_data.counterparty_iban) if transaction_data.counterparty_iban else None,
             )
@@ -431,7 +461,7 @@ class SyncService:
             d = td.booked_at.date() if hasattr(td.booked_at, "date") else td.booked_at
             eb_keys.add((td.amount, d))
 
-        if eb_keys:
+        if eb_keys and cleanup_csv_duplicates:
             from sqlalchemy import func as _sa_func
             # Find orphaned CSV rows (external_id IS NULL) in the sync window whose
             # (amount, date) was covered by an EB transaction.
@@ -487,7 +517,8 @@ class SyncService:
                     orphan.id, orphan.amount, orphan_date,
                 )
 
-        self.db.commit()
+        if commit:
+            self.db.commit()
 
         return (created_count, updated_count, created_transaction_ids, updated_transaction_ids)
     

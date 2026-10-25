@@ -25,12 +25,12 @@ describe.skipIf(!process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER)("household categ
         AND ${reportingCategoryFilter(sql`COALESCE(category_id, category_system_id)`, ["housing-a"])} ORDER BY id`);
     const literal = query.sql.replace(/\$(\d+)/g, (_, index) => `'${String(query.params[Number(index) - 1]).replaceAll("'", "''")}'`);
     const fixture = `BEGIN;
-      CREATE TEMP TABLE accounts(id text, user_id text, is_active boolean);
+      CREATE TEMP TABLE accounts(consolidated_into_account_id text, id text, user_id text, is_active boolean);
       CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text);
       CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
       CREATE TEMP TABLE categories(id text, name text, category_type text);
       CREATE TEMP TABLE transactions(id text, account_id text, category_id text, category_system_id text);
-      INSERT INTO accounts VALUES ('own','viewer',true),('shared','owner',true),('private','owner',true);
+      INSERT INTO accounts(id,user_id,is_active) VALUES ('own','viewer',true),('shared','owner',true),('private','owner',true);
       INSERT INTO household_memberships VALUES ('viewer','owner');
       INSERT INTO household_account_shares VALUES ('shared','viewer','owner');
       INSERT INTO categories VALUES ('housing-a','Housing','expense'),('housing-b',' housing ','expense'),('housing-income','Housing','income');

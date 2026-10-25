@@ -88,14 +88,14 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
     const historyCall = mocks.execute.mock.calls[0];
     const fixture = `
       BEGIN;
-      CREATE TEMP TABLE accounts(id text, user_id text, is_active boolean, account_type text, functional_balance numeric);
+      CREATE TEMP TABLE accounts(consolidated_into_account_id text, id text, user_id text, is_active boolean, account_type text, functional_balance numeric);
       CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
       CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
       CREATE TEMP TABLE account_balances(account_id text, date timestamp, balance_in_functional_currency numeric);
       CREATE TEMP TABLE people(id text, user_id text, kind text, linked_user_id text);
       CREATE TEMP TABLE account_owners(account_id text, person_id text, share numeric);
       CREATE TEMP TABLE account_ownership_allocations(account_id text, person_id text, effective_from date, share numeric);
-      INSERT INTO accounts VALUES
+      INSERT INTO accounts(id,user_id,is_active,account_type,functional_balance) VALUES
         ('checking', 'current-user', true, 'checking', 99999),
         ('savings', 'current-user', true, 'savings', 2000),
         ('manual-cash', 'current-user', true, 'cash', 500),

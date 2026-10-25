@@ -49,6 +49,7 @@ class Account(Base):
     external_id_hash = Column(String(64), nullable=True, index=True)
     iban_ciphertext = Column(Text, nullable=True)
     iban_hash = Column(String(64), nullable=True, index=False)  # composite index defined in __table_args__
+    consolidated_into_account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
     bank_connection_id = Column(UUID(as_uuid=True), ForeignKey("bank_connections.id", ondelete="SET NULL"), nullable=True)
     balance_available = Column(Numeric(15, 2), nullable=True)
     starting_balance = Column(Numeric(15, 2), default=Decimal("0"))  # Starting balance for calculation
@@ -1869,3 +1870,23 @@ class HouseholdNetWorthShare(Base):
     member_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     created_at = Column(DateTime, nullable=False, server_default=text("now()"))
     __table_args__ = (CheckConstraint("owner_user_id <> member_user_id", name="household_net_worth_shares_not_self"),)
+
+
+class UpAccountSource(Base):
+    __tablename__ = "up_account_sources"
+    connection_id = Column(UUID(as_uuid=True), ForeignKey("bank_connections.id", ondelete="CASCADE"), primary_key=True)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=text("now()"))
+
+
+class UpAccountReconciliation(Base):
+    __tablename__ = "up_account_reconciliations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source_account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    canonical_account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    source_snapshot = Column(JSONB, nullable=False)
+    canonical_snapshot = Column(JSONB, nullable=False)
+    result = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, server_default=text("now()"))

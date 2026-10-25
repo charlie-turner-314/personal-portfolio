@@ -1,5 +1,5 @@
-import { and, eq } from "drizzle-orm";
-import { accounts, properties, householdPropertyShares, householdAccountShares, householdNetWorthShares, users } from "@/lib/db/schema";
+import { and, eq, sql } from "drizzle-orm";
+import { accounts, upAccountSources, properties, householdPropertyShares, householdAccountShares, householdNetWorthShares, users } from "@/lib/db/schema";
 import { householdTransaction } from "./invitations";
 import { sameHousehold } from "./account-access";
 
@@ -17,6 +17,9 @@ export async function setAccountSharing(actorUserId: string, accountId: string, 
         .where(and(eq(users.id, memberUserId), sameHousehold(actorUserId, memberUserId)));
       if (!member) throw new Error("Choose a current household member");
     }
+    await tx.delete(upAccountSources).where(and(eq(upAccountSources.accountId, accountId),
+      sql`${upAccountSources.connectionId} IN (SELECT id FROM bank_connections
+        WHERE user_id <> ${actorUserId} ${targets.length ? sql`AND user_id NOT IN (${sql.join(targets.map(id => sql`${id}`), sql`, `)})` : sql``})`));
     await tx.delete(householdAccountShares).where(eq(householdAccountShares.accountId, accountId));
     if (targets.length) await tx.insert(householdAccountShares).values(targets.map((memberUserId) => ({
       accountId, memberUserId, grantedByUserId: actorUserId,

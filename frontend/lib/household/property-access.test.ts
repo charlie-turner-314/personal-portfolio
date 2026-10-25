@@ -20,7 +20,7 @@ describe.skipIf(!container)("property consent and ownership on PostgreSQL", () =
     const fixture = `BEGIN;
       CREATE TEMP TABLE properties(id text, user_id text, is_active boolean);
       CREATE TEMP TABLE household_property_shares(property_id text, member_user_id text, granted_by_user_id text);
-      CREATE TEMP TABLE accounts(id text, user_id text, is_active boolean);
+      CREATE TEMP TABLE accounts(consolidated_into_account_id text, id text, user_id text, is_active boolean);
       CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
       CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
       CREATE TEMP TABLE people(id text, user_id text, kind text, linked_user_id text);
@@ -30,7 +30,7 @@ describe.skipIf(!container)("property consent and ownership on PostgreSQL", () =
       INSERT INTO people(id,user_id,kind) VALUES ('linked','owner','member'),('owner-self','owner','self'),('self','member','self');
       INSERT INTO properties VALUES ('home','owner',true),('private','owner',true),('own','member',true),('foreign','outsider',true);
       INSERT INTO property_owners VALUES ('home','linked',NULL),('home','owner-self',NULL),('private','linked',1);
-      INSERT INTO accounts VALUES ('mortgage','owner',true);
+      INSERT INTO accounts(id,user_id,is_active) VALUES ('mortgage','owner',true);
       INSERT INTO property_liability_links VALUES ('home','mortgage');
       ${visible}
       INSERT INTO household_property_shares VALUES ('home','member','owner'),('foreign','member','outsider');
