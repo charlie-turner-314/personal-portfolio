@@ -29,8 +29,13 @@ transition is pending. Net-worth asset detail retains its separately labelled vi
 
 Local verification so far: six focused test files, 22 tests passed, including actual
 PostgreSQL execution; TypeScript and changed-file ESLint passed. The new query test
-was observed failing before implementation. Upgrade rehearsal, feature merge,
-develop verification, main promotion and Pi deployment remain to be recorded.
+was observed failing before implementation. Source build at `9c21885` and both migration runs passed; six-table preservation
+matched 2 users, 2 auth accounts, 2 accounts and 29 transactions (holdings and broker
+trades empty). Populated and fresh account smoke passed. Chromium confirmed salary
+in named member scope and immediate update feedback with a deliberately delayed
+request. The lab uses localhost:8108; its initial port conflict was corrected only
+in its encrypted configuration. Feature/develop merges, main promotion and Pi
+deployment remain to be recorded.
 
 ## Remaining issues
 
