@@ -40,3 +40,19 @@ results were identical for both; pooled connection JIT returned to `on` afterwar
 This benchmark executes candidate code in a separate diagnostic process; it does
 not change the deployed app. Source build/browser and merged-revision evidence
 will be recorded below after completion.
+
+Feature source build `29d143c` passed; migrations ran twice and existing lab data
+hashes matched. PostgreSQL privacy/aggregate checks passed. Frontend unit suite:
+102 files, 470 passed, one skipped. TypeScript and changed-file lint passed.
+Chromium blocks net-worth/portfolio tables in an isolated transaction and proves
+cash flow and salary still render while liabilities/assets/net-worth placeholders
+remain visible; releasing the lock renders the completed cards (2.9 seconds for
+the entire test). Category grouping, named-member salary/loading and authenticated
+populated/fresh-account smoke are checked separately to avoid signup rate limits.
+
+Materialization alone still triggered expensive compilation on the Pi. The
+transaction-local JIT policy is deliberate: this query's permission expressions
+produce an estimated cost around three million despite real execution taking
+about 11 ms. The guard avoids compilation independent of planner estimates, and
+unit coverage checks that it is LOCAL to the aggregate transaction. PostgreSQL
+pool state is verified restored after the candidate benchmark.

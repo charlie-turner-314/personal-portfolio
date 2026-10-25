@@ -17,10 +17,10 @@ test("cash flow streams while net worth and portfolio queries are blocked", asyn
     expect(response.ok()).toBeTruthy(); userId = (await response.json()).user.id; break;
   }
   expect(userId).not.toBe("");
-  const [account, category] = [randomUUID(), randomUUID()];
+  const [account, category, investment] = [randomUUID(), randomUUID(), randomUUID()];
   sql(`BEGIN;
     UPDATE users SET onboarding_status='completed',functional_currency='AUD' WHERE id=${quote(userId)};
-    INSERT INTO accounts(id,user_id,name,account_type,currency,provider,functional_balance) VALUES ('${account}',${quote(userId)},'Streaming Cash','checking','AUD','manual',100);
+    INSERT INTO accounts(id,user_id,name,account_type,currency,provider,functional_balance) VALUES ('${account}',${quote(userId)},'Streaming Cash','checking','AUD','manual',100),('${investment}',${quote(userId)},'Streaming investments','investment_manual','AUD','manual',50);
     INSERT INTO categories(id,user_id,name,category_type) VALUES ('${category}',${quote(userId)},'Streaming salary','income');
     INSERT INTO transactions(user_id,account_id,amount,functional_amount,currency,category_id,booked_at) VALUES (${quote(userId)},'${account}',100,100,'AUD','${category}',CURRENT_DATE);
     COMMIT;`);
