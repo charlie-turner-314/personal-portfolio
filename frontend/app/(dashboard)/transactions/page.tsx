@@ -19,7 +19,6 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
       <Header title="Transactions" />
       <div className="flex h-auto md:h-[calc(100vh-4rem)] flex-col gap-4 p-4 pt-0">
         <Suspense
-          key={JSON.stringify(queryState)}
           fallback={
             <>
               <FiltersSkeleton />

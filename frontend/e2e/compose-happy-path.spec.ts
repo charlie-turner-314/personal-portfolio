@@ -95,6 +95,23 @@ test("a new user can onboard, import transactions, and sign in again", async ({ 
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await page.getByRole("button", { name: "Close walkthrough" }).click();
 
+  await page.goto("/transactions");
+  const search = page.getByPlaceholder("Search transactions...");
+  await search.fill("s");
+  await expect(page).toHaveURL(/search=s(?:&|$)/);
+  await expect(search).toBeFocused();
+  // Wait across debounced server navigations, then type navigation shortcut letters.
+  for (const letter of "abcd") {
+    await search.press(letter);
+    const value = await search.inputValue();
+    await expect.poll(() => new URL(page.url()).searchParams.get("search")).toBe(value);
+    await expect(search).toBeFocused();
+    expect(new URL(page.url()).pathname).toBe("/transactions");
+  }
+  await search.fill("");
+  await expect.poll(() => new URL(page.url()).searchParams.has("search")).toBe(false);
+  await expect(search).toBeFocused();
+
   await page.goto("/budget");
   await expect(page.getByRole("heading", { name: "Budget" })).toBeVisible();
   await expect(page.getByText("Budget failed to load")).not.toBeVisible();
