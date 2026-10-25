@@ -1,3 +1,4 @@
+import { reportingCategoryKey } from "@/lib/categories/reporting";
 import { buildConservativeSankey, type SankeyCategoryInput } from "./sankey";
 
 export interface ActivityRow {
@@ -33,11 +34,13 @@ export function summarizeActivity(rows: ActivityRow[]) {
     day[type === "income" ? "income" : "expenses"] += amount;
     daily.set(row.date, day);
     const id = row.categoryId ?? "uncategorized";
-    const key = `${type}:${id}`;
+    const key = row.categoryId && row.categoryName ? reportingCategoryKey(row.categoryName, type) : `${type}:${id}`;
     const category = grouped.get(key) ?? {
       id, name: row.categoryName ?? `Uncategorized ${type === "income" ? "income" : "expenses"}`,
       icon: row.icon, color: row.color, amount: 0, type,
     };
+    // Pick a stable real category ID; the drilldown expands its equivalent IDs.
+    if (id.localeCompare(category.id) < 0) category.id = id;
     category.amount += amount;
     grouped.set(key, category);
   }

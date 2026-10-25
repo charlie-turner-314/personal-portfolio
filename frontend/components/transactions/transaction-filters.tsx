@@ -1,5 +1,7 @@
 "use client";
 
+import { groupReportingCategories } from "@/lib/categories/reporting";
+
 import * as React from "react";
 import { type DateRange } from "react-day-picker";
 import {
@@ -427,17 +429,21 @@ export function TransactionFilters({
     return { from, to };
   }, [filters.from, filters.to]);
 
+  const groupedCategories = groupReportingCategories(categories);
+  const selectedCategoryIds = Array.from(new Set(filters.category.map(id =>
+    groupedCategories.find(group => group.categoryIds.includes(id))?.id ?? id)));
   const activeFilterCount =
-    filters.category.length +
+    selectedCategoryIds.length +
     filters.accountIds.length +
     filters.status.length +
     filters.subscription.length +
     filters.analytics.length +
     (filters.from ? 1 : 0) +
     (filters.minAmount || filters.maxAmount ? 1 : 0);
-  const categoryOptions: FilterOption[] = categories.map((category) => ({
+  const categoryOptions: FilterOption[] = groupedCategories.map((category) => ({
     id: category.id,
-    label: category.name,
+    label: groupedCategories.some(other => other.id !== category.id && other.name.trim().toLowerCase() === category.name.trim().toLowerCase())
+      ? `${category.name} (${category.categoryType})` : category.name,
     color: category.color ?? undefined,
   }));
 
@@ -466,7 +472,7 @@ export function TransactionFilters({
 
   const filterTags: { label: string; onRemove: () => void }[] = [];
 
-  filters.category.forEach((id) => {
+  selectedCategoryIds.forEach((id) => {
     if (id === "uncategorized") {
       filterTags.push({
         label: "Uncategorized",
@@ -478,13 +484,13 @@ export function TransactionFilters({
       });
       return;
     }
-    const category = categories.find((item) => item.id === id);
+    const category = groupedCategories.find((item) => item.id === id);
     if (!category) return;
     filterTags.push({
       label: category.name,
       onRemove: () =>
         onFiltersChange(
-          { category: filters.category.filter((value) => value !== id) },
+          { category: filters.category.filter((value) => value !== id && !category?.categoryIds.includes(value)) },
           { resetPage: true }
         ),
     });
@@ -668,7 +674,7 @@ export function TransactionFilters({
                   label="Category"
                   icon={<RiPriceTag3Line className="h-4 w-4" />}
                   options={categoryOptions}
-                  selectedIds={filters.category}
+                  selectedIds={selectedCategoryIds}
                   onSelectionChange={(ids) =>
                     onFiltersChange({ category: ids }, { resetPage: true })
                   }

@@ -37,6 +37,30 @@ request. The lab uses localhost:8108; its initial port conflict was corrected on
 in its encrypted configuration. Feature/develop merges, main promotion and Pi
 deployment remain to be recorded.
 
+PPF-59 delivery: feature PR #87 merged to develop `93f677c`; 40 tests passed on
+that checkout, source build/migrations passed and preserved 14 users/auth accounts,
+17 accounts, 3,277 transactions, 8 holdings and 8 broker trades. Authenticated smoke
+and the Chromium named-member regression passed again. Promotion PR #88 merged to
+main `af97a27`; ancestry synchronized through PR #89 (`832e7e0` develop). Required
+branch checks were restored and verified after each authorized Actions bypass.
+The Pi remains on v0.1.14 pending the final four-fix release.
+
+## PPF-60: equivalent household categories
+
+Starting develop: `832e7e0`. The regression fixture proved two expense Housing IDs
+produced separate categories/Sankey nodes; a same-name income category must remain
+distinct. The new test failed before implementation.
+
+Plan: group reporting by trimmed, case-insensitive name and type without merging
+stored categories. Retain a stable real ID for navigation and expand matching IDs
+in SQL beneath account permissions. Fetch reporting filter metadata live from own
+categories and permitted transactions; keep editing options separate. Normalize
+selected IDs to one filter choice/tag. Apply the same summary and filtering rules
+to the spending-category drilldown reached from dashboard category bars.
+
+Implementation and local tests are in progress; browser, upgrade rehearsal,
+feature merge, develop verification, main promotion and final Pi delivery remain.
+
 ## Remaining issues
 
 - PPF-57: prevent/reconcile joint Up duplicate account mappings without losing
