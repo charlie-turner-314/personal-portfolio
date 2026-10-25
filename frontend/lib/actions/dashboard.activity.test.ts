@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => {
   }) } };
 });
 vi.mock("@/lib/db", () => ({ db: mocks.db }));
-vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: async () => ({ user: { id: "user-1" } }) }));
+vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: async () => ({ user: { id: "user-1" }, householdPersonId: "linked-person" }) }));
 vi.mock("@/lib/data/cached", () => ({ getCachedUserAccounts: vi.fn() }));
 vi.mock("@/lib/api/investments", () => ({ getPortfolio: vi.fn() }));
 vi.mock("@/lib/actions/planned-expenses", () => ({ getUpcomingPlannedExpenses: vi.fn() }));
@@ -51,7 +51,7 @@ describe("dashboard activity queries", () => {
     expect(where.params).toEqual(expect.arrayContaining(["user-1", true, "account-1"]));
     expect(where.sql).not.toContain('"categories"');
     const amount = dialect.sqlToQuery((query.select as { amount: SQL }).amount);
-    expect(amount.sql).toContain("t2.user_id =");
+    expect(amount.sql).toContain("t2.account_id in");
     expect(amount.sql).toContain("t2.include_in_analytics = true");
     expect(amount.sql).toContain("account_ownership_allocations");
     expect(amount.sql).toContain('COALESCE("transactions"."functional_amount", CASE WHEN "transactions"."currency"');
@@ -59,6 +59,23 @@ describe("dashboard activity queries", () => {
     expect(amount.sql).toContain("t2.functional_amount");
     expect(amount.sql).toContain("IS NULL) > 0 THEN NULL");
     expect(amount.params).toContain("person-1");
+  });
+
+  it("attributes the default member scope to linked and own self identities", async () => {
+    mocks.results.push(fixture);
+    await getSpendingHistory(from, to);
+    const amount = new PgDialect().sqlToQuery((mocks.queries[0].select as { amount: SQL }).amount);
+    expect(amount.params).toContain("linked-person");
+    expect(amount.sql).toContain("account_ownership_allocations");
+    expect(amount.sql).toContain("kind = 'self'");
+  });
+
+  it("retains full amounts for explicitly selected whole-account scope", async () => {
+    mocks.results.push(fixture);
+    await getSpendingHistory(from, to, undefined, "all");
+    const amount = new PgDialect().sqlToQuery((mocks.queries[0].select as { amount: SQL }).amount);
+    expect(amount.sql).not.toContain("account_ownership_allocations");
+    expect(amount.params).not.toContain("linked-person");
   });
 
   it("returns consistent totals across each dashboard widget", async () => {

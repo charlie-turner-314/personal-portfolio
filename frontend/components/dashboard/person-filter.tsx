@@ -10,6 +10,7 @@ export function PersonFilter(props: {
   value: string[];
   onChange: (next: string[]) => void;
   single?: boolean;
+  personalDefault?: boolean;
 }) {
   const [people, setPeople] = useState<Person[]>([]);
 
@@ -19,7 +20,7 @@ export function PersonFilter(props: {
       .then((j) => setPeople(j.people ?? []));
   }, []);
 
-  if (people.length < 2) return null; // single-person households: hide.
+  if (people.length < 2 && !props.personalDefault) return null; // single-person households: hide.
 
   function toggle(id: string) {
     if (props.single) {
@@ -40,8 +41,14 @@ export function PersonFilter(props: {
         variant={props.value.length === 0 ? "default" : "outline"}
         onClick={() => props.onChange([])}
       >
-        All
+        {props.personalDefault ? "My share" : "All"}
       </Button>
+      {props.personalDefault && (
+        <Button size="sm" variant={props.value[0] === "all" ? "default" : "outline"}
+          onClick={() => props.onChange(["all"])}>
+          Whole accounts
+        </Button>
+      )}
       {people.map((p) => (
         <Button
           key={p.id}
