@@ -773,7 +773,7 @@ export function AssetManagement({
                 const equity = calculatePropertyEquity(property, initialAccounts, links);
                 const valuations = propertyValuationsByPropertyId[property.id] || [];
                 return (
-                <div key={property.id} className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
+                <div key={property.id} data-testid={`property-${property.id}`} className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded bg-muted">
                       <RiHome4Line className="h-5 w-5 text-muted-foreground" />

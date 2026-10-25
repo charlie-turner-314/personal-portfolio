@@ -43,7 +43,7 @@ test("property consent shares detail and edits, mortgage consent stays separate,
     }
     await member.goto("/assets");
     await expect(member.getByText("Joint Home Fixture", { exact: true })).toHaveCount(0);
-    expect((await member.request.get(`/assets/properties/${home}`)).status()).toBe(404);
+    expect((await member.request.get(`/api/owners/property/${home}`)).status()).toBe(404);
     await owner.goto("/settings?tab=household");
     await owner.getByRole("checkbox", { name: "Share property Joint Home Fixture with Property Member", exact: true }).check();
     await expect.poll(() => sql(`SELECT count(*) FROM household_property_shares WHERE property_id='${home}' AND member_user_id=${quote(memberId)}`)).toBe("1");
@@ -77,17 +77,22 @@ test("property consent shares detail and edits, mortgage consent stays separate,
     await expect(member.getByRole("dialog")).toHaveCount(0);
     expect(sql(`SELECT user_id || ':' || current_value::integer FROM properties WHERE id='${home}'`)).toBe(`${ownerId}:800000`);
     expect(sql(`SELECT count(*) FROM property_valuations WHERE property_id='${home}' AND user_id <> ${quote(ownerId)}`)).toBe("0");
+    expect(sql(`SELECT count(*) FROM property_valuations WHERE property_id='${home}' AND value=750000 AND source='original fixture'`)).toBe("1");
+    expect(sql(`SELECT count(*) FROM property_owners WHERE property_id='${home}' AND share=0.5`)).toBe("2");
+    expect(sql(`SELECT account_id FROM property_liability_links WHERE property_id='${home}'`)).toBe(mortgage);
     expect(Number(await memberTotal())).toBe(142000);
     await owner.reload();
     await owner.getByRole("checkbox", { name: "Share property Updated Joint Home with Property Member", exact: true }).uncheck();
-    await expect.poll(async () => (await member.request.get(`/assets/properties/${home}`)).status()).toBe(404);
+    await expect.poll(async () => (await member.request.get(`/api/owners/property/${home}`)).status()).toBe(404);
     expect((await member.request.get(`/api/accounts/${mortgage}`)).status()).toBe(200);
+    await member.goto(`/assets/properties/${home}`);
+    await expect(member.getByRole("heading", { name: "Updated Joint Home", exact: true })).toHaveCount(0);
     await owner.getByRole("checkbox", { name: "Share property Updated Joint Home with Property Member", exact: true }).check();
-    await expect.poll(async () => (await member.request.get(`/assets/properties/${home}`)).status()).toBe(200);
+    await expect.poll(async () => (await member.request.get(`/api/owners/property/${home}`)).status()).toBe(200);
     expect((await member.request.post("/api/household", { headers: { Origin: baseURL! }, data: { action: "leave" } })).ok()).toBeTruthy();
     expect(sql(`SELECT count(*) FROM household_property_shares WHERE member_user_id=${quote(memberId)}`)).toBe("0");
     sql(`INSERT INTO household_memberships(member_user_id,owner_user_id,person_id) VALUES (${quote(memberId)},${quote(ownerId)},'${linked}')`);
-    expect((await member.request.get(`/assets/properties/${home}`)).status()).toBe(404);
+    expect((await member.request.get(`/api/owners/property/${home}`)).status()).toBe(404);
     expect((await member.request.get(`/api/accounts/${mortgage}`)).status()).toBe(404);
   } finally { await memberContext.close(); }
 });
