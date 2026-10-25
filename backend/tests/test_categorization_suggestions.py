@@ -292,3 +292,26 @@ def test_interrupted_worker_leaves_an_incomplete_attempt(trial):
     assert attempt.inference_status == "generating"
     assert attempt.record["target"]["description"] == "Shop"
     assert service.trial_summary(db, uid)["requested"] == 0
+
+
+def test_panel_uses_native_transport_for_saved_ollama_without_cloud_credentials(trial, monkeypatch):
+    from app.models import UserAiSettings
+    from app.services.category_matcher import CategoryMatcher
+    db, uid, _, tx, _, _ = trial
+    db.add(UserAiSettings(user_id=uid, provider='ollama', model='qwen3:8b', automatic=False)); db.flush()
+    monkeypatch.delenv('CATEGORIZER_PROVIDER', raising=False)
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://private-local-model:11434')
+    monkeypatch.setenv('OLLAMA_API_KEY', '')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.setattr(service, 'CategoryMatcher', CategoryMatcher)
+    monkeypatch.setattr('app.services.ai_settings.ollama_client', lambda: pytest.fail('Panel must not initialize compatibility client'))
+    monkeypatch.setattr('app.services.ollama_categorizer.OllamaCategorizerClient.identity', lambda self, model: {'digest': 'saved-local-model'})
+    response = Mock()
+    response.json.return_value = {'done': True, 'done_reason': 'stop', 'message': {'content': '0|Food|90'}, 'prompt_eval_count': 10, 'eval_count': 5}
+    post = Mock(return_value=response)
+    monkeypatch.setattr('app.services.ollama_categorizer.httpx.post', post)
+    result = service.request_suggestion(db, uid, tx.id)
+    assert result['category_name'] == 'Food'
+    assert post.call_args.args[0] == 'http://private-local-model:11434/api/chat'
+    row = db.query(CategorizationSuggestion).filter_by(id=result['id']).one()
+    assert row.provider == 'ollama' and row.model == 'qwen3:8b'
