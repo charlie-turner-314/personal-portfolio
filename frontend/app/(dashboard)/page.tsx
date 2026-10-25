@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 import { formatCurrency } from "@/lib/utils";
 import { Header } from "@/components/layout/header";
 import { KpiSparkCard } from "@/components/charts/kpi-spark-card";
@@ -12,12 +12,41 @@ import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
 import { SearchButton } from "@/components/dashboard/search-button";
 import { UpcomingPlannedExpensesCard } from "@/components/dashboard/upcoming-planned-expenses-card";
 import {
+  getAssetsOverview,
   getDashboardData,
   getUserAccounts,
   type DashboardFilters as DashboardFiltersType,
 } from "@/lib/actions/dashboard";
 import { parseDashboardSearchParams } from "@/lib/dashboard/query-params";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DashboardSkeleton } from "@/components/dashboard/dashboard-skeleton";
+
+// React.cache deduplicates these two consumers within one render only. Financial
+// permissions are still evaluated live on every new navigation/request.
+const getDashboardAssets = cache(getAssetsOverview);
+
+function CardLoading({ label, height = "h-48" }: { label: string; height?: string }) {
+  return <div role="status" aria-label={label} className="min-w-0">
+    <span className="sr-only">{label}…</span><Skeleton className={`${height} w-full`} />
+  </div>;
+}
+
+async function LiabilitiesKpi({ accountIds, personId }: { accountIds?: string[]; personId?: string }) {
+  const data = await getDashboardAssets(accountIds, personId);
+  return <KpiSparkCard
+    title="Total Liabilities"
+    value={-Math.abs(data.totalLiabilities)}
+    currency={data.currency}
+    subtitle="Balance owed · included in net worth"
+    sparkData={[]}
+    valueTone="liability"
+    showSign
+  />;
+}
+
+async function AssetsOverviewSection({ accountIds, personId }: { accountIds?: string[]; personId?: string }) {
+  return <AssetsOverviewCard data={await getDashboardAssets(accountIds, personId)} />;
+}
 
 interface PageProps {
   searchParams: Promise<{
@@ -113,15 +142,9 @@ async function DashboardContent({
             showSign
           />
           </div>
-          <KpiSparkCard
-            title="Total Liabilities"
-            value={-Math.abs(data.assetsOverview.totalLiabilities)}
-            currency={data.assetsOverview.currency}
-            subtitle="Balance owed · included in net worth"
-            sparkData={[]}
-            valueTone="liability"
-            showSign
-          />
+          <Suspense fallback={<CardLoading label="Loading liabilities" height="h-32" />}>
+            <LiabilitiesKpi accountIds={accountIds} personId={personId === "all" ? undefined : personId} />
+          </Suspense>
           <div data-walkthrough="walkthrough-spending">
           <KpiSparkCard
             title={`${data.periodLabel.title} Spending`}
@@ -197,13 +220,19 @@ async function DashboardContent({
 
         {/* Row 5: Assets Overview */}
         <div className="grid min-w-0 grid-cols-1 gap-4">
-          <NetWorthTotals />
-          <AssetsOverviewCard data={data.assetsOverview} />
+          <Suspense fallback={<CardLoading label="Loading personal net worth" />}>
+            <NetWorthTotals />
+          </Suspense>
+          <Suspense fallback={<CardLoading label="Loading assets overview" height="h-64" />}>
+            <AssetsOverviewSection accountIds={accountIds} personId={personId === "all" ? undefined : personId} />
+          </Suspense>
         </div>
 
         {/* Row 6: Investments Summary */}
         <div className="grid min-w-0 grid-cols-1 gap-4">
-          <PortfolioSummaryCard />
+          <Suspense fallback={<CardLoading label="Loading investments" />}>
+            <PortfolioSummaryCard />
+          </Suspense>
         </div>
     </div>
   );
