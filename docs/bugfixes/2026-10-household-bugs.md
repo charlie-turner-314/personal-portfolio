@@ -145,3 +145,17 @@ DB boundary so in-flight writes cannot silently append to a hidden duplicate.
   consistency, privacy and revocation. Economic ownership alone grants no access.
 - PPF-60: group equivalent household categories by name/type for display and
   carry all underlying permitted category IDs through filters and drilldowns.
+
+PPF-57 validation: frontend 100 files/466 tests passed (one skipped), plus two new
+review/progress UI tests. TypeScript passes; changed-file lint has no errors.
+The disposable PostgreSQL suite applies migration 0052 twice and verifies original
+ownership/dates, daily balances, mortgage and transaction links, manual-conflict
+review, exact-provider union/deduplication, private archive isolation, independent
+credentials, repeated imports, retired-record write rejection, idempotency and
+mid-fetch revocation. Backend regression suite: 136 passed. Source runtime
+37023a4 built successfully, migrations ran twice and preservation checks passed.
+Chromium exercises the real settings/server-action/backend consolidation flow;
+all assertions passed. Authenticated demo dashboard/transactions/investments and
+fresh-account onboarding smoke passed. Manual sync now explicitly bypasses the
+recent-sync cooldown while retaining the in-progress guard, so newly connected
+shared sources can be used immediately.

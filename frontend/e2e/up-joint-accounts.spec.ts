@@ -29,7 +29,7 @@ test("old joint imports require review and consolidate to one shared balance wit
     INSERT INTO transactions(user_id,account_id,external_id,amount,currency,booked_at,description,transaction_type) VALUES ('${ownerId}','${canonical}','same',-10,'AUD','2026-10-01','Shared original','debit'),(${quote(memberId)},'${original}','same',-10,'AUD','2026-10-01','My manual edit','debit'),(${quote(memberId)},'${original}','unique',-20,'AUD','2026-10-02','Unique history','debit');
     COMMIT;`);
   await page.addInitScript(({ userId }) => localStorage.setItem("personal-portfolio.walkthrough.completed", JSON.stringify({ state: { completedPages: ["home", "settings", "assets"], userId }, version: 0 })), { userId: memberId });
-  await page.goto("/settings");
+  await page.goto("/settings?tab=bank-connections");
   await page.getByRole("button", { name: "Review joint Up accounts" }).click();
   await expect(page.getByText("Shared Up Fixture (AUD)", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Preview consolidation" }).click();

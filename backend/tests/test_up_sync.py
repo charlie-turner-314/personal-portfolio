@@ -13,7 +13,8 @@ def test_manual_retry_clears_old_error_before_task_is_published():
     db = MagicMock()
     db.query.return_value.filter.return_value.first.return_value = connection
 
-    def publish(connection_id):
+    def publish(connection_id, *, force=False):
+        assert force is True
         assert connection_id == "connection"
         assert connection.last_sync_error is None
         db.commit.assert_called_once()

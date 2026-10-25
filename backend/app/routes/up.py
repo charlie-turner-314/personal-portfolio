@@ -111,7 +111,7 @@ def sync_connection(
     # outcome while it waits in the queue. Commit before publishing the task.
     connection.last_sync_error = None
     db.commit()
-    task = sync_up_connection.delay(str(connection.id))
+    task = sync_up_connection.delay(str(connection.id), force=True)
     return {"message": "Up sync queued", "task_id": task.id}
 
 

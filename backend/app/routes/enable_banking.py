@@ -509,7 +509,7 @@ def trigger_sync(
     try:
         if connection.provider == "up":
             from tasks.up_tasks import sync_up_connection
-            task = sync_up_connection.delay(str(connection.id))
+            task = sync_up_connection.delay(str(connection.id), force=True)
         else:
             from tasks.enable_banking_tasks import sync_bank_connection
             task = sync_bank_connection.delay(str(connection.id))
