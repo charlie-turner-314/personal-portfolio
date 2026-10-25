@@ -700,6 +700,7 @@ export const transactions = pgTable(
     counterpartyIbanHash: varchar("counterparty_iban_hash", { length: 64 }),
     internalTransferId: uuid("internal_transfer_id"), // FK to internal_transfers.id (enforced at DB level in migration 0017)
     categoryId: uuid("category_id").references(() => categories.id), // User-overridden category
+    categoryVerifiedAt: timestamp("category_verified_at"),
     categoryConfidence: integer("category_confidence"), // Estimated score, 0–100; null means not scored
     categorySystemId: uuid("category_system_id").references(() => categories.id), // AI-assigned category (never updated by user)
     propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
@@ -2179,3 +2180,42 @@ export const householdNetWorthShares = pgTable("household_net_worth_shares", {
   index("household_net_worth_shares_member_idx").on(t.memberUserId),
   check("household_net_worth_shares_not_self", sql`${t.ownerUserId} <> ${t.memberUserId}`),
 ]);
+
+// On-demand categorisation trial; automatic assignments remain on transactions.
+export const categorizationSuggestions = pgTable("categorization_suggestions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  transactionId: uuid("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }),
+  targetFingerprint: varchar("target_fingerprint", { length: 64 }).notNull(),
+  configFingerprint: varchar("config_fingerprint", { length: 64 }),
+  inferenceStatus: varchar("inference_status", { length: 30 }).notNull().default("completed"),
+  record: jsonb("record").notNull().default({}),
+  shownAt: timestamp("shown_at"),
+  suggestedCategoryId: uuid("suggested_category_id").references(() => categories.id, { onDelete: "set null" }),
+  reviewedCategoryId: uuid("reviewed_category_id").references(() => categories.id, { onDelete: "set null" }),
+  provider: varchar("provider", { length: 40 }).notNull(),
+  model: varchar("model", { length: 100 }).notNull(),
+  contextMode: varchar("context_mode", { length: 30 }).notNull().default("examples_only"),
+  evidence: jsonb("evidence").notNull(),
+  modelScore: numeric("model_score", { precision: 5, scale: 2 }),
+  generationMs: integer("generation_ms").notNull(),
+  reviewDurationMs: integer("review_duration_ms"),
+  reviewOutcome: varchar("review_outcome", { length: 20 }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  reviewedAt: timestamp("reviewed_at"),
+}, table => [
+  index("categorization_suggestions_user_idx").on(table.userId),
+  index("categorization_suggestions_transaction_idx").on(table.transactionId),
+  check("categorization_suggestions_review_outcome_check", sql`${table.reviewOutcome} IS NULL OR ${table.reviewOutcome} IN ('accepted', 'corrected', 'dismissed')`),
+]);
+
+// Rows are created by the manual-category trigger, covering all application writers.
+export const categorizationFeedback = pgTable("categorization_feedback", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  transactionId: uuid("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }),
+  suggestionId: uuid("suggestion_id").references(() => categorizationSuggestions.id, { onDelete: "set null" }),
+  source: varchar("source", { length: 40 }).notNull(),
+  snapshot: jsonb("snapshot").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, table => [index("categorization_feedback_user_transaction_idx").on(table.userId, table.transactionId, table.createdAt)]);

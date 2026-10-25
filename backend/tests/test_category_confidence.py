@@ -17,6 +17,7 @@ def test_pipeline_saves_score_with_category(score, expected):
     )
     db.query.return_value.filter.return_value.all.return_value = [transaction]
     with patch("tasks.post_import_pipeline.CategoryMatcher") as matcher:
+        matcher.return_value.context_enabled = False
         matcher.return_value.match_categories_batch_llm.return_value = (
             {0: (SimpleNamespace(id="new"), score)}, 20, 0.01,
         )
@@ -38,6 +39,7 @@ def test_unavailable_ai_preserves_existing_score():
     )
     db.query.return_value.filter.return_value.all.return_value = [transaction]
     with patch("tasks.post_import_pipeline.CategoryMatcher") as matcher:
+        matcher.return_value.context_enabled = False
         matcher.return_value.match_categories_batch_llm.return_value = ({}, 0, 0)
         _batch_categorize_transactions(db, "user", ["transaction"])
     assert transaction.category_system_id == "old"

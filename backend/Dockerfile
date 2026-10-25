@@ -24,6 +24,8 @@ RUN pnpm exec esbuild emails/render-report.ts --bundle --platform=node --format=
 
 FROM python:3.11-slim-bookworm AS runner
 WORKDIR /app
+ARG APP_REVISION=unknown
+ENV APP_REVISION=$APP_REVISION
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PROCESS_TYPE=api CELERY_WORKER_CONCURRENCY=1
@@ -39,4 +41,4 @@ COPY --chown=app:app . .
 COPY --from=frontend-deps --chown=app:app /frontend/render-report.cjs /frontend/render-report.cjs
 USER app
 EXPOSE 8000
-CMD ["sh", "-c", "if [ \"$PROCESS_TYPE\" = \"worker\" ]; then exec celery -A celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-1}; elif [ \"$PROCESS_TYPE\" = \"beat\" ]; then exec celery -A celery_app beat --loglevel=info; elif [ \"$PROCESS_TYPE\" = \"mcp\" ]; then exec uvicorn mcp_server:app --host 0.0.0.0 --port ${PORT:-8001}; else exec gunicorn -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:${PORT:-8000} --workers 2 --timeout 120; fi"]
+CMD ["sh", "-c", "if [ \"$PROCESS_TYPE\" = \"worker\" ]; then exec celery -A celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-1}; elif [ \"$PROCESS_TYPE\" = \"beat\" ]; then exec celery -A celery_app beat --loglevel=info; elif [ \"$PROCESS_TYPE\" = \"mcp\" ]; then exec uvicorn mcp_server:app --host 0.0.0.0 --port ${PORT:-8001}; else exec gunicorn -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:${PORT:-8000} --workers 2 --timeout 240; fi"]

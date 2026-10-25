@@ -121,7 +121,7 @@ def delete_category(
     db.query(Transaction).filter(
         Transaction.user_id == user_id,
         Transaction.category_id == category_id
-    ).update({"category_id": None}, synchronize_session=False)
+    ).update({"category_id": None, "category_verified_at": None}, synchronize_session=False)
     
     # Update transactions where category_system_id matches
     db.query(Transaction).filter(
@@ -226,7 +226,8 @@ def categorize_transaction(
             merchant=request.merchant,
             amount=request.amount,
             transaction_type=request.transaction_type,
-            use_llm=request.use_llm
+            use_llm=request.use_llm,
+            context=request.model_dump(include={"id", "account_id", "booked_at", "currency", "creditor", "debtor"}, exclude_none=True),
         )
         
         return CategorizeTransactionResponse(
@@ -349,6 +350,7 @@ def categorize_transactions_batch(
                     txn = request.transactions[idx]
                     logger.info(f"[CATEGORIZE] Transaction {idx}: transaction_type='{txn.transaction_type}', amount={txn.amount}, description='{txn.description[:50]}...'")
                     llm_batch.append({
+                        **txn.model_dump(exclude_none=True),
                         "index": idx,
                         "description": txn.description,
                         "merchant": txn.merchant,

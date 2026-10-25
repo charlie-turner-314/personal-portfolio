@@ -217,6 +217,12 @@ class TransactionInput(BaseModel):
     merchant: Optional[str] = None
     amount: Decimal
     transaction_type: Optional[str] = None  # "debit" or "credit" - helps determine if expense or income
+    id: Optional[UUID] = None
+    account_id: Optional[UUID] = None
+    booked_at: Optional[datetime] = None
+    currency: Optional[str] = None
+    creditor: Optional[str] = None
+    debtor: Optional[str] = None
 
 
 class TransactionResult(BaseModel):
@@ -264,7 +270,7 @@ class BatchCategorizationResponse(BaseModel):
 
 
 # Production categorization schemas
-class CategorizeTransactionRequest(BaseModel):
+class CategorizeTransactionRequest(TransactionInput):
     """Request to categorize a single transaction."""
     description: Optional[str] = None
     merchant: Optional[str] = None
