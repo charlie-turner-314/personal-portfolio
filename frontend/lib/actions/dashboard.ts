@@ -208,8 +208,18 @@ async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: s
     categoryType: categories.categoryType,
     icon: categories.icon,
     color: categories.color,
+    // A group containing an explicit allocation is reported per leg, so a
+    // linked ordinary expense is neither swallowed nor counted twice.
     amount: sql<string | null>`CASE
       WHEN COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind}) IN ('investment', 'loan_principal')
+        OR EXISTS (
+          SELECT 1 FROM ${transactionLinks} allocation_link
+          JOIN ${transactions} allocation_peer ON allocation_peer.id = allocation_link.transaction_id
+          LEFT JOIN ${categories} allocation_category ON allocation_category.id = COALESCE(allocation_peer.category_id, allocation_peer.category_system_id)
+          WHERE allocation_link.group_id = ${transactionLinks.groupId}
+            AND ${accountAccess(sql.raw("allocation_peer.account_id"), session.user.id)}
+            AND COALESCE(allocation_peer.cash_flow_kind, allocation_category.cash_flow_kind) IN ('investment', 'loan_principal')
+        )
         THEN ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
       WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
         (

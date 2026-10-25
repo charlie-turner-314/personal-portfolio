@@ -62,7 +62,8 @@ transaction drilldowns retain the actual transaction values.
 Regression coverage includes unequal contributions, hidden primary transactions,
 own and named identities, whole-account views, account/date filters, a payment in
 a later window than its contribution, dated 25/75 ownership, FX conversion,
-partial principal, returns, missing conversion, and reimbursements.
+partial principal, returns, missing conversion, reimbursements, and mixed-purpose
+linked groups where either the primary or a secondary is an allocation.
 
 An isolated source-build release lab applies migrations twice and compares
 original core-table row hashes. Chromium seeds only fresh synthetic users and
@@ -73,7 +74,7 @@ The original working directory's existing asset-reporting edits are untouched.
 No Pi deployment or live transaction recategorization is part of implementation.
 
 Verification completed on the source-build lab: 484 frontend tests passed;
-five PostgreSQL integration cases passed; Chromium contribution editing and
+seven PostgreSQL integration cases passed; Chromium contribution editing and
 existing named-member salary/filter journeys passed. TypeScript and targeted
 ESLint checks passed (the existing category editor effect/entity warnings remain).
 Both migration runs preserved existing core-table hashes. Visual inspection

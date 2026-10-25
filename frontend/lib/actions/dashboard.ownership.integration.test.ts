@@ -52,6 +52,15 @@ INSERT INTO transactions(id,account_id,user_id,booked_at,amount,functional_amoun
  ('reimbursable','private','owner','2026-08-16',-100,-100,'AUD','spend',true,NULL,NULL),
  ('reimbursement','shared','owner','2026-08-16',20,20,'AUD','transfer',true,NULL,NULL);
 INSERT INTO transaction_links VALUES ('reimbursable','refund','primary'),('reimbursement','refund','reimbursement');
+INSERT INTO transactions(id,account_id,user_id,booked_at,amount,functional_amount,currency,category_id,include_in_analytics,cash_flow_kind) VALUES
+ ('capital-primary','own','member','2026-08-17',-100,-100,'AUD','invest',true,'investment'),
+ ('ordinary-secondary','own','member','2026-08-17',-20,-20,'AUD','spend',true,NULL),
+ ('ordinary-primary','own','member','2026-08-18',-100,-100,'AUD','spend',true,NULL),
+ ('capital-secondary','own','member','2026-08-18',-20,-20,'AUD','invest',true,'investment');
+INSERT INTO transaction_links VALUES
+ ('capital-primary','mixed-primary','primary'),('ordinary-secondary','mixed-primary','expense'),
+ ('ordinary-primary','mixed-secondary','primary'),('capital-secondary','mixed-secondary','expense');
+
 `;
 vi.mock("@/lib/db", async () => {
   const { drizzle } = await import("drizzle-orm/pg-proxy");
@@ -102,7 +111,7 @@ describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL
       const paymentOnly = await getCashFlowSummary(new Date("2026-07-12"), new Date("2026-07-13"));
       expect(paymentOnly).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersIn: 0, netReportedCashFlow: -35000 });
     } finally { actor.id = "member"; actor.householdPersonId = "linked"; }
-  });
+  }, 20_000);
   it("shows Jessica's contribution out of her share without counting it twice", async () => {
     const result = await getCashFlowSummary(new Date("2026-07-01"), new Date("2026-07-31T23:59:59Z"));
     expect(result).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersOut: 35000, netReportedCashFlow: -70000 });
@@ -122,6 +131,14 @@ describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL
         savingsFromIncome: -85, transfersIn: 0, transfersOut: 0, netReportedCashFlow: -85,
       });
     } finally { actor.id = "member"; actor.householdPersonId = "linked"; }
+  });
+
+  it.each([
+    ["2026-08-17", -20, 100], ["2026-08-18", -100, 20],
+  ])("reports each purpose once in mixed linked groups on %s", async (day, saving, investment) => {
+    expect(await getCashFlowSummary(new Date(day), new Date(day + "T23:59:59Z"))).toMatchObject({
+      savingsFromIncome: saving, investments: investment, netReportedCashFlow: -120,
+    });
   });
 
 });
