@@ -89,7 +89,7 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
     const fixture = `
       BEGIN;
       CREATE TEMP TABLE accounts(id text, user_id text, is_active boolean, account_type text, functional_balance numeric);
-      CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text);
+      CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
       CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
       CREATE TEMP TABLE account_balances(account_id text, date timestamp, balance_in_functional_currency numeric);
       CREATE TEMP TABLE people(id text, user_id text, kind text);

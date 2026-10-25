@@ -7,6 +7,8 @@ import { ownershipShareSql, type OwnershipScope } from "./ownership-sql";
 
 const container = process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER;
 const fixture = `
+CREATE TEMP TABLE household_memberships(person_id text, member_user_id text);
+INSERT INTO household_memberships VALUES ('partner','member-login');
 CREATE TEMP TABLE accounts (id text, user_id text);
 CREATE TEMP TABLE people (id text, user_id text, kind text);
 CREATE TEMP TABLE account_owners (account_id text, person_id text, share numeric);
@@ -47,6 +49,7 @@ describe.skipIf(!container)("dated ownership SQL against isolated PostgreSQL", (
     expect(share(viewer, "dated", "2026-07-01")).toBe(1);
     expect(share(viewer, "legacy", "2026-01-01")).toBe(0.5);
     expect(share(viewer, "personal", "2026-01-01")).toBe(1);
+    expect(share("partner", "personal", "2026-01-01")).toBe(1);
     expect(share(viewer, "default", "2026-01-01")).toBe(0);
   });
   it("keeps household scope at full value", () => {

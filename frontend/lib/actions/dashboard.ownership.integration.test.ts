@@ -6,7 +6,7 @@ const fixture = `
 BEGIN;
 CREATE TEMP TABLE users(id text, functional_currency text);
 CREATE TEMP TABLE accounts(id text, user_id text, is_active boolean);
-CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text);
+CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
 CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
 CREATE TEMP TABLE people(id text, user_id text, kind text);
 CREATE TEMP TABLE account_owners(account_id text, person_id text, share numeric);
@@ -18,7 +18,7 @@ CREATE TEMP TABLE transactions(id text, account_id text, user_id text, booked_at
  include_in_analytics boolean, internal_transfer_id text);
 INSERT INTO users VALUES ('member','AUD');
 INSERT INTO accounts VALUES ('shared','owner',true),('savings','owner',true),('own','member',true),('private','owner',true);
-INSERT INTO household_memberships VALUES ('member','owner');
+INSERT INTO household_memberships VALUES ('member','owner','linked');
 INSERT INTO household_account_shares VALUES ('shared','member','owner'),('savings','member','owner');
 INSERT INTO people VALUES ('linked','owner','member'),('owner-self','owner','self'),('own-self','member','self');
 INSERT INTO account_ownership_allocations VALUES ('shared','linked','2026-01-01',0.5),('shared','owner-self','2026-01-01',0.5);
@@ -56,6 +56,8 @@ describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL
   it("reproduces the reported whole-account gap and fixes the default without hiding investments", async () => {
     const whole = await getSankeyData(start, end, undefined, "all");
     const personal = await getSankeyData(start, end);
+    const selectedMember = await getSankeyData(start, end, undefined, "linked");
+    expect(selectedMember).toEqual(personal);
     const total = (data: typeof whole, name: string) => data.nodes.find(node => node.name === name)?.total;
     expect(total(whole, "Funding Gap")).toBeCloseTo(5244.92, 2);
     expect(total(personal, "Funding Gap")).toBeCloseTo(1974.02, 2);

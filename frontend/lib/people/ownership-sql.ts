@@ -11,7 +11,10 @@ export function ownershipShareSql(
 ): SQL<unknown> {
   if (!personId) return sql`1`;
   const identities = typeof personId === "string"
-    ? sql`SELECT identity.id FROM ${people} identity WHERE identity.id = ${personId}`
+    ? sql`SELECT identity.id FROM ${people} identity WHERE identity.id = ${personId}
+        OR (identity.kind = 'self' AND identity.user_id IN (
+          SELECT member_user_id FROM household_memberships WHERE person_id = ${personId}
+        ))`
     : sql`SELECT identity.id FROM ${people} identity
         WHERE (identity.user_id = ${personId.userId} AND identity.kind = 'self')
           OR identity.id = ${personId.householdPersonId ?? null}`;

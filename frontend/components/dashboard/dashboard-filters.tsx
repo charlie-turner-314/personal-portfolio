@@ -39,6 +39,7 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
+  const [isPending, startTransition] = React.useTransition();
   const [accountsOpen, setAccountsOpen] = React.useState(false);
 
   useFilterPersistence();
@@ -84,8 +85,10 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
   const pushParams = React.useCallback(
     (nextParams: URLSearchParams) => {
       const queryString = nextParams.toString();
-      router.push(queryString ? `${pathname}?${queryString}` : pathname, {
-        scroll: false,
+      startTransition(() => {
+        router.push(queryString ? `${pathname}?${queryString}` : pathname, {
+          scroll: false,
+        });
       });
     },
     [pathname, router]
@@ -155,7 +158,8 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2" aria-busy={isPending}>
+      {isPending && <span role="status" className="text-sm text-muted-foreground animate-pulse">Updating dashboard…</span>}
       <PersonFilter
         value={selectedPersonId ? [selectedPersonId] : []}
         onChange={updateSelectedPeople}

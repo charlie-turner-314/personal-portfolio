@@ -21,7 +21,11 @@ at the transaction date and retain legacy equal shares. Keep explicit person
 selection and an explicit Whole accounts scope. Linked group members use account
 permission checks, consistent with the primary transaction, so a shared owner's
 transaction is not silently discarded merely because another member views it.
-Net-worth asset detail retains its separately labelled visible-finances scope.
+Named household-person selection also resolves that person's linked login self
+identity, retaining personal salary alongside their share of joint activity.
+The PostgreSQL fixture verifies named selection equals default member selection.
+Dashboard filter navigation now displays Updating dashboard… while the server
+transition is pending. Net-worth asset detail retains its separately labelled visible-finances scope.
 
 Local verification so far: six focused test files, 22 tests passed, including actual
 PostgreSQL execution; TypeScript and changed-file ESLint passed. The new query test
