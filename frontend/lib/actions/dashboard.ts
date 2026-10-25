@@ -6,7 +6,7 @@ import { accounts, transactions, categories, users, properties, vehicles, transa
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { getCachedUserAccounts } from "@/lib/data/cached";
 import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
-import { summarizeActivity, activitySankey } from "@/lib/dashboard/activity";
+import { summarizeActivity, activitySankey, cashFlowMetrics } from "@/lib/dashboard/activity";
 import {
   buildIncomeExpenseBuckets,
   resolveIncomeExpenseGrouping,
@@ -190,12 +190,27 @@ async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: s
   const linkedAmountInCurrency = sql`COALESCE(t2.functional_amount, CASE WHEN t2.currency = ${userCurrency} THEN t2.amount END)`;
   const rows = await db.select({
     date: sql<string>`DATE(${transactions.bookedAt})`,
+    cashFlowKind: sql<string | null>`COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind})`,
+    allocationFraction: sql<string | null>`CASE WHEN ${transactions.cashFlowAllocationAmount} IS NULL THEN 1
+      ELSE ${transactions.cashFlowAllocationAmount} / NULLIF(ABS(${transactions.amount}), 0) END`,
+    transferGroupId: sql<string | null>`CASE WHEN NOT EXISTS (
+      SELECT 1 FROM ${transactionLinks} transfer_peer
+      JOIN ${transactions} peer ON peer.id = transfer_peer.transaction_id
+      LEFT JOIN ${categories} peer_category ON peer_category.id = COALESCE(peer.category_id, peer.category_system_id)
+      WHERE transfer_peer.group_id = ${transactionLinks.groupId}
+        AND ${accountAccess(sql.raw("peer.account_id"), session.user.id)}
+        AND (peer_category.category_type IS DISTINCT FROM 'transfer'
+          OR COALESCE(peer.cash_flow_kind, peer_category.cash_flow_kind) IS NOT NULL)
+    ) THEN ${transactionLinks.groupId} END`,
+    transferAmount: sql<string | null>`${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}`,
     categoryId: categories.id,
     categoryName: categories.name,
     categoryType: categories.categoryType,
     icon: categories.icon,
     color: categories.color,
     amount: sql<string | null>`CASE
+      WHEN COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind}) IN ('investment', 'loan_principal')
+        THEN ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
       WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
         (
           SELECT CASE WHEN COUNT(*) FILTER (WHERE ${linkedAmountInCurrency} IS NULL) > 0 THEN NULL
@@ -408,6 +423,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   if (!session?.user?.id) {
     return {
+      cashFlow: { savingsFromIncome: 0, investments: 0, loanPrincipal: 0, transfersIn: 0, transfersOut: 0, netReportedCashFlow: 0 },
       activityMissingConversions: 0,
       balance: { total: 0, currency: "EUR" },
       balanceHistory: [],
@@ -491,6 +507,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   // Calculate savings rate (income - expenses = potential savings)
   const savingsAmount = periodIncome.total - periodSpending.total;
+  const cashFlow = cashFlowMetrics(activity);
   const savingsPercentage = periodIncome.total > 0
     ? (savingsAmount / periodIncome.total) * 100
     : 0;
@@ -589,6 +606,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     : getHorizonPeriodLabel(horizonDays);
 
   return {
+    cashFlow,
     activityMissingConversions: activity.missingConversions,
     balance,
     balanceHistory,
@@ -613,4 +631,8 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
       label: `${monthNames[endDate.getMonth()]} ${endDate.getFullYear()}`,
     },
   };
+}
+
+export async function getCashFlowSummary(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
+  return cashFlowMetrics(await getActivitySummary(startDate, endDate, accountIds, personId));
 }

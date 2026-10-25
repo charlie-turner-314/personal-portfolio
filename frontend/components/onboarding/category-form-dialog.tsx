@@ -37,6 +37,7 @@ export function CategoryFormDialog({
   const isEditing = !!category;
   const isSystem = !!category?.isSystem;
 
+  const [cashFlowKind, setCashFlowKind] = useState<"investment" | "loan_principal" | null>(null);
   const [name, setName] = useState("");
   const [color, setColor] = useState<string>(CATEGORY_COLORS[0].value);
   const [description, setDescription] = useState("");
@@ -46,12 +47,14 @@ export function CategoryFormDialog({
   useEffect(() => {
     if (open) {
       if (category) {
+        setCashFlowKind(category.cashFlowKind ?? null);
         setName(category.name);
         setColor(category.color);
         setDescription(category.description || "");
         setCategorizationInstructions(category.categorizationInstructions || "");
       } else {
         // New category - reset form with default color based on existing count
+        setCashFlowKind(null);
         setName("");
         setColor(CATEGORY_COLORS[existingCount % CATEGORY_COLORS.length].value);
         setDescription("");
@@ -65,6 +68,7 @@ export function CategoryFormDialog({
 
     const updatedCategory: CategoryInput = {
       name: isSystem && category ? category.name : name.trim(),
+      cashFlowKind,
       categoryType,
       color: isSystem && category ? category.color : color,
       icon: category?.icon || "RiFolderLine",
@@ -104,6 +108,17 @@ export function CategoryFormDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
+          {categoryType === "expense" && !isSystem && <div className="space-y-2">
+            <Label htmlFor="category-cash-flow">Default cash-flow purpose</Label>
+            <select id="category-cash-flow" value={cashFlowKind ?? "activity"}
+              onChange={e => setCashFlowKind(e.target.value === "activity" ? null : e.target.value as "investment" | "loan_principal")}
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm">
+              <option value="activity">Everyday spending</option>
+              <option value="investment">Investment allocation</option>
+              <option value="loan_principal">Loan principal</option>
+            </select>
+            <p className="text-xs text-muted-foreground">Allocations remain cash movements but do not reduce saving from income. Individual transactions can override this.</p>
+          </div>}
           <div className="space-y-2">
             <Label htmlFor="name">Name{isSystem ? "" : " *"}</Label>
             <div className="flex items-center gap-3">

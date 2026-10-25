@@ -180,6 +180,11 @@ export async function saveOnboardingCategories(
     return { success: false, error: "Not authenticated" };
   }
 
+  if (categoryInputs.some(cat => cat.cashFlowKind != null &&
+    (!["investment", "loan_principal"].includes(cat.cashFlowKind) || cat.categoryType !== "expense"))) {
+    return { success: false, error: "Invalid category cash-flow purpose" };
+  }
+
   try {
     // Delete existing categories
     await db.delete(categories).where(eq(categories.userId, userId));
@@ -188,6 +193,7 @@ export async function saveOnboardingCategories(
     const newCategories: NewCategory[] = categoryInputs.map((cat) => ({
       userId,
       name: cat.name,
+      cashFlowKind: cat.cashFlowKind ?? null,
       categoryType: cat.categoryType,
       color: cat.color,
       icon: cat.icon,

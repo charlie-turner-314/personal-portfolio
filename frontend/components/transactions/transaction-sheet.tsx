@@ -1,5 +1,6 @@
 "use client";
 
+import { CashFlowPurpose } from "./cash-flow-purpose";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -408,6 +409,15 @@ export function TransactionSheet({
                 </SelectContent>
               </Select>
             </div>
+          )}
+
+          {!isBalancingTransfer && !transaction.internalTransferId && (
+            <CashFlowPurpose
+              key={`${transaction.id}:${transaction.cashFlowKind}:${transaction.cashFlowAllocationAmount}`}
+              transactionId={transaction.id} amount={transaction.amount} currency={transaction.currency || "EUR"}
+              kind={transaction.cashFlowKind} allocationAmount={transaction.cashFlowAllocationAmount}
+              onSaved={(cashFlowKind, cashFlowAllocationAmount) => onUpdateTransaction?.(transaction.id, { cashFlowKind, cashFlowAllocationAmount })}
+            />
           )}
 
           {/* Linked Transactions Section */}

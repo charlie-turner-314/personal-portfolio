@@ -111,6 +111,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
       if (editingCategory) {
         // Update existing category
         const updateData: CategoryUpdateInput = {
+          cashFlowKind: categoryInput.cashFlowKind,
           name: categoryInput.name,
           color: categoryInput.color,
           icon: categoryInput.icon,
@@ -125,6 +126,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
             c.id === editingCategory.id
               ? {
                   ...c,
+                  cashFlowKind: categoryInput.cashFlowKind ?? null,
                   name: categoryInput.name,
                   color: categoryInput.color,
                   icon: categoryInput.icon,
@@ -141,6 +143,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
       } else {
         // Create new category
         const createData: CategoryCreateInput = {
+          cashFlowKind: categoryInput.cashFlowKind,
           name: categoryInput.name,
           categoryType: categoryInput.categoryType,
           color: categoryInput.color,
@@ -157,6 +160,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
             userId: "", // Will be filled by server
             name: categoryInput.name,
             parentId: null,
+            cashFlowKind: categoryInput.cashFlowKind ?? null,
             categoryType: categoryInput.categoryType,
             color: categoryInput.color,
             icon: categoryInput.icon,
@@ -184,6 +188,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
   const categoryToInput = (category: Category | null): CategoryInput | null => {
     if (!category) return null;
     return {
+      cashFlowKind: category.cashFlowKind as "investment" | "loan_principal" | null,
       name: category.name,
       categoryType: category.categoryType as "expense" | "income" | "transfer",
       color: category.color || "#6b7280",

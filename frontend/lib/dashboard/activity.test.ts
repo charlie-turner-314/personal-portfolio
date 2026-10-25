@@ -24,7 +24,7 @@ describe("dashboard activity", () => {
     expect(sankey.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Uncategorized income", total: 1000 }),
       expect.objectContaining({ name: "Uncategorized expenses", total: 200 }),
-      expect.objectContaining({ name: "Savings", total: 750 }),
+      expect.objectContaining({ name: "Cash retained", total: 750 }),
     ]));
   });
 
@@ -50,7 +50,7 @@ describe("dashboard activity", () => {
   });
 
   it.each([
-    [250, "Savings"], [-125, "Funding Gap"],
+    [250, "Cash retained"], [-125, "Cash required"],
   ])("renders one-sided uncategorized activity %s", (amount, balancingName) => {
     const chart = activitySankey(summarizeActivity([row(amount)]));
     expect(chart.links).toHaveLength(1);
@@ -80,7 +80,7 @@ describe("dashboard activity", () => {
     expect(activitySankey(result).nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Food", total: 70 }),
       expect.objectContaining({ name: "Salary", total: 800 }),
-      expect.objectContaining({ name: "Savings", total: 730 }),
+      expect.objectContaining({ name: "Cash retained", total: 730 }),
     ]));
   });
 
@@ -95,7 +95,7 @@ describe("dashboard activity", () => {
     expect(chart.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Refunds: Food", total: 80, categoryType: "income" }),
       expect.objectContaining({ name: "Income reversals: Salary", total: 30, categoryType: "expense" }),
-      expect.objectContaining({ name: "Savings", total: 50 }),
+      expect.objectContaining({ name: "Cash retained", total: 50 }),
     ]));
     expect(chart.links.every((link) => link.value > 0)).toBe(true);
   });
@@ -109,5 +109,73 @@ describe("dashboard activity", () => {
   it("returns a true empty state when no eligible activity remains", () => {
     expect(activitySankey(summarizeActivity([row(0), row(Number.NaN)])))
       .toEqual({ nodes: [], links: [] });
+  });
+});
+
+describe("cash flow separates consumption, allocations and ownership transfers", () => {
+  it("does not treat a partner's contribution as earned income or mortgage principal as consumption", () => {
+    const result = summarizeActivity([
+      row(6000, { categoryType: "income" }),
+      row(-2000, { categoryType: "expense" }),
+      row(0, { categoryType: "transfer", transferGroupId: "partner", transferAmount: 35000 }),
+      row(-35000, { categoryType: "expense", cashFlowKind: "loan_principal" }),
+    ]);
+    expect(result).toMatchObject({ income: 6000, expenses: 2000, loanPrincipal: 35000, transfersIn: 35000 });
+    const chart = activitySankey(result);
+    expect(chart.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Loan principal", total: 35000 }),
+      expect.objectContaining({ name: "Transfers into your share", total: 35000 }),
+      expect.objectContaining({ name: "Cash retained", total: 4000 }),
+    ]));
+    expect(chart.nodes.some(n => n.name === "Cash required")).toBe(false);
+  });
+
+  it("handles arbitrary contribution amounts and ownership rates, independently of later payments", () => {
+    const result = summarizeActivity([
+      row(0, { categoryType: "transfer", transferGroupId: "topup", transferAmount: -1200 }),
+      row(0, { categoryType: "transfer", transferGroupId: "topup", transferAmount: 300 }),
+      row(-150, { categoryType: "expense", cashFlowKind: "investment" }),
+    ]);
+    expect(result).toMatchObject({ income: 0, expenses: 0, investments: 150, transfersOut: 900, transfersIn: 0 });
+  });
+
+  it("retains interest as spending when only part of a repayment is principal", () => {
+    const result = summarizeActivity([row(-1000, { categoryType: "expense", cashFlowKind: "loan_principal", allocationFraction: "0.6" })]);
+    expect(result).toMatchObject({ expenses: 400, loanPrincipal: 600 });
+    expect(result.dailyData[0].expenses).toBe(400);
+  });
+
+  it("shows investment withdrawals separately from income and offsets allocations", () => {
+    const result = summarizeActivity([
+      row(-1000, { cashFlowKind: "investment" }),
+      row(1500, { cashFlowKind: "investment" }),
+    ]);
+    expect(result).toMatchObject({ investments: -500, income: 0, expenses: 0 });
+    expect(activitySankey(result).nodes).toContainEqual(expect.objectContaining({ name: "Returned: Investments", total: 500 }));
+  });
+
+  it("cancels equal-share transfer legs and does not count ordinary reimbursements as contributions", () => {
+    const result = summarizeActivity([
+      row(0, { categoryType: "transfer", transferGroupId: "same", transferAmount: -100 }),
+      row(0, { categoryType: "transfer", transferGroupId: "same", transferAmount: 100 }),
+      row(-80, { categoryType: "expense", transferGroupId: "refund", transferAmount: -100 }),
+    ]);
+    expect(result).toMatchObject({ expenses: 80, transfersIn: 0, transfersOut: 0 });
+  });
+
+  it("keeps explicit everyday overrides and unclassified housing in consumption", () => {
+    const result = summarizeActivity([
+      row(-1000, { categoryName: "Housing", categoryType: "expense" }),
+      row(-200, { categoryName: "Investment Transfer", categoryType: "expense", cashFlowKind: "activity" }),
+    ]);
+    expect(result).toMatchObject({ expenses: 1200, investments: 0, loanPrincipal: 0 });
+  });
+
+  it("flags missing FX conversion on permitted transfer legs", () => {
+    const result = summarizeActivity([
+      row(0, { categoryType: "transfer", transferGroupId: "fx", transferAmount: 100 }),
+      row(0, { categoryType: "transfer", transferGroupId: "fx", transferAmount: null }),
+    ]);
+    expect(result).toMatchObject({ missingConversions: 1, transfersIn: 0, transfersOut: 0 });
   });
 });

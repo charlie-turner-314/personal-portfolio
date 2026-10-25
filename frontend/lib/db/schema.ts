@@ -387,6 +387,7 @@ export const categories = pgTable(
       .notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     parentId: uuid("parent_id"),
+    cashFlowKind: varchar("cash_flow_kind", { length: 20 }), // default allocation treatment, independent of category type
     categoryType: varchar("category_type", { length: 20 }).default("expense"), // expense, income, transfer
     color: varchar("color", { length: 7 }), // Hex color
     icon: varchar("icon", { length: 50 }), // Remix icon name
@@ -397,6 +398,7 @@ export const categories = pgTable(
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => [
+    check("categories_cash_flow_kind_check", sql`${table.cashFlowKind} IS NULL OR ${table.cashFlowKind} IN ('investment','loan_principal')`),
     index("idx_categories_user").on(table.userId),
     index("idx_categories_user_type").on(table.userId, table.categoryType),
     unique("categories_user_name_parent").on(table.userId, table.name, table.parentId),
@@ -710,12 +712,18 @@ export const transactions = pgTable(
     categorizationInstructions: text("categorization_instructions"), // User instructions for AI categorization
     enrichmentData: jsonb("enrichment_data"), // Enriched merchant info, logos, etc.
     recurringTransactionId: uuid("recurring_transaction_id").references(() => recurringTransactions.id, { onDelete: "set null" }), // Link to recurring transaction label
+    cashFlowKind: varchar("cash_flow_kind", { length: 20 }), // null = category default; activity, investment, loan_principal
+    cashFlowAllocationAmount: decimal("cash_flow_allocation_amount", { precision: 15, scale: 2 }), // native currency; null = full amount
     includeInAnalytics: boolean("include_in_analytics").default(true).notNull(), // Whether to include in analytics (charts, KPIs, etc.)
     csvImportId: uuid("csv_import_id").references(() => csvImports.id, { onDelete: "set null" }), // Source CSV import (null for manual/bank-synced transactions)
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },
   (table) => [
+    check("transactions_cash_flow_kind_check", sql`${table.cashFlowKind} IS NULL OR ${table.cashFlowKind} IN ('activity','investment','loan_principal')`),
+    check("transactions_cash_flow_allocation_check", sql`${table.cashFlowAllocationAmount} IS NULL OR
+      (${table.cashFlowKind} IS NOT NULL AND ${table.cashFlowKind} IN ('investment','loan_principal') AND
+       ${table.cashFlowAllocationAmount} > 0 AND ${table.cashFlowAllocationAmount} <= ABS(${table.amount}))`),
     index("idx_transactions_user").on(table.userId),
     index("idx_transactions_account").on(table.accountId),
     index("idx_transactions_booked_at").on(table.bookedAt),

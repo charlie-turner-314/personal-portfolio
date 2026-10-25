@@ -379,7 +379,7 @@ export function SankeyFlowChart({
             <span className="ml-2 font-mono">
               {formatCurrency(selectedTotal, currency)}
             </span>
-            <span className="ml-2">Click again to view transactions</span>
+            <span className="ml-2">{selectedNode.categoryId ? "Click again to view transactions" : "Reported cash movement"}</span>
           </p>
         )}
       </CardHeader>

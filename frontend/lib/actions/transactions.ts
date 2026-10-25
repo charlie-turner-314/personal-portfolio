@@ -1,5 +1,6 @@
 "use server";
 
+import { validateCashFlowPurpose, type CashFlowKind } from "@/lib/dashboard/cash-flow";
 import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
@@ -448,6 +449,8 @@ export interface TransactionWithRelations {
   bookedAt: Date;
   pending: boolean | null;
   transactionType: string | null;
+  cashFlowKind?: string | null;
+  cashFlowAllocationAmount?: string | null;
   includeInAnalytics: boolean;
 }
 
@@ -554,6 +557,8 @@ interface TransactionRowWithRelations {
   bookedAt: Date;
   pending: boolean | null;
   transactionType: string | null;
+  cashFlowKind?: string | null;
+  cashFlowAllocationAmount?: string | null;
   includeInAnalytics: boolean;
   account: {
     id: string;
@@ -695,6 +700,8 @@ function mapTransactionRowsForUi(
         bookedAt: tx.bookedAt,
         pending: tx.pending,
         transactionType: tx.transactionType,
+        cashFlowKind: tx.cashFlowKind,
+        cashFlowAllocationAmount: tx.cashFlowAllocationAmount,
         includeInAnalytics: tx.includeInAnalytics,
       },
     ];
@@ -1779,5 +1786,37 @@ export async function deleteTransactions(
   } catch (error) {
     console.error("Failed to delete transactions:", error);
     return { success: false, error: "Failed to delete transactions" };
+  }
+}
+
+/** Purpose is explicit reporting metadata; never infer principal from a payee or amount. */
+export async function updateTransactionCashFlowPurpose(
+  transactionId: string, kind: CashFlowKind | null, allocationAmount: number | null
+): Promise<{ success: boolean; error?: string }> {
+  const userId = await requireAuth();
+  if (!userId) return { success: false, error: "Not authenticated" };
+  try {
+    const permitted = and(eq(transactions.id, transactionId), accountAccess(transactions.accountId, userId));
+    const transaction = await db.query.transactions.findFirst({ where: permitted });
+    if (!transaction) return { success: false, error: "Transaction not found" };
+    const error = validateCashFlowPurpose(kind, allocationAmount, Number(transaction.amount));
+    if (error) return { success: false, error };
+    // Balance adjustments and synthetic transfer legs must retain their accounting meaning.
+    if (transaction.internalTransferId) return { success: false, error: "Unlink the internal transfer before changing its purpose" };
+    const categoryId = transaction.categoryId ?? transaction.categorySystemId;
+    if (categoryId) {
+      const category = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
+      if (category?.name === "Balancing Transfer") return { success: false, error: "Balance adjustments cannot be allocations" };
+    }
+    await db.update(transactions).set({
+      cashFlowKind: kind,
+      cashFlowAllocationAmount: allocationAmount === null ? null : allocationAmount.toFixed(2),
+      updatedAt: new Date(),
+    }).where(permitted);
+    revalidatePath("/");
+    revalidatePath("/transactions");
+    return { success: true };
+  } catch {
+    return { success: false, error: "Failed to update cash-flow purpose" };
   }
 }
