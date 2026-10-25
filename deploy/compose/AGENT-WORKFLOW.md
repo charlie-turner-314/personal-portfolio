@@ -1,5 +1,15 @@
 # Agent-operated testing and releases
 
+## Alpha UAT environment (user clarification, 2026-10-25)
+
+The Pi at SSH alias `pi` is the user's interactive UAT environment while the app
+is in alpha. Local rehearsals and automated checks are preparation, not the UAT
+handoff. When asked to make a tested build available for UAT, deploy the recorded
+main revision to the Pi with an immutable version tag, preserve its live data and
+keys, and verify the normal HTTPS app and Pi-to-Mac Ollama connection. Do not
+finish by handing over a localhost-only build. Existing-data preservation and
+backup/restore checks still apply.
+
 ## Environments and approval
 
 Feature branch → PR to develop → local UAT of a recorded revision → user acceptance → PR to main → immutable release tag → Pi deployment → existing-data smoke test.

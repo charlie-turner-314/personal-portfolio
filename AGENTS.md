@@ -2,7 +2,8 @@
 
 Read `docs/release-governance.md` and `deploy/compose/AGENT-WORKFLOW.md` before release or deployment work.
 
-- Feature branches target `develop`. Local UAT tests an explicitly recorded revision of develop.
+- Feature branches target `develop`. Local tests and upgrade rehearsals use an explicitly recorded revision of develop.
+- During alpha, the Pi is the user's interactive UAT environment. A requested UAT handoff includes deploying the recorded main build to the Pi and checking the normal HTTPS app; a localhost-only build is not sufficient.
 - Ask for acceptance of the tested result before promotion to main unless the user has already explicitly approved that promotion.
 - Main releases use immutable `vX.Y.Z` image tags. `edge` follows the default branch, not develop.
 - On macOS, if Docker is needed and stopped, start Docker Desktop (`open -a Docker`) and wait for `docker info` to succeed. The user has authorized this.
