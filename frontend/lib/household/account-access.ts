@@ -11,7 +11,7 @@ export function sameHousehold(leftUserId: SQL | AnyPgColumn | string, rightUserI
 export function accountAccess(accountId: AnyPgColumn | SQL, actorUserId: string | SQL | AnyPgColumn): SQL {
   return sql`${accountId} in (
     select permitted_account.id from accounts permitted_account
-    where permitted_account.user_id = ${actorUserId}
+    where permitted_account.consolidated_into_account_id IS NULL AND (permitted_account.user_id = ${actorUserId}
     or exists (
       select 1 from household_account_shares permitted_share
       where permitted_share.account_id = permitted_account.id
@@ -19,7 +19,7 @@ export function accountAccess(accountId: AnyPgColumn | SQL, actorUserId: string 
         and permitted_share.granted_by_user_id = permitted_account.user_id
         and permitted_account.is_active = true
         and ${sameHousehold(sql`permitted_account.user_id`, actorUserId)}
-    )
+    ))
   )`;
 }
 

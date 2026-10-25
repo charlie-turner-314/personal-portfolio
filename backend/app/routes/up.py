@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.db_helpers import get_user_id
 from app.integrations.up_adapter import UpAdapter, UpApiError
-from app.models import Account, BankConnection
+from sqlalchemy import text
+from app.models import Account, BankConnection, UpAccountSource
 from app.security.data_encryption import encrypt_value
 
 router = APIRouter()
@@ -110,7 +111,7 @@ def sync_connection(
     # outcome while it waits in the queue. Commit before publishing the task.
     connection.last_sync_error = None
     db.commit()
-    task = sync_up_connection.delay(str(connection.id))
+    task = sync_up_connection.delay(str(connection.id), force=True)
     return {"message": "Up sync queued", "task_id": task.id}
 
 
@@ -128,11 +129,64 @@ def disconnect_connection(
     ).first()
     if not connection:
         raise HTTPException(status_code=404, detail="Up connection not found")
+    db.execute(text("SELECT pg_advisory_xact_lock(73194, 1)"))
     connection.status = "disconnected"
     connection.credentials_encrypted = None
+    db.query(UpAccountSource).filter(UpAccountSource.connection_id == connection.id).delete(synchronize_session=False)
     db.query(Account).filter(Account.bank_connection_id == connection.id).update(
-        {Account.bank_connection_id: None, Account.provider: None},
+        {Account.bank_connection_id: None},
         synchronize_session=False,
     )
     db.commit()
     return {"message": "Up connection disconnected"}
+
+
+class JointSourceRequest(BaseModel):
+    account_id: uuid.UUID
+    enabled: bool = True
+
+
+class JointAccountPair(BaseModel):
+    source_account_id: uuid.UUID
+    canonical_account_id: uuid.UUID
+
+
+class JointReconciliationRequest(BaseModel):
+    pairs: list[JointAccountPair] = Field(min_length=1, max_length=100)
+    conflict_strategy: Optional[str] = None
+
+
+@router.get("/connections/{connection_id}/joint-accounts")
+def joint_accounts(connection_id: str, user_id: str = Depends(get_user_id), db: Session = Depends(get_db)):
+    from app.services.up_account_reconciliation import joint_account_candidates, private_archives
+    return {"accounts": joint_account_candidates(db, user_id, connection_id), "archives": private_archives(db, user_id)}
+
+
+@router.post("/connections/{connection_id}/joint-source")
+def joint_source(connection_id: str, body: JointSourceRequest, user_id: str = Depends(get_user_id), db: Session = Depends(get_db)):
+    from app.services.up_account_reconciliation import set_joint_source
+    try:
+        result = set_joint_source(db, user_id, connection_id, body.account_id, body.enabled)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/connections/{connection_id}/joint-preview")
+def preview_joint_reconciliation(connection_id: str, body: JointReconciliationRequest, user_id: str = Depends(get_user_id), db: Session = Depends(get_db)):
+    from app.services.up_account_reconciliation import reconciliation_preview
+    return reconciliation_preview(db, user_id, connection_id, [pair.model_dump() for pair in body.pairs])
+
+
+@router.post("/connections/{connection_id}/joint-reconcile")
+def reconcile_joint_accounts(connection_id: str, body: JointReconciliationRequest, user_id: str = Depends(get_user_id), db: Session = Depends(get_db)):
+    from app.services.up_account_reconciliation import consolidate_accounts
+    return consolidate_accounts(db, user_id, connection_id, [pair.model_dump() for pair in body.pairs], body.conflict_strategy)
+
+
+@router.get("/reconciliations/{receipt_id}")
+def reconciliation_archive(receipt_id: uuid.UUID, user_id: str = Depends(get_user_id), db: Session = Depends(get_db)):
+    from app.services.up_account_reconciliation import private_archive
+    return private_archive(db, user_id, receipt_id)

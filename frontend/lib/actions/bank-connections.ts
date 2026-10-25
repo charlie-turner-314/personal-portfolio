@@ -315,7 +315,8 @@ export async function getLinkableAccounts() {
     .where(
       and(
         eq(accounts.userId, userId),
-        isNull(accounts.bankConnectionId)
+        isNull(accounts.bankConnectionId),
+        isNull(accounts.consolidatedIntoAccountId)
       )
     )
     .orderBy(accounts.name);
@@ -325,7 +326,7 @@ export async function submitAccountMappings(
   connectionId: string,
   mappings: Array<{
     bank_uid: string;
-    action: "create" | "link" | "skip";
+    action: "create" | "link" | "skip" | "shared";
     name?: string;
     existing_account_id?: string;
   }>,
@@ -458,6 +459,7 @@ export type SuggestedMapping = {
   suggested_action: "link" | "create" | "skip";
   suggested_account_id: string | null;
   suggested_account_name: string | null;
+  shared_connection_available?: boolean;
 };
 
 export async function getSuggestedMappings(
@@ -491,4 +493,32 @@ export async function getSuggestedMappings(
   } catch {
     return [];
   }
+}
+
+
+export async function upJointRequest(connectionId: string, operation: "joint-accounts" | "joint-source" | "joint-preview" | "joint-reconcile", body?: unknown) {
+  const session = await getAuthenticatedSession();
+  if (!session?.user?.id) throw new Error("Not authenticated");
+  if (body && isDemoRestrictedUserEmail(session.user.email)) throw new Error(DEMO_RESTRICTED_ACTION_ERROR);
+  const pathWithQuery = `/api/up/connections/${encodeURIComponent(connectionId)}/${operation}`;
+  const method = body ? "POST" : "GET";
+  const response = await fetch(`${getBackendBaseUrl().replace(/\/+$/, "")}${pathWithQuery}`, {
+    method, headers: { "Content-Type": "application/json", ...createInternalAuthHeaders({ method, pathWithQuery, userId: session.user.id }) },
+    ...(body ? { body: JSON.stringify(body) } : {}), cache: "no-store",
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.detail || "Joint account request failed");
+  if (body && operation !== "joint-preview") revalidatePath("/settings");
+  return result;
+}
+
+export async function downloadUpArchive(receiptId: string) {
+  const userId = await requireAuth();
+  if (!userId) throw new Error("Not authenticated");
+  const pathWithQuery = `/api/up/reconciliations/${encodeURIComponent(receiptId)}`;
+  const response = await fetch(`${getBackendBaseUrl().replace(/\/+$/, "")}${pathWithQuery}`, {
+    headers: createInternalAuthHeaders({ method: "GET", pathWithQuery, userId }), cache: "no-store",
+  });
+  if (!response.ok) throw new Error("Original history is unavailable");
+  return response.json();
 }

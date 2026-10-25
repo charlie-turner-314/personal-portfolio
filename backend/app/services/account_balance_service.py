@@ -49,7 +49,7 @@ class AccountBalanceService:
             functional_currency = user.functional_currency if user else "EUR"
 
             # Get accounts for user (filtered by account_ids if provided)
-            query = self.db.query(Account).filter(Account.user_id == user_id)
+            query = self.db.query(Account).filter(Account.user_id == user_id, Account.consolidated_into_account_id.is_(None))
             if account_ids:
                 from uuid import UUID
                 query = query.filter(Account.id.in_(account_ids))
@@ -179,7 +179,7 @@ class AccountBalanceService:
             functional_currency = user.functional_currency if user else "EUR"
 
             # Get accounts for user (filtered by account_ids if provided)
-            query = self.db.query(Account).filter(Account.user_id == user_id)
+            query = self.db.query(Account).filter(Account.user_id == user_id, Account.consolidated_into_account_id.is_(None))
             if account_ids:
                 from uuid import UUID
                 query = query.filter(Account.id.in_(account_ids))

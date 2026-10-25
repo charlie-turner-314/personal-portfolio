@@ -52,7 +52,7 @@ def main():
             schema = run(['docker', 'exec', containers['postgres'], 'pg_dump', '-U', user, '-d', source_database, '--schema-only', '--no-owner', '--no-acl']).stdout
             run(['docker', 'exec', '-i', containers['postgres'], 'psql', '-U', user, '-d', dbname, '-v', 'ON_ERROR_STOP=1'], input=schema)
         print('Applying additive privacy migration twice', flush=True)
-        for filename in ('0046_household_financial_privacy.manual.sql', '0051_household_property_sharing.manual.sql'):
+        for filename in ('0046_household_financial_privacy.manual.sql', '0051_household_property_sharing.manual.sql', '0052_up_canonical_accounts.manual.sql'):
             migration = (ROOT / 'frontend/lib/db/migrations' / filename).read_text()
             for _ in range(2):
                 sql(dbname, migration)
@@ -97,6 +97,7 @@ def main():
             test_runner('backend', 'python', [temporary_root + '/check.py'], [
                 (ROOT / 'backend/app', temporary_root + '/app'),
                 (ROOT / 'backend/tests/household_privacy_integration.py', temporary_root + '/check.py'),
+                (ROOT / 'backend/tests/up_canonical_integration.py', temporary_root + '/up_canonical_integration.py'),
                 (ROOT / 'backend/celery_app.py', temporary_root + '/celery_app.py'),
                 (ROOT / 'backend/tasks', temporary_root + '/tasks'),
             ])

@@ -30,7 +30,7 @@ def account_access(account_id_column, actor_user_id: str):
         account.is_active.is_(True),
         household_root(account.user_id) == household_root(actor_user_id),
     )))
-    permitted = select(account.id).where(or_(account.user_id == actor_user_id, granted))
+    permitted = select(account.id).where(account.consolidated_into_account_id.is_(None), or_(account.user_id == actor_user_id, granted))
     return account_id_column.in_(permitted)
 
 

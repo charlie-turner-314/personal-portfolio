@@ -30,6 +30,8 @@ from app.services.tax_report_service import build_australian_tax_report, tax_rep
 def main():
     assert os.environ.get("HOUSEHOLD_TEST_ISOLATED") == "yes"
     assert "/household_privacy_test_" in os.environ["DATABASE_URL"]
+    from up_canonical_integration import run as check_up_canonical
+    check_up_canonical()
     owner, member, third = ["privacy-api-" + uuid.uuid4().hex for _ in range(3)]
     joint, private, personal = [uuid.uuid4() for _ in range(3)]
     person, third_person = uuid.uuid4(), uuid.uuid4()

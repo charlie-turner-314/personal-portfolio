@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from app.services.financial_access import account_access
 from app.models import Account, Transaction, TransactionLink
 from app.security.data_encryption import decrypt_with_fallback
 
@@ -31,7 +32,7 @@ class UpTransferLinkService:
         """Create zero-sum link groups for unambiguous Up transfer pairs."""
         accounts = (
             self.db.query(Account)
-            .filter(Account.user_id == self.user_id, Account.provider == "up")
+            .filter(account_access(Account.id, self.user_id), Account.provider == "up", Account.is_active.is_(True))
             .all()
         )
         by_external_id = {
@@ -45,14 +46,15 @@ class UpTransferLinkService:
         linked_ids = {
             transaction_id
             for (transaction_id,) in self.db.query(TransactionLink.transaction_id)
-            .filter(TransactionLink.user_id == self.user_id)
+            .join(Transaction, Transaction.id == TransactionLink.transaction_id)
+            .filter(account_access(Transaction.account_id, self.user_id))
             .all()
         }
         transactions_by_account: dict[object, list[Transaction]] = defaultdict(list)
         candidates = (
             self.db.query(Transaction)
             .filter(
-                Transaction.user_id == self.user_id,
+                account_access(Transaction.account_id, self.user_id),
                 Transaction.account_id.in_([account.id for account in accounts]),
             )
             .all()
