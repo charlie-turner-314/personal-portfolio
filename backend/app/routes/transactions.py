@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, or_, and_, asc, desc
+from sqlalchemy import or_, and_, asc, desc
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
@@ -158,41 +158,23 @@ def get_spending_by_category(
     to_date: Optional[datetime] = Query(None, alias="to"),
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
+    account_id: Optional[UUID] = None,
+    scope: str = "my",
+    person_ids: Optional[list[UUID]] = Query(None),
 ):
-    """Get spending statistics by category for the current user."""
-    user_id = get_user_id(user_id)
-    # Use category_id (user override) or category_system_id (AI assigned) for grouping
-    query = db.query(
-        func.coalesce(Transaction.category_id, Transaction.category_system_id).label("category_id"),
-        Category.name.label("category_name"),
-        func.sum(Transaction.amount).label("total"),
-        func.count(Transaction.id).label("count"),
-    ).outerjoin(
-        Category,
-        (Transaction.category_id == Category.id) | (Transaction.category_system_id == Category.id)
-    ).filter(account_access(Transaction.account_id, user_id))
+    """Consumption by stable classification, including refunds and dated shares."""
+    from app.services.financial_activity import FinancialActivity
+    from app.services.financial_activity_views import category_breakdown
 
-    # Only expenses (negative amounts)
-    query = query.filter(Transaction.amount < 0)
-
-    if from_date:
-        query = query.filter(Transaction.booked_at >= from_date)
-    if to_date:
-        query = query.filter(Transaction.booked_at <= to_date)
-
-    results = query.group_by(
-        func.coalesce(Transaction.category_id, Transaction.category_system_id),
-        Category.name
-    ).all()
-
+    summary = FinancialActivity(
+        db, get_user_id(user_id), scope=scope, person_ids=person_ids
+    ).summarize(
+        from_date=from_date,
+        to_date=to_date,
+        account_ids=[account_id] if account_id else None,
+    )
     return [
-        CategorySpending(
-            category_id=r.category_id,
-            category_name=r.category_name or "Uncategorized",
-            total=abs(r.total) if r.total else 0,
-            count=r.count,
-        )
-        for r in results
+        CategorySpending(**row) for row in category_breakdown(summary, "consumption")
     ]
 
 

@@ -188,3 +188,20 @@ It cannot silently become a subset with zero for the missing account. The same
 response applies to withdrawn, private and nonexistent IDs and contains no
 private name or total. Report pages offer a clear-filter link that preserves
 other context. Every final record query still enforces live account access.
+
+## Backend report parity
+
+API and MCP analytics use the same financial boundary rules as frontend activity.
+Python maps explicit purpose portions from the existing schema. Consumption is
+not all negative bank amounts, income is not every credit, and a classification
+uses the manual override or AI fallback once. Category IDs define comparisons;
+names do not merge definitions. Linked amounts use immutable leg weights, so
+row iteration order cannot remove a secondary before summing a primary.
+
+Recorded cash observations remain independent of movement calculations. Exact
+opening/closing cash observations are required for reconciliation. Historical
+balance APIs do not reverse-engineer balances from a current balance and later
+transactions. Current cash excludes loans/cards; liabilities and gross assets
+are independently attributed. Holding values replace their account's valuation,
+and missing holding values/FX make complete totals unavailable. A current
+financial summary explicitly labels its balance date separately from flow dates.

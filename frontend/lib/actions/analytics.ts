@@ -1,73 +1,30 @@
 "use server";
 
-import { accountAccess } from "@/lib/household/account-access";
-import { db } from "@/lib/db";
-import { transactions } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/household/financial-auth";
-import { eq, sql, gte, and, desc } from "drizzle-orm";
-
-// Note: getTotalBalance has been consolidated in lib/actions/dashboard.ts
-// Use: import { getTotalBalance } from "@/lib/actions/dashboard"
+import { fetchFinancialActivity } from "@/lib/reporting/activity-query";
+import { getTransactionsPage } from "@/lib/actions/transactions";
+import { parseTransactionsSearchParams } from "@/lib/transactions/query-state";
 export { getTotalBalance } from "./dashboard";
 
-export async function getTransactionSummary(days: number = 30) {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return [];
+/** Legacy consumer adapter uses the same purposes, shares and currency as reports. */
+export async function getTransactionSummary(days = 30, personId?: string) {
+  const actor = await requireAuth();
+  if (!actor) return [];
+  const endDate = new Date();
+  const startDate = new Date(endDate);
+  const periodDays = Math.max(1, Number.isFinite(days) ? Math.floor(days) : 30);
+  startDate.setDate(startDate.getDate() - periodDays);
+  const activity = await fetchFinancialActivity(actor, { startDate, endDate, personId });
+  if (activity.missingConversions) {
+    throw new Error("This summary is unavailable while currency conversions are missing");
   }
-
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days);
-
-  const result = await db
-    .select({
-      date: sql<string>`DATE(${transactions.bookedAt})`,
-      income: sql<string>`COALESCE(SUM(CASE WHEN ${transactions.transactionType} = 'credit' THEN ${transactions.amount} ELSE 0 END), 0)`,
-      expenses: sql<string>`COALESCE(SUM(CASE WHEN ${transactions.transactionType} = 'debit' THEN ABS(${transactions.amount}) ELSE 0 END), 0)`,
-    })
-    .from(transactions)
-    .where(
-      and(
-        accountAccess(transactions.accountId, userId),
-        eq(transactions.includeInAnalytics, true),
-        gte(transactions.bookedAt, startDate)
-      )
-    )
-    .groupBy(sql`DATE(${transactions.bookedAt})`)
-    .orderBy(sql`DATE(${transactions.bookedAt})`);
-
-  return result.map((row) => ({
-    date: row.date,
-    income: parseFloat(row.income),
-    expenses: parseFloat(row.expenses),
-  }));
+  return activity.dailyData;
 }
 
-export async function getRecentTransactions(limit: number = 5) {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return [];
-  }
-
-  const result = await db
-    .select({
-      id: transactions.id,
-      description: transactions.description,
-      merchant: transactions.merchant,
-      amount: transactions.amount,
-      transactionType: transactions.transactionType,
-      bookedAt: transactions.bookedAt,
-      currency: transactions.currency,
-    })
-    .from(transactions)
-    .where(accountAccess(transactions.accountId, userId))
-    .orderBy(desc(transactions.bookedAt))
-    .limit(limit);
-
-  return result.map((tx) => ({
-    ...tx,
-    amount: parseFloat(tx.amount?.toString() || "0"),
-  }));
+export async function getRecentTransactions(limit = 5, personId?: string) {
+  const count = Math.max(1, Math.min(100, Number.isFinite(limit) ? Math.floor(limit) : 5));
+  const page = await getTransactionsPage({
+    ...parseTransactionsSearchParams({}), pageSize: count, personId,
+  });
+  return page.rows;
 }

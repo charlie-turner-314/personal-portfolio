@@ -201,8 +201,13 @@ class TransactionWithDetails(TransactionResponse):
 class CategorySpending(BaseModel):
     category_id: Optional[UUID]
     category_name: Optional[str]
-    total: Decimal
+    total: Optional[Decimal]
     count: int
+    known_total: Optional[Decimal] = None
+    currency: Optional[str] = None
+    scope: Optional[str] = None
+    complete: bool = True
+    accounts: list[dict] = Field(default_factory=list)
 
 
 class AccountSummary(BaseModel):

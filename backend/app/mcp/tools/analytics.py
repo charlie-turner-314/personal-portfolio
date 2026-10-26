@@ -1,33 +1,14 @@
-"""
-Analytics tools for the MCP server.
-"""
+"""Analytics tools share the same permitted financial facts as API reports."""
+
 from typing import Optional
-
-from sqlalchemy import func, extract, case, or_, and_, text, bindparam, literal_column
-from sqlalchemy.orm import aliased
-
-from app.services.financial_access import account_access
-from app.mcp.dependencies import get_db, validate_uuid, validate_date
-from app.models import Transaction, Category, Account, TransactionLink
-from app.services.net_worth_service import calculate_net_worth, classify_account_amount
-from app.services.ownership_service import attribute_amount, entity_ids_for_people, get_owners
-
-
-_TRANSACTION_ACCESS_SQL = str(account_access(literal_column("t.account_id"), bindparam("actor_user_id")))
-
-def _get_link_group_nets_cte(user_id: str) -> str:
-    """Generate SQL CTE for calculating net amounts per link group."""
-    return f"""
-    WITH link_group_nets AS (
-        SELECT
-            tl.group_id,
-            SUM(t.amount) as net_amount
-        FROM transactions t
-        JOIN transaction_links tl ON t.id = tl.transaction_id
-        WHERE {_TRANSACTION_ACCESS_SQL}
-        GROUP BY tl.group_id
-    )
-    """
+from app.mcp.dependencies import get_db
+from app.services.financial_activity import FinancialActivity, reporting_uuid, ZERO
+from app.services.financial_values import net_worth, cash_reconciliation
+from app.services.financial_activity_views import (
+    json_numbers,
+    category_breakdown,
+    monthly_cashflow,
+)
 
 
 def get_spending_by_category(
@@ -37,108 +18,22 @@ def get_spending_by_category(
     account_id: Optional[str] = None,
     include_uncategorized: bool = False,
     person_ids: Optional[list[str]] = None,
+    scope: str = "my",
 ) -> list[dict]:
+    """Consumption (including refunds), using dated economic shares by default.
+    Household view counts each permitted record once; capital is separate.
     """
-    Get spending breakdown by category.
-
-    Uses net amounts for linked transactions (primary gets group net).
-
-    Args:
-        user_id: The user's ID
-        from_date: Start date in ISO format (optional)
-        to_date: End date in ISO format (optional)
-        account_id: Filter by account ID (optional)
-        include_uncategorized: If True, include an "Uncategorized" bucket for
-            transactions with no category assigned (default: False)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions from accounts owned by any of the specified people.
-
-    Returns:
-        List of categories with total spending amount, transaction count, and
-        merchant_count
-    """
-    # Validate parameters
-    from_dt = validate_date(from_date)
-    to_dt = validate_date(to_date)
-    account_uuid = validate_uuid(account_id) if account_id else None
-
-    # Build filters
-    date_filter = ""
-    if from_dt:
-        date_filter += f" AND t.booked_at >= '{from_dt.isoformat()}'"
-    if to_dt:
-        date_filter += f" AND t.booked_at <= '{to_dt.isoformat()}'"
-
-    account_filter = ""
-    if account_uuid:
-        account_filter = f" AND t.account_id = '{account_uuid}'"
-
-    # person_ids ownership filter — builds an IN clause over allowed account ids
-    _person_ids_filter_spending = ""
-    if person_ids is not None and len(person_ids) > 0:
-        with get_db() as _db:
-            _allowed = [str(uid) for uid in entity_ids_for_people(_db, "account", person_ids)]
-        if not _allowed:
-            return []
-        _ids_literal = ", ".join(f"'{a}'" for a in _allowed)
-        _person_ids_filter_spending = f" AND t.account_id IN ({_ids_literal})"
-
-    join_type = "LEFT JOIN" if include_uncategorized else "INNER JOIN"
-    # With INNER JOIN we already exclude null-category rows, so restrict to
-    # expense categories only. With LEFT JOIN we keep all debit rows but still
-    # require categorised rows to be expenses — null-category rows are allowed
-    # via the OR arm so they appear as the "Uncategorized" bucket.
-    uncategorized_filter = (
-        "AND (c.category_type = 'expense' OR c.id IS NULL)"
-        if include_uncategorized
-        else "AND c.category_type = 'expense'"
-    )
-
     with get_db() as db:
-        sql = text(f"""
-            {_get_link_group_nets_cte(user_id)}
-            SELECT
-                COALESCE(t.category_id, t.category_system_id) as category_id,
-                COALESCE(c.name, 'Uncategorized') as category_name,
-                c.color as category_color,
-                COALESCE(SUM(
-                    CASE
-                        WHEN tl.link_role = 'primary' THEN
-                            CASE WHEN lgn.net_amount < 0 THEN ABS(lgn.net_amount) ELSE 0 END
-                        WHEN tl.link_role IS NOT NULL THEN 0
-                        ELSE ABS(t.amount)
-                    END
-                ), 0) as total,
-                COUNT(t.id) as count,
-                COUNT(DISTINCT t.merchant) FILTER (WHERE t.merchant IS NOT NULL AND t.merchant <> '') as merchant_count
-            FROM transactions t
-            {join_type} categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
-            LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
-            LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE {_TRANSACTION_ACCESS_SQL}
-                AND t.transaction_type = 'debit'
-                AND t.include_in_analytics = true
-                {uncategorized_filter}
-                {date_filter}
-                {account_filter}
-                {_person_ids_filter_spending}
-            GROUP BY COALESCE(t.category_id, t.category_system_id), c.name, c.color
-            ORDER BY total DESC
-        """)
-
-        results = db.execute(sql, {"actor_user_id": user_id}).fetchall()
-
-        return [
-            {
-                "category_id": str(r.category_id) if r.category_id else None,
-                "category_name": r.category_name or "Uncategorized",
-                "category_color": r.category_color,
-                "total": float(r.total) if r.total else 0,
-                "count": r.count,
-                "merchant_count": r.merchant_count,
-            }
-            for r in results
-        ]
+        summary = FinancialActivity(
+            db, user_id, scope=scope, person_ids=person_ids
+        ).summarize(
+            from_date=from_date,
+            to_date=to_date,
+            account_ids=[account_id] if account_id else None,
+        )
+        return category_breakdown(
+            summary, "consumption", include_uncategorized=include_uncategorized
+        )
 
 
 def get_income_by_category(
@@ -147,92 +42,18 @@ def get_income_by_category(
     to_date: Optional[str] = None,
     account_id: Optional[str] = None,
     person_ids: Optional[list[str]] = None,
+    scope: str = "my",
 ) -> list[dict]:
-    """
-    Get income breakdown by category.
-
-    Uses net amounts for linked transactions (primary gets group net).
-
-    Args:
-        user_id: The user's ID
-        from_date: Start date in ISO format (optional)
-        to_date: End date in ISO format (optional)
-        account_id: Filter by account ID (optional)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions from accounts owned by any of the specified people.
-
-    Returns:
-        List of categories with total income amount and transaction count
-    """
-    # Validate parameters
-    from_dt = validate_date(from_date)
-    to_dt = validate_date(to_date)
-    account_uuid = validate_uuid(account_id) if account_id else None
-
-    # Build filters
-    date_filter = ""
-    if from_dt:
-        date_filter += f" AND t.booked_at >= '{from_dt.isoformat()}'"
-    if to_dt:
-        date_filter += f" AND t.booked_at <= '{to_dt.isoformat()}'"
-
-    account_filter = ""
-    if account_uuid:
-        account_filter = f" AND t.account_id = '{account_uuid}'"
-
-    # person_ids ownership filter
-    _person_ids_filter_income = ""
-    if person_ids is not None and len(person_ids) > 0:
-        with get_db() as _db:
-            _allowed = [str(uid) for uid in entity_ids_for_people(_db, "account", person_ids)]
-        if not _allowed:
-            return []
-        _ids_literal = ", ".join(f"'{a}'" for a in _allowed)
-        _person_ids_filter_income = f" AND t.account_id IN ({_ids_literal})"
-
+    """Classified income, excluding ownership/boundary transfers and capital."""
     with get_db() as db:
-        sql = text(f"""
-            {_get_link_group_nets_cte(user_id)}
-            SELECT
-                COALESCE(t.category_id, t.category_system_id) as category_id,
-                c.name as category_name,
-                c.color as category_color,
-                COALESCE(SUM(
-                    CASE
-                        WHEN tl.link_role = 'primary' THEN
-                            CASE WHEN lgn.net_amount > 0 THEN lgn.net_amount ELSE 0 END
-                        WHEN tl.link_role IS NOT NULL THEN 0
-                        ELSE t.amount
-                    END
-                ), 0) as total,
-                COUNT(t.id) as count
-            FROM transactions t
-            INNER JOIN categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
-            LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
-            LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE {_TRANSACTION_ACCESS_SQL}
-                AND t.transaction_type = 'credit'
-                AND t.include_in_analytics = true
-                AND c.category_type = 'income'
-                {date_filter}
-                {account_filter}
-                {_person_ids_filter_income}
-            GROUP BY COALESCE(t.category_id, t.category_system_id), c.name, c.color
-            ORDER BY total DESC
-        """)
-
-        results = db.execute(sql, {"actor_user_id": user_id}).fetchall()
-
-        return [
-            {
-                "category_id": str(r.category_id) if r.category_id else None,
-                "category_name": r.category_name or "Uncategorized",
-                "category_color": r.category_color,
-                "total": float(r.total) if r.total else 0,
-                "count": r.count,
-            }
-            for r in results
-        ]
+        summary = FinancialActivity(
+            db, user_id, scope=scope, person_ids=person_ids
+        ).summarize(
+            from_date=from_date,
+            to_date=to_date,
+            account_ids=[account_id] if account_id else None,
+        )
+        return category_breakdown(summary, "income")
 
 
 def get_monthly_cashflow(
@@ -240,99 +61,15 @@ def get_monthly_cashflow(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     person_ids: Optional[list[str]] = None,
+    scope: str = "my",
 ) -> list[dict]:
-    """
-    Get monthly income vs expenses breakdown.
-
-    Filters by category type to exclude transfers:
-    - Income: Only transactions with category_type='income'
-    - Expenses: Only transactions with category_type='expense'
-    - Uses net amounts for linked transactions (primary gets group net)
-
-    Args:
-        user_id: The user's ID
-        from_date: Start date in ISO format (optional)
-        to_date: End date in ISO format (optional)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions from accounts owned by any of the specified people.
-
-    Returns:
-        List of monthly data with income, expenses, and net for each month
-    """
-    # Validate parameters
-    from_dt = validate_date(from_date)
-    to_dt = validate_date(to_date)
-
-    # Build date filter
-    date_filter = ""
-    if from_dt:
-        date_filter += f" AND t.booked_at >= '{from_dt.isoformat()}'"
-    if to_dt:
-        date_filter += f" AND t.booked_at <= '{to_dt.isoformat()}'"
-
-    # person_ids ownership filter
-    _person_ids_filter_cashflow = ""
-    if person_ids is not None and len(person_ids) > 0:
-        with get_db() as _db:
-            _allowed = [str(uid) for uid in entity_ids_for_people(_db, "account", person_ids)]
-        if not _allowed:
-            return []
-        _ids_literal = ", ".join(f"'{a}'" for a in _allowed)
-        _person_ids_filter_cashflow = f" AND t.account_id IN ({_ids_literal})"
-
+    """Monthly income minus consumption; net is saving before capital/transfers."""
     with get_db() as db:
-        sql = text(f"""
-            {_get_link_group_nets_cte(user_id)}
-            SELECT
-                EXTRACT(YEAR FROM t.booked_at)::int as year,
-                EXTRACT(MONTH FROM t.booked_at)::int as month,
-                COALESCE(SUM(
-                    CASE
-                        WHEN c.category_type = 'income' THEN
-                            CASE
-                                WHEN tl.link_role = 'primary' THEN
-                                    CASE WHEN lgn.net_amount > 0 THEN lgn.net_amount ELSE 0 END
-                                WHEN tl.link_role IS NOT NULL THEN 0
-                                ELSE ABS(t.amount)
-                            END
-                        ELSE 0
-                    END
-                ), 0) as income,
-                COALESCE(SUM(
-                    CASE
-                        WHEN c.category_type = 'expense' THEN
-                            CASE
-                                WHEN tl.link_role = 'primary' THEN
-                                    CASE WHEN lgn.net_amount < 0 THEN ABS(lgn.net_amount) ELSE 0 END
-                                WHEN tl.link_role IS NOT NULL THEN 0
-                                ELSE ABS(t.amount)
-                            END
-                        ELSE 0
-                    END
-                ), 0) as expenses
-            FROM transactions t
-            INNER JOIN categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
-            LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
-            LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE {_TRANSACTION_ACCESS_SQL}
-                AND t.include_in_analytics = true
-                {date_filter}
-                {_person_ids_filter_cashflow}
-            GROUP BY EXTRACT(YEAR FROM t.booked_at), EXTRACT(MONTH FROM t.booked_at)
-            ORDER BY EXTRACT(YEAR FROM t.booked_at), EXTRACT(MONTH FROM t.booked_at)
-        """)
-
-        results = db.execute(sql, {"actor_user_id": user_id}).fetchall()
-
-        return [
-            {
-                "month": f"{int(r.year)}-{int(r.month):02d}",
-                "income": float(r.income) if r.income else 0,
-                "expenses": float(r.expenses) if r.expenses else 0,
-                "net": float(r.income or 0) - float(r.expenses or 0),
-            }
-            for r in results
-        ]
+        return monthly_cashflow(
+            FinancialActivity(
+                db, user_id, scope=scope, person_ids=person_ids
+            ).summarize(from_date=from_date, to_date=to_date)
+        )
 
 
 def get_financial_summary(
@@ -340,162 +77,70 @@ def get_financial_summary(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     person_ids: Optional[list[str]] = None,
+    scope: str = "my",
 ) -> dict:
+    """Income/consumption, capital and boundary movements, plus current recorded
+    cash/net-worth values. Period flows never manufacture a recorded balance.
+    My view is the default; household/selected-people attribution is explicit.
     """
-    Get a financial summary with totals and net worth.
-
-    Filters by category type to exclude transfers:
-    - Income: Only transactions with category_type='income'
-    - Expenses: Only transactions with category_type='expense'
-    - Uses net amounts for linked transactions (primary gets group net)
-
-    Args:
-        user_id: The user's ID
-        from_date: Start date in ISO format (optional)
-        to_date: End date in ISO format (optional)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions and balances from accounts owned by any of the specified
-            people. When exactly one person_id is given, account balances are
-            share-weighted to that person's ownership fraction.
-
-    Returns:
-        Summary with income, expenses, cashflow, account balances, gross assets,
-        total liabilities, and net worth.
-    """
-    # Validate parameters
-    from_dt = validate_date(from_date)
-    to_dt = validate_date(to_date)
-
-    # Build date filter
-    date_filter = ""
-    if from_dt:
-        date_filter += f" AND t.booked_at >= '{from_dt.isoformat()}'"
-    if to_dt:
-        date_filter += f" AND t.booked_at <= '{to_dt.isoformat()}'"
-
-    # person_ids ownership filter
-    filter_by_person = person_ids is not None and len(person_ids) > 0
-    single_person = filter_by_person and len(person_ids) == 1
-    _allowed_account_ids: list[str] = []
-    _person_ids_filter_summary = ""
-    if filter_by_person:
-        with get_db() as _db:
-            _allowed_account_ids = [str(uid) for uid in entity_ids_for_people(_db, "account", person_ids)]
-        if not _allowed_account_ids:
-            return {
-                "period": {"from_date": from_date, "to_date": to_date},
-                "total_income": 0,
-                "total_expenses": 0,
-                "net_cashflow": 0,
-                "savings_rate": 0,
-                "total_balance": 0,
-                "gross_assets": 0,
-                "total_liabilities": 0,
-                "net_worth": 0,
-                "accounts": [],
-            }
-        _ids_literal = ", ".join(f"'{a}'" for a in _allowed_account_ids)
-        _person_ids_filter_summary = f" AND t.account_id IN ({_ids_literal})"
-
     with get_db() as db:
-        sql = text(f"""
-            {_get_link_group_nets_cte(user_id)}
-            SELECT
-                COALESCE(SUM(
-                    CASE
-                        WHEN c.category_type = 'income' THEN
-                            CASE
-                                WHEN tl.link_role = 'primary' THEN
-                                    CASE WHEN lgn.net_amount > 0 THEN lgn.net_amount ELSE 0 END
-                                WHEN tl.link_role IS NOT NULL THEN 0
-                                ELSE ABS(t.amount)
-                            END
-                        ELSE 0
-                    END
-                ), 0) as total_income,
-                COALESCE(SUM(
-                    CASE
-                        WHEN c.category_type = 'expense' THEN
-                            CASE
-                                WHEN tl.link_role = 'primary' THEN
-                                    CASE WHEN lgn.net_amount < 0 THEN ABS(lgn.net_amount) ELSE 0 END
-                                WHEN tl.link_role IS NOT NULL THEN 0
-                                ELSE ABS(t.amount)
-                            END
-                        ELSE 0
-                    END
-                ), 0) as total_expenses
-            FROM transactions t
-            INNER JOIN categories c ON c.id = COALESCE(t.category_id, t.category_system_id)
-            LEFT JOIN transaction_links tl ON t.id = tl.transaction_id
-            LEFT JOIN link_group_nets lgn ON tl.group_id = lgn.group_id
-            WHERE {_TRANSACTION_ACCESS_SQL}
-                AND t.include_in_analytics = true
-                {date_filter}
-                {_person_ids_filter_summary}
-        """)
-
-        result = db.execute(sql, {"actor_user_id": user_id}).fetchone()
-
-        total_income = float(result.total_income or 0)
-        total_expenses = float(result.total_expenses or 0)
-
-        # Get account balances (current)
-        accounts_query = db.query(Account).filter(
-            account_access(Account.id, user_id),
-            Account.is_active == True
-        )
-        if filter_by_person and _allowed_account_ids:
-            accounts_query = accounts_query.filter(Account.id.in_(_allowed_account_ids))
-        accounts = accounts_query.all()
-
-        # Cache owners for share-weighted attribution
-        owners_cache: dict = {}
-        if single_person:
-            for acc in accounts:
-                owners_cache[str(acc.id)] = get_owners(db, "account", acc.id)
-
-        def _acc_balance(acc) -> float:
-            full = float(acc.functional_balance or acc.balance_available or 0)
-            if single_person:
-                return attribute_amount(full, owners_cache[str(acc.id)], person_ids[0], db=db)
-            return full
-
-        gross_assets = 0.0
-        total_liabilities = 0.0
-        total_balance = 0.0
-        account_balances = []
-        for acc in accounts:
-            balance = _acc_balance(acc)
-            classified = classify_account_amount(balance, acc.account_type)
-            gross_assets += classified.asset_amount
-            total_liabilities += classified.liability_amount
-            total_balance += balance
-            account_balances.append({
-                "id": str(acc.id),
-                "name": acc.name,
-                "balance": balance,
-                "currency": acc.currency,
-                "account_type": acc.account_type,
-            })
-
-        net_worth = calculate_net_worth(gross_assets, total_liabilities)
-
-        return {
-            "period": {
-                "from_date": from_date,
-                "to_date": to_date,
-            },
-            "total_income": total_income,
-            "total_expenses": total_expenses,
-            "net_cashflow": total_income - total_expenses,
-            "savings_rate": round((total_income - total_expenses) / total_income * 100, 1) if total_income > 0 else 0,
-            "total_balance": total_balance,
-            "gross_assets": gross_assets,
-            "total_liabilities": total_liabilities,
-            "net_worth": net_worth,
-            "accounts": account_balances,
+        activity = FinancialActivity(db, user_id, scope=scope, person_ids=person_ids)
+        summary = activity.summarize(from_date=from_date, to_date=to_date)
+        values = net_worth(activity)
+        known = {
+            "total_income": summary["income"],
+            "total_expenses": summary["expenses"],
+            "savings_from_income": summary["savings_from_income"],
+            "net_cashflow": summary["explained_cash_flow"],
         }
+        movements = {
+            key: summary[key]
+            for key in (
+                "investments",
+                "loan_principal",
+                "other_capital",
+                "boundary_transfers_in",
+                "boundary_transfers_out",
+                "ownership_transfers_in",
+                "ownership_transfers_out",
+                "explained_cash_flow",
+            )
+        }
+        return json_numbers(
+            {
+                "period": {"from_date": from_date, "to_date": to_date},
+                **values,
+                "activity_scope": summary["scope"],
+                "activity_accounts": summary["accounts"],
+                **{
+                    key: value if summary["complete"] else None
+                    for key, value in known.items()
+                },
+                **{
+                    key: value if summary["complete"] else None
+                    for key, value in movements.items()
+                },
+                "known_activity": known | movements,
+                "activity_complete": summary["complete"],
+                "missing_conversions": summary["missing_conversions"],
+                "savings_rate": (
+                    (
+                        summary["savings_from_income"] / summary["income"] * 100
+                        if summary["income"] > ZERO
+                        else ZERO
+                    )
+                    if summary["complete"]
+                    else None
+                ),
+                "reconciliation": cash_reconciliation(
+                    activity,
+                    from_date=from_date,
+                    to_date=to_date,
+                    explained=summary["explained_cash_flow"],
+                    complete=summary["complete"],
+                ),
+            }
+        )
 
 
 def get_top_merchants(
@@ -505,81 +150,54 @@ def get_top_merchants(
     limit: int = 10,
     category_id: Optional[str] = None,
     uncategorized: bool = False,
+    person_ids: Optional[list[str]] = None,
+    scope: str = "my",
 ) -> list[dict]:
-    """
-    Get top merchants by total spending.
-
-    Args:
-        user_id: The user's ID
-        from_date: Start date in ISO format (optional)
-        to_date: End date in ISO format (optional)
-        limit: Max number of merchants (default: 10, max: 50)
-        category_id: Filter to transactions in this category (optional).
-            Mutually exclusive with uncategorized.
-        uncategorized: If True, return only transactions with no category.
-            Mutually exclusive with category_id.
-
-    Returns:
-        List of merchants with total spending and transaction count
-    """
+    """Rank permitted consumption, preserving refunds and unknown conversion."""
     if category_id and uncategorized:
         raise ValueError("category_id and uncategorized are mutually exclusive")
-
-    cat_uuid = validate_uuid(category_id) if category_id else None
-    limit = min(max(1, limit), 50)
-
-    # Validate parameters
-    from_dt = validate_date(from_date)
-    to_dt = validate_date(to_date)
-
+    selected = str(reporting_uuid(category_id)) if category_id else None
     with get_db() as db:
-        query = db.query(
-            Transaction.merchant,
-            func.sum(func.abs(Transaction.amount)).label("total"),
-            func.count(Transaction.id).label("count"),
-        ).filter(
-            account_access(Transaction.account_id, user_id),
-            Transaction.amount < 0,  # Only expenses
-            Transaction.merchant.isnot(None),
-            Transaction.merchant != "",
-            Transaction.include_in_analytics == True
-        )
-
-        if cat_uuid:
-            query = query.filter(
-                or_(
-                    Transaction.category_id == cat_uuid,
-                    and_(
-                        Transaction.category_id.is_(None),
-                        Transaction.category_system_id == cat_uuid,
+        summary = FinancialActivity(
+            db, user_id, scope=scope, person_ids=person_ids
+        ).summarize(from_date=from_date, to_date=to_date)
+        merchants = {}
+        for entry in summary["entries"] + summary["unknown_entries"]:
+            if (
+                entry["kind"] != "consumption"
+                or (selected and entry["category_id"] != selected)
+                or (uncategorized and entry["category_id"] != "uncategorized")
+            ):
+                continue
+            name = entry["merchant"] or entry["description"] or "Unknown merchant"
+            row = merchants.setdefault(
+                name,
+                {"merchant": name, "total": ZERO, "known_total": ZERO, "ids": set()},
+            )
+            row["ids"].add(entry["id"])
+            if entry["amount"] is None:
+                row["total"] = None
+            else:
+                row["known_total"] += entry["amount"]
+                if row["total"] is not None:
+                    row["total"] += entry["amount"]
+        return json_numbers(
+            [
+                {key: value for key, value in row.items() if key != "ids"}
+                | {
+                    "count": len(row["ids"]),
+                    "currency": summary["currency"],
+                    "scope": summary["scope"],
+                    "accounts": summary["accounts"],
+                    "complete": row["total"] is not None,
+                }
+                for row in sorted(
+                    merchants.values(),
+                    key=lambda row: (
+                        row["total"] is not None,
+                        -row["known_total"],
+                        row["merchant"],
                     ),
-                )
-            )
-
-        if uncategorized:
-            query = query.filter(
-                Transaction.category_id.is_(None),
-                Transaction.category_system_id.is_(None),
-            )
-
-        if from_dt:
-            query = query.filter(Transaction.booked_at >= from_dt)
-
-        if to_dt:
-            query = query.filter(Transaction.booked_at <= to_dt)
-
-        results = (
-            query.group_by(Transaction.merchant)
-            .order_by(func.sum(func.abs(Transaction.amount)).desc())
-            .limit(limit)
-            .all()
+                )[: min(max(1, limit), 50)]
+            ]
         )
-
-        return [
-            {
-                "merchant": r.merchant,
-                "total": float(r.total) if r.total else 0,
-                "count": r.count,
-            }
-            for r in results
-        ]

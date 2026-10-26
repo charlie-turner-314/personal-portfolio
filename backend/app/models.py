@@ -358,7 +358,10 @@ class Transaction(Base):
     transaction_type = Column(String(20))  # debit, credit
     amount = Column(Numeric(15, 2), nullable=False)
     currency = Column(String(3), default="EUR")
-    functional_amount = Column(Numeric(15, 2), nullable=True)  # Amount converted to user's functional currency
+    functional_amount = Column(Numeric(15, 2), nullable=True)  # Amount converted to custodian currency
+    cash_flow_kind = Column(String(20), nullable=True)
+    cash_flow_allocation_amount = Column(Numeric(15, 2), nullable=True)
+    cash_flow_parts = Column(JSONB, nullable=True)
     description = Column(Text)
     merchant = Column(String(255))
     creditor = Column(String(255), nullable=True)   # Counterparty name for debits (payee)
