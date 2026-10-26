@@ -376,12 +376,16 @@ def list_investment_import_source_records(
 @router.post("/imports/{run_id:uuid}/revert")
 def revert_investment_import(
     run_id: UUID,
+    background_tasks: BackgroundTasks,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
     try:
-        return revert_run(db, user_id=user_id, run_id=run_id)
+        result = revert_run(db, user_id=user_id, run_id=run_id)
+        run = db.query(InvestmentIngestionRun).filter_by(id=run_id, user_id=user_id).one()
+        _enqueue_account_refresh(db, background_tasks, run.account_id)
+        return result
     except ActivityApplicationError as exc:
         status_code = 404 if "not found" in str(exc) else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc

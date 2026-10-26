@@ -340,7 +340,8 @@ function HoldingRow({
         <Field label="Instrument type" className="flex-1">
           <ToggleGroup
             aria-label="Instrument type"
-            className="flex flex-wrap"
+            className="grid w-full grid-cols-2 gap-1"
+            spacing={1}
             multiple={false}
             value={[row.type]}
             onValueChange={(v) =>
@@ -353,7 +354,7 @@ function HoldingRow({
               <ToggleGroupItem
                 key={t}
                 value={t}
-                className="capitalize flex-1"
+                className="capitalize min-w-0"
               >
                 {t === "etf" ? "ETF" : t === "fund" ? "Managed fund" : t}
               </ToggleGroupItem>

@@ -5,6 +5,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 
 const container = process.env.INVESTMENT_UAT_DB_CONTAINER;
+test.use({ actionTimeout: 15_000 });
 test.skip(!container, "Requires an explicitly selected isolated release-lab database");
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 function card(page: Page, title: string) {
@@ -122,9 +123,12 @@ test("Australian investment import, fractional NAV, ownership, FY and mixed curr
   await page.getByRole("option", { name: "+ Create new account…", exact: true }).click();
   await page.getByLabel("New account name", { exact: true }).fill("AU manual crypto");
   await page.getByPlaceholder("Search symbol or name…").fill(cryptoSymbol);
-  await page.getByRole("button", { name: "Crypto", exact: true }).click();
+  await page.getByRole("button", { name: "crypto", exact: true }).click();
   await page.getByLabel("Quantity", { exact: true }).fill("0.125");
   await fits(page);
+  for (const button of await page.getByRole("group", { name: "Instrument type", exact: true }).getByRole("button").all()) {
+    expect(await button.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBeTruthy();
+  }
   await page.screenshot({ path: testInfo.outputPath("investment-entry-mobile.png"), fullPage: true });
   await page.getByRole("button", { name: "Add 1 holding", exact: true }).click();
   await expect(page).toHaveURL(/\/investments$/);

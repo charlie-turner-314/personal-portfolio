@@ -318,6 +318,7 @@ def test_backfill_history_partial_import_preserves_other_holdings_balance(
         quantity=Decimal("5"),
         price=Decimal("300"),
         value_user_currency=Decimal("1500.00"),
+        value_currency="USD",
         is_stale=False,
     ))
     db_session.commit()
@@ -366,3 +367,36 @@ def test_backfill_history_no_quotes_no_rows(db_session, investment_account_with_
         HoldingValuation.holding_id == ctx["holding"].id
     ).count()
     assert rows == 0
+
+
+def test_backfill_never_substitutes_current_fx(db_session, investment_account_with_aapl):
+    ctx = investment_account_with_aapl
+    db_session.get(User, ctx['user_id']).functional_currency = 'AUD'
+    ctx['account'].currency = 'AUD'
+    db_session.commit()
+
+    class MissingDatedFx:
+        def get_exchange_rate(self, *args):
+            return None
+        def get_exchange_rate_with_fallback(self, *args):
+            pytest.fail('Historical rebuild must never fall back to current FX')
+
+    result = backfill_history(db_session, ctx['account'], ['AAPL'], price_provider=_FakePriceProvider({ctx['trade_date']: Decimal('150')}), fx_service=MissingDatedFx())
+    assert result == {'valuations_upserted': 0, 'balances_upserted': 0}
+
+
+def test_backfill_converts_each_existing_valuation_from_its_recorded_currency(db_session, investment_account_with_aapl):
+    ctx = investment_account_with_aapl
+    msft = Holding(user_id=ctx['user_id'], account_id=ctx['account'].id, symbol='MSFT', currency='USD', instrument_type='equity', quantity=5, source='manual', as_of_date=ctx['trade_date'])
+    db_session.add(msft); db_session.flush()
+    db_session.add(HoldingValuation(holding_id=msft.id, date=ctx['trade_date'], quantity=5, price=300, value_user_currency=1500, value_currency='EUR', quote_currency='USD', is_stale=False))
+    db_session.commit()
+    try:
+        result = backfill_history(db_session, ctx['account'], ['AAPL'], price_provider=_FakePriceProvider({ctx['trade_date']: Decimal('150')}), fx_service=_FakeFx(Decimal('2')))
+        balance = db_session.query(AccountBalance).filter_by(account_id=ctx['account'].id, date=ctx['trade_date']).one()
+        assert balance.balance_in_account_currency == Decimal('4500')
+        # Other days lack MSFT observations: do not overwrite them with AAPL-only totals.
+        assert result['balances_upserted'] == 1
+    finally:
+        db_session.query(HoldingValuation).filter_by(holding_id=msft.id).delete()
+        db_session.delete(msft); db_session.commit()

@@ -437,3 +437,22 @@ def test_linked_household_scope_never_bypasses_account_grants(client, db):
     db.query(HouseholdAccountShare).filter_by(account_id=account.id).delete(); db.commit()
     scope = InvestmentScope(db, "investment-member", "self")
     assert scope.share(account.id, date(2026, 10, 26)) == 0
+
+
+def test_incomplete_ibkr_lots_preserve_source_and_do_not_break_portfolio(client, db):
+    from app.integrations.ibkr_flex_adapter import ParsedTrade
+    from app.models import BrokerTrade, CgtAllocation
+    from app.services.investment_sync_service import InvestmentSyncService
+    account, holding = position(db, quantity="-1")
+    holding.source = "ibkr_flex"
+    db.commit()
+    trade = ParsedTrade(external_id="short-without-opening-lots", symbol=holding.symbol, trade_date=date(2026, 10, 20), side="sell", quantity=Decimal(1), price=Decimal(100), currency="AUD", instrument_type="equity", fees=Decimal(1), fee_currency="AUD")
+    service = InvestmentSyncService(db, fx=MagicMock())
+    assert service._upsert_trades(account, [trade]) == 1
+    db.commit()
+    assert db.query(BrokerTrade).one().valuation_missing is True
+    assert db.query(CgtAllocation).count() == 0
+    assert holding.quantity == -1
+    result = client.get("/api/investments/holdings")
+    assert result.status_code == 200, result.text
+    assert result.json()[0]["cost_basis_user_currency"] is None

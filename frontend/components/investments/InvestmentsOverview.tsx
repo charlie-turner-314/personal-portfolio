@@ -83,7 +83,7 @@ export function InvestmentsOverview({
   // Real cost basis & unrealized P&L from per-holding cost_basis_user_currency
   // (server-side dated lots or an explicitly identified manual opening estimate).
   //
-  // "Active position" = one we still hold (quantity > 0). This INCLUDES
+  // "Active position" = one we still hold (quantity != 0). This INCLUDES
   // holdings that are currently worth zero (e.g. delisted/worthless stock
   // we haven't sold) — those are real unrealized losses and must be
   // counted. EXCLUDES fully-sold positions (qty=0, avg_cost=null), whose

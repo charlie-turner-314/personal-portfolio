@@ -245,7 +245,7 @@ class InvestmentSyncService:
             if incomplete or mismatches:
                 reasons = []
                 if incomplete:
-                    reasons.append(f"{incomplete} trade(s) have missing commission or historical fee FX inputs")
+                    reasons.append(f"{incomplete} trade input(s) have missing commission, fee FX or supportable opening-lot history")
                 if mismatches:
                     reasons.append("Recorded trade quantities differ from broker positions for: " + ", ".join(mismatches))
                 trades_error = "; ".join(reasons)
@@ -965,5 +965,5 @@ class InvestmentSyncService:
             incomplete += fees is None
             keys.add((trade.symbol, trade.instrument_type))
         self.db.flush()
-        rebuild_recorded_cgt(self.db, account, keys)
+        incomplete += rebuild_recorded_cgt(self.db, account, keys)
         return incomplete
