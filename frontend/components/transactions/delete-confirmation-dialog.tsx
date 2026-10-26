@@ -128,25 +128,25 @@ export function DeleteConfirmationDialog({
                       <span
                         className={cn(
                           "text-xs font-mono",
-                          acc.amountChange > 0 ? "text-emerald-600" : "text-destructive"
+                          acc.amountChange !== null && acc.amountChange > 0 ? "text-emerald-600" : "text-destructive"
                         )}
                       >
-                        {acc.amountChange > 0 ? "+" : ""}
-                        {formatAmount(acc.amountChange, acc.currency)}
+                        {acc.amountChange !== null && acc.amountChange > 0 ? "+" : ""}
+                        {acc.amountChange === null ? "Unavailable" : formatAmount(acc.amountChange, acc.currency)}
                       </span>
                     </div>
                     {acc.balanceIsAnchored ? (
                       <div className="flex items-start gap-1.5 text-xs text-amber-600">
                         <RiAlertLine className="size-3.5 shrink-0 mt-0.5" />
                         <span>
-                          Anchored balance — deletion will create a reconciliation gap. Verify your balance after deletion.
+                          Recorded balances are retained. Deletion may leave a reconciliation difference; verify the remaining activity.
                         </span>
                       </div>
                     ) : (
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>New balance</span>
+                        <span>Estimated balance after deletion</span>
                         <span className="font-mono">
-                          {formatAmount(acc.projectedBalance, acc.currency)}
+                          {acc.projectedBalance === null ? "Unavailable" : formatAmount(acc.projectedBalance, acc.currency)}
                         </span>
                       </div>
                     )}
@@ -158,7 +158,7 @@ export function DeleteConfirmationDialog({
                 <div className="flex items-start gap-2 rounded-none border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400">
                   <RiErrorWarningLine className="size-4 shrink-0 mt-0.5" />
                   <span>
-                    One or more affected accounts have an anchored balance derived from known bank data. After deletion, the opening and closing balances on record may no longer agree with the remaining transactions.
+                    One or more affected accounts have recorded balance anchors. Those values stay intact; opening and closing balances may no longer agree with the remaining transactions.
                   </span>
                 </div>
               )}

@@ -31,7 +31,8 @@ END $$;
 -- Every replacement has a recoverable original, including writes after upgrade.
 CREATE OR REPLACE FUNCTION archive_account_balance_revision() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF to_jsonb(OLD) IS DISTINCT FROM to_jsonb(NEW) THEN
+ IF to_jsonb(OLD) IS DISTINCT FROM to_jsonb(NEW)
+   AND EXISTS (SELECT 1 FROM accounts WHERE id=OLD.account_id) THEN
   INSERT INTO account_balance_revisions(balance_row_id,account_id,snapshot_hash,snapshot)
    VALUES(OLD.id,OLD.account_id,md5(to_jsonb(OLD)::text),to_jsonb(OLD)) ON CONFLICT DO NOTHING;
  END IF;

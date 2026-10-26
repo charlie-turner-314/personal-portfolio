@@ -22,8 +22,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { createOrUpdateBalancingTransaction } from "@/lib/actions/transactions";
-import { getCategoryByName } from "@/lib/actions/categories";
+import { recordAccountBalance } from "@/lib/actions/account-balances";
 import { getAccountBalanceOnDate } from "@/lib/actions/accounts";
 
 interface UpdateBalanceDialogProps {
@@ -48,11 +47,10 @@ export function UpdateBalanceDialog({
   const [adjustmentDate, setAdjustmentDate] = useState<Date>(new Date());
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
-  const [balancingCategoryId, setBalancingCategoryId] = useState<string | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [balanceOnDate, setBalanceOnDate] = useState<number | null>(null);
 
-  const currency = account.currency || "EUR";
+  const currency = account.currency || "XXX";
   const newBalanceValue = parseFloat(newBalance) || 0;
   const difference = balanceOnDate === null ? null : newBalanceValue - balanceOnDate;
 
@@ -64,23 +62,16 @@ export function UpdateBalanceDialog({
       setBalanceOnDate(result.balance);
     } catch (error) {
       console.error("Failed to fetch balance:", error);
-      // Fallback to current balance
+      // Leave the preview unavailable when its facts cannot be read.
       setBalanceOnDate(null);
     } finally {
       setIsLoadingBalance(false);
     }
   }, [account.id]);
 
-  // Fetch the "Balancing Transfer" category and initial balance on mount
+  // Refresh the selected date when opening the observation form.
   useEffect(() => {
-    async function initialize() {
-      const category = await getCategoryByName("Balancing Transfer");
-      if (category) {
-        setBalancingCategoryId(category.id);
-      }
-    }
     if (open) {
-      initialize();
       // Reset form when dialog opens
       setNewBalance("");
       const today = new Date();
@@ -108,26 +99,17 @@ export function UpdateBalanceDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!balancingCategoryId) {
-      toast.error("Balancing Transfer category not found. Please ensure it exists.");
-      return;
-    }
-
     setIsLoading(true);
 
     try {
-      const result = await createOrUpdateBalancingTransaction({
+      const result = await recordAccountBalance({
         accountId: account.id,
-        targetBalance: newBalanceValue,
-        adjustmentDate,
-        balancingCategoryId,
+        balance: Number(newBalance),
+        date: format(adjustmentDate,"yyyy-MM-dd"),
       });
 
       if (result.success) {
-        const message = result.isUpdate
-          ? "Balance adjustment updated successfully"
-          : "Balance updated successfully";
-        toast.success(message);
+        toast.success("Closing balance recorded");
         onOpenChange(false);
         onSuccess?.();
       } else {
@@ -146,13 +128,13 @@ export function UpdateBalanceDialog({
         <DialogHeader>
           <DialogTitle>Update Balance</DialogTitle>
           <DialogDescription>
-            Adjust the balance for {account.name}. An adjustment transaction will be created.
+            Record the closing balance for {account.name} on the selected date. Superseded values are retained in balance history.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
-              <Label>Adjustment Date</Label>
+              <Label>Closing Date</Label>
               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                 <PopoverTrigger
                   className={cn(
@@ -178,7 +160,7 @@ export function UpdateBalanceDialog({
             </div>
 
             <div className="space-y-2">
-              <Label>Balance on {format(adjustmentDate, "MMM d, yyyy")}</Label>
+              <Label>Recorded or estimated balance on {format(adjustmentDate, "MMM d, yyyy")}</Label>
               <div className="flex items-center gap-2 text-lg font-medium">
                 {isLoadingBalance ? (
                   <RiLoader4Line className="h-4 w-4 animate-spin" />
@@ -203,7 +185,7 @@ export function UpdateBalanceDialog({
 
             {newBalance !== "" && difference !== null && difference !== 0 && (
               <div className="space-y-2 rounded-md border p-3">
-                <Label className="text-sm text-muted-foreground">Adjustment Amount</Label>
+                <Label className="text-sm text-muted-foreground">Difference from current record</Label>
                 <div
                   className={cn(
                     "text-lg font-medium",
@@ -213,8 +195,8 @@ export function UpdateBalanceDialog({
                   {formatCurrencyValue(difference, true)}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  A {difference > 0 ? "credit" : "debit"} transaction will be created with category
-                  &quot;Balancing Transfer&quot;
+                  The supplied closing balance will replace the current observation for this date.
+                  This difference remains available for reconciliation.
                 </p>
               </div>
             )}
@@ -230,7 +212,7 @@ export function UpdateBalanceDialog({
             </Button>
             <Button
               type="submit"
-              disabled={isLoading || isLoadingBalance || !newBalance || !balancingCategoryId}
+              disabled={isLoading || isLoadingBalance || newBalance === "" || !Number.isFinite(Number(newBalance))}
             >
               {isLoading ? "Updating..." : "Update Balance"}
             </Button>

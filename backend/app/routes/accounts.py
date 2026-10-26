@@ -574,6 +574,10 @@ def recalculate_account_timeseries(
     from app.services.account_balance_service import AccountBalanceService
     user_id = get_user_id(user_id)
 
+    # Serialize permission resolution and derived writes with household revocation.
+    from sqlalchemy import text
+    db.execute(text("SELECT pg_advisory_xact_lock(73194, 1)"))
+
     # Verify account exists and belongs to user
     account = db.query(Account).filter(
         Account.id == account_id,

@@ -5,7 +5,8 @@ import { convertReportingAmount } from "@/lib/household/reporting-currency";
  * Each movement is converted in its original currency on its own booking date.
  * Unknown amounts remain unknown until a later usable observation resets them.
  */
-export function nativeBalanceEstimate(accountId:string, currency:string|null, startingBalance:number|string, day:string|SQL, excludeTransactionId?:string):SQL<string|null> {
+export function nativeBalanceEstimate(accountId:string, currency:string|null, startingBalance:number|string, day:string|SQL, excludeTransactionId?:string|readonly string[]):SQL<string|null> {
+  const excluded=typeof excludeTransactionId === "string" ? [excludeTransactionId] : excludeTransactionId??[];
   const amount=convertReportingAmount(sql`t.amount`,sql`t.currency`,sql`${currency}`,sql`t.booked_at`);
   return sql`(SELECT CASE WHEN anchor.date IS NOT NULL AND anchor.value IS NULL THEN NULL
       WHEN count(*) FILTER(WHERE activity.id IS NOT NULL AND converted IS NULL)>0 THEN NULL
@@ -17,6 +18,6 @@ export function nativeBalanceEstimate(accountId:string, currency:string|null, st
       ) anchor ON true LEFT JOIN LATERAL (
         SELECT t.id, ${amount} converted FROM transactions t WHERE t.account_id=${accountId}
           AND t.booked_at::date<=${day}::date AND (anchor.date IS NULL OR t.booked_at::date>anchor.date::date)
-          ${excludeTransactionId ? sql`AND t.id<>${excludeTransactionId}` : sql``}
+          ${excluded.length ? sql`AND t.id NOT IN (${sql.join(excluded.map(id=>sql`${id}`),sql`, `)})` : sql``}
       ) activity ON true GROUP BY anchor.date,anchor.value)`;
 }

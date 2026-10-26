@@ -192,6 +192,7 @@ class AccountBalanceService:
                 self.db, native, account.currency, functional_currency, day
             )
             row.balance_source = "statement"
+            row.recorded_by_user_id = None
             row.account_currency = account.currency
             row.functional_currency = functional_currency
             self.db.add(row)

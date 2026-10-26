@@ -972,6 +972,7 @@ export const accountBalances = pgTable(
       .notNull(),
     date: timestamp("date").notNull(), // Date of the balance snapshot
     balanceSource: text("balance_source").notNull().default("legacy"),
+    recordedByUserId: text("recorded_by_user_id").references(() => users.id, { onDelete: "set null" }),
     accountCurrency: varchar("account_currency", { length: 3 }),
     functionalCurrency: varchar("functional_currency", { length: 3 }),
     balanceInAccountCurrency: decimal("balance_in_account_currency", { precision: 15, scale: 2 }), // Balance in account's currency

@@ -734,6 +734,7 @@ class AccountBalance(Base):
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(DateTime, nullable=False, index=True)  # Date of the balance snapshot
     balance_source = Column(String, nullable=False, default="legacy", server_default="legacy")
+    recorded_by_user_id = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     account_currency = Column(String(3), nullable=True)
     functional_currency = Column(String(3), nullable=True)
     balance_in_account_currency = Column(Numeric(15, 2), nullable=True)  # Balance in account's currency

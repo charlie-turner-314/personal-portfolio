@@ -263,3 +263,9 @@ Exact opening/closing reconciliation accepts only independent-source rows in
 the actor's currently permitted accounts, then converts native/declared functional
 units and applies ownership at each boundary. Current/history balances may show
 recorded or estimated values but must not call those estimates independent.
+
+### Manual balance observations and edit semantics
+
+A user-supplied closing balance is an independent observation, not an economic transaction. The account balance dialog records the dated value directly, shows its difference from the current recorded/estimated value, and preserves superseded values in the revision archive. It never creates a synthetic earning, expense or transfer. Existing adjustment transactions remain readable and removable; migration does not rewrite or delete them. Record the submitting actor on new manual observations (nullable for legacy/generated rows). Balance/delete mutations share the lifecycle lock and one database transaction so revocation cannot split a calculation from its authorized write. Deletion previews use account currency and dated conversions; a later recorded anchor remains intact and may leave a reconciliation difference.
+
+Account currency is a unit, not a cosmetic label. A non-empty account cannot be renamed into another currency; original transactions and per-snapshot units stay intact. Empty zero-opening accounts may change currency. Editing an opening assumption refreshes derived estimates while retaining observations. Automatic transfer records must be unlinked through their transfer lifecycle before transaction deletion, preventing an arbitrary leg deletion from orphaning a generated economic record. Ordinary deletion validates the complete permitted selection and never silently deletes only a subset.

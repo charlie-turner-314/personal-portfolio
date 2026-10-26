@@ -32,11 +32,13 @@ const mocks = vi.hoisted(() => {
     insertValues,
     updateSets,
     requireAuth: vi.fn(),
+    recordBalance: vi.fn(),
     revalidatePath: vi.fn(),
     updateTag: vi.fn(),
   };
 });
 
+vi.mock("@/lib/actions/account-balances",()=>({recordAccountBalance:mocks.recordBalance}));
 vi.mock("@/lib/db", () => ({ db: mocks.db }));
 vi.mock("@/lib/household/financial-auth", () => ({ requireAuth: mocks.requireAuth }));
 vi.mock("next/cache", () => ({
@@ -63,6 +65,7 @@ describe("superannuation actions", () => {
     mocks.insertValues.length = 0;
     mocks.updateSets.length = 0;
     mocks.requireAuth.mockReset();
+    mocks.recordBalance.mockReset().mockResolvedValue({success:true});
     mocks.db.insert.mockClear();
     mocks.db.update.mockClear();
     mocks.db.query.superAccounts.findFirst.mockReset();
@@ -128,12 +131,9 @@ describe("superannuation actions", () => {
       date: "2025-07-01", balance: 99_000,
     })).resolves.toEqual({ success: true });
 
-    expect(mocks.insertValues[0]).toEqual(expect.objectContaining({
-      accountId: "account-1",
-      balanceInAccountCurrency: "99000.00",
-      balanceInFunctionalCurrency: "99000.00",
-    }));
-    expect(mocks.db.update).toHaveBeenCalledTimes(1);
+    expect(mocks.recordBalance).toHaveBeenCalledWith({accountId:"account-1",date:"2025-07-01",balance:99_000});
+    expect(mocks.db.insert).not.toHaveBeenCalled();
+    expect(mocks.db.update).not.toHaveBeenCalled();
   });
 
   it("rejects invalid balance snapshots before writing history", async () => {

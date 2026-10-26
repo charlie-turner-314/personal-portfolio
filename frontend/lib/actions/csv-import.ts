@@ -1889,6 +1889,7 @@ export async function importSuperStatement(
             date: new Date(`${date}T12:00:00.000Z`),
             balanceInAccountCurrency: balance.toFixed(2),
             balanceSource: "statement",
+            recordedByUserId: userId,
             accountCurrency: account.currency,
             functionalCurrency: reportingCurrencyForUser(userId),
             balanceInFunctionalCurrency: convertReportingAmount(sql`${balance.toFixed(2)}::numeric`,sql`${account.currency}`,reportingCurrencyForUser(userId),sql`${date}::date`),

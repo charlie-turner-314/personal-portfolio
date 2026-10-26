@@ -1,17 +1,19 @@
 "use server";
 
+import { householdTransaction } from "@/lib/household/transaction";
+import { refreshAccountBalances } from "@/lib/balances/mutations";
 import { nativeBalanceEstimate } from "@/lib/balances/estimate";
 import { requireReportingCoverage } from "@/lib/reporting/coverage";
 import { transactionReportingValue } from "@/lib/reporting/transaction-value";
-import { convertReportingAmount, reportingCurrencyForUser } from "@/lib/household/reporting-currency";
+import { reportingCurrencyForUser } from "@/lib/household/reporting-currency";
 import { categoryAccess } from "@/lib/household/category-access";
 import { validateCashFlowPortions, type CashFlowPortion } from "@/lib/dashboard/cash-flow";
 import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
-import { eq, and, desc, inArray, notInArray, sql, gte, lte, asc, ne, or, ilike, isNull } from "drizzle-orm";
+import { eq, and, desc, inArray, sql, gte, lte, asc, or, ilike, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { transactions, accounts, categories, accountBalances, properties, recurringTransactions } from "@/lib/db/schema";
+import { transactions, accounts, categories, properties, recurringTransactions } from "@/lib/db/schema";
 import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { isDemoRestrictedUserEmail, DEMO_RESTRICTED_ACTION_ERROR } from "@/lib/demo-access";
 import { getBackendBaseUrl } from "@/lib/backend-url";
@@ -34,36 +36,6 @@ export interface CreateTransactionInput {
   merchant?: string;
 }
 
-/** Refresh derived daily estimates after an edit. Recorded observations remain
- * intact and reset subsequent estimates; source names never define anchors. */
-async function recalculateAccountBalancesFromDate(
-  accountId: string,
-  fromDate: Date,
-  startingBalance: number,
-  excludeTransactionId?: string
-): Promise<void> {
-  const account = await db.query.accounts.findFirst({where:eq(accounts.id,accountId)});
-  if (!account) return;
-  const currentDate = new Date(fromDate);
-  currentDate.setUTCHours(0,0,0,0);
-  const today = new Date();
-  today.setUTCHours(0,0,0,0);
-  const functionalCurrency = reportingCurrencyForUser(account.userId);
-  while (currentDate <= today) {
-    const day=currentDate.toISOString().slice(0,10);
-    // A recorded end-of-day value resets the estimate. Neither unknown legacy
-    // rows nor supplied observations are overwritten by recalculation.
-    // COUNT only real activity rows: an empty lateral join is not a missing FX.
-    const correctedNative=nativeBalanceEstimate(accountId,account.currency,startingBalance,day,excludeTransactionId);
-    const values={balanceInAccountCurrency:correctedNative,
-      balanceInFunctionalCurrency:convertReportingAmount(correctedNative,sql`${account.currency}`,functionalCurrency,sql`${day}::date`),
-      balanceSource:"calculated",accountCurrency:account.currency,functionalCurrency};
-    await db.insert(accountBalances).values({accountId,date:new Date(currentDate),...values})
-      .onConflictDoUpdate({target:[accountBalances.accountId,accountBalances.date],set:{...values,updatedAt:new Date()},
-        setWhere:eq(accountBalances.balanceSource,"calculated")});
-    currentDate.setUTCDate(currentDate.getUTCDate()+1);
-  }
-}
 
 export async function createTransaction(
   input: CreateTransactionInput
@@ -1204,300 +1176,13 @@ export async function bulkUpdateTransactionIncludeInAnalytics(
   }
 }
 
-/**
- * Deletes a balancing transfer transaction and recalculates balances.
- * This reverts the balance adjustment as if the transfer never existed.
- */
-export async function deleteBalancingTransaction(
-  transactionId: string
-): Promise<{ success: boolean; error?: string }> {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return { success: false, error: "Not authenticated" };
-  }
-
-  try {
-    // Get the transaction with its account and category
-    const transaction = await db.query.transactions.findFirst({
-      where: and(
-        eq(transactions.id, transactionId),
-        accountAccess(transactions.accountId, userId)
-      ),
-      with: {
-        account: true,
-        category: true,
-      },
-    });
-
-    if (!transaction) {
-      return { success: false, error: "Transaction not found" };
-    }
-
-    // Verify this is a "Balancing Transfer" category
-    if (!transaction.category || transaction.category.name !== "Balancing Transfer") {
-      return { success: false, error: "Only balancing transfers can be reverted" };
-    }
-
-    const accountId = transaction.accountId;
-    const transactionDate = transaction.bookedAt;
-
-    // Get the account's starting balance for recalculation
-    const account = transaction.account;
-    if (!account) {
-      return { success: false, error: "Transaction account not found" };
-    }
-    const startingBalance = parseFloat(account.startingBalance || "0");
-
-    // Delete the transaction
-    await db.delete(transactions).where(and(eq(transactions.id, transactionId), accountAccess(transactions.accountId, userId)));
-
-    // Recalculate balances from the deleted transaction's date
-    // Pass the transactionId to exclude it from balance calculations
-    // (the transaction is deleted but we pass it for the recalculation logic to find the next balancing transfer correctly)
-    await recalculateAccountBalancesFromDate(
-      accountId,
-      transactionDate,
-      startingBalance,
-      transactionId
-    );
-
-    // Update the account's functional_balance
-    const balanceResult = await db
-      .select({
-        total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(eq(transactions.accountId, accountId));
-
-    const transactionSum = parseFloat(balanceResult[0]?.total || "0");
-    const newFunctionalBalance = startingBalance + transactionSum;
-
-    await db
-      .update(accounts)
-      .set({
-        functionalBalance: newFunctionalBalance.toFixed(2),
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
-
-    revalidatePath("/transactions");
-    revalidatePath("/");
-    revalidatePath("/settings");
-    revalidatePath("/assets");
-
-    return { success: true };
-  } catch (error) {
-    console.error("Failed to delete balancing transaction:", error);
-    return { success: false, error: "Failed to revert balancing transfer" };
-  }
-}
-
-export interface CreateOrUpdateBalancingTransactionInput {
-  accountId: string;
-  targetBalance: number;
-  adjustmentDate: Date;
-  balancingCategoryId: string;
-}
-
-/**
- * Creates or updates a balancing transfer for a specific date.
- * If a balancing transfer already exists on that date for the account, it updates it.
- * Otherwise, it creates a new one.
- * In both cases, balances are recalculated.
- */
-export async function createOrUpdateBalancingTransaction(
-  input: CreateOrUpdateBalancingTransactionInput
-): Promise<{ success: boolean; error?: string; transactionId?: string; isUpdate?: boolean }> {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return { success: false, error: "Not authenticated" };
-  }
-
-  try {
-    const { accountId, targetBalance, adjustmentDate, balancingCategoryId } = input;
-
-    // Verify the account belongs to the user
-    const account = await db.query.accounts.findFirst({
-      where: and(
-        eq(accounts.id, accountId),
-        accountAccess(accounts.id, userId)
-      ),
-    });
-
-    if (!account) {
-      return { success: false, error: "Account not found" };
-    }
-
-    // Verify the category belongs to the user
-    const category = await db.query.categories.findFirst({
-      where: and(
-        eq(categories.id, balancingCategoryId),
-        eq(categories.userId, userId)
-      ),
-    });
-
-    if (!category || category.name !== "Balancing Transfer") {
-      return { success: false, error: "Invalid balancing transfer category" };
-    }
-
-    // Normalize date to start and end of day for searching
-    const startOfDay = new Date(adjustmentDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(adjustmentDate);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    // Check if there's already a balancing transfer on this date for this account
-    const existingBalancingTransfer = await db.query.transactions.findFirst({
-      where: and(
-        eq(transactions.accountId, accountId),
-        eq(transactions.categoryId, balancingCategoryId),
-        gte(transactions.bookedAt, startOfDay),
-        lte(transactions.bookedAt, endOfDay)
-      ),
-    });
-
-    const startingBalance = parseFloat(account.startingBalance || "0");
-
-    // Calculate what the balance would be on this date WITHOUT any balancing transfer
-    // We need to exclude the existing balancing transfer (if any) from the calculation
-    const balanceConditions = [
-      eq(transactions.accountId, accountId),
-      lte(transactions.bookedAt, endOfDay)
-    ];
-
-    if (existingBalancingTransfer) {
-      balanceConditions.push(ne(transactions.id, existingBalancingTransfer.id));
-    }
-
-    const balanceWithoutAdjustment = await db
-      .select({
-        total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(and(...balanceConditions));
-
-    const transactionSumWithoutAdjustment = parseFloat(balanceWithoutAdjustment[0]?.total || "0");
-    const currentBalanceWithoutAdjustment = startingBalance + transactionSumWithoutAdjustment;
-
-    // Calculate the required adjustment amount
-    const difference = targetBalance - currentBalanceWithoutAdjustment;
-
-    if (Math.abs(difference) < 0.01) {
-      // No adjustment needed - if there's an existing balancing transfer, delete it
-      if (existingBalancingTransfer) {
-        await db.delete(transactions).where(eq(transactions.id, existingBalancingTransfer.id));
-
-        // Recalculate balances
-        await recalculateAccountBalancesFromDate(
-          accountId,
-          adjustmentDate,
-          startingBalance,
-          existingBalancingTransfer.id
-        );
-
-        // Update functional balance
-        const newBalanceResult = await db
-          .select({
-            total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-          })
-          .from(transactions)
-          .where(eq(transactions.accountId, accountId));
-
-        const newFunctionalBalance = startingBalance + parseFloat(newBalanceResult[0]?.total || "0");
-
-        await db
-          .update(accounts)
-          .set({
-            functionalBalance: newFunctionalBalance.toFixed(2),
-            updatedAt: new Date(),
-          })
-          .where(eq(accounts.id, accountId));
-
-        revalidatePath("/transactions");
-        revalidatePath("/");
-        revalidatePath("/settings");
-        revalidatePath("/assets");
-
-        return { success: true, isUpdate: true };
-      }
-      return { success: true };
-    }
-
-    const transactionType = difference > 0 ? "credit" : "debit";
-    // Keep the sign! Debits should be negative, credits positive.
-    // The balance formula is: balance = starting_balance + SUM(transactions.amount)
-    const amount = difference;
-
-    let transactionId: string;
-    let isUpdate = false;
-
-    if (existingBalancingTransfer) {
-      // Update existing transaction
-      await db
-        .update(transactions)
-        .set({
-          amount: amount.toString(),
-          transactionType,
-          updatedAt: new Date(),
-        })
-        .where(eq(transactions.id, existingBalancingTransfer.id));
-
-      transactionId = existingBalancingTransfer.id;
-      isUpdate = true;
-    } else {
-      // Create new transaction
-      const [result] = await db.insert(transactions).values({
-        userId: account.userId,
-        accountId,
-        amount: amount.toString(),
-        description: "Balance adjustment",
-        categoryId: balancingCategoryId,
-        bookedAt: adjustmentDate,
-        transactionType,
-        currency: account.currency || "EUR",
-      }).returning({ id: transactions.id });
-
-      transactionId = result.id;
-    }
-
-    // Recalculate balances from the adjustment date
-    await recalculateAccountBalancesFromDate(
-      accountId,
-      adjustmentDate,
-      startingBalance
-    );
-
-    // Update the account's functional_balance
-    const balanceResult = await db
-      .select({
-        total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(eq(transactions.accountId, accountId));
-
-    const transactionSum = parseFloat(balanceResult[0]?.total || "0");
-    const newFunctionalBalance = startingBalance + transactionSum;
-
-    await db
-      .update(accounts)
-      .set({
-        functionalBalance: newFunctionalBalance.toFixed(2),
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
-
-    revalidatePath("/transactions");
-    revalidatePath("/");
-    revalidatePath("/settings");
-    revalidatePath("/assets");
-
-    return { success: true, transactionId, isUpdate };
-  } catch (error) {
-    console.error("Failed to create/update balancing transaction:", error);
-    return { success: false, error: "Failed to update balance" };
-  }
+/** Existing adjustment records retain their history; new balances are observations. */
+export async function deleteBalancingTransaction(transactionId:string):Promise<{success:boolean;error?:string}> {
+  const actor=await requireAuth();
+  if(!actor) return {success:false,error:"Not authenticated"};
+  const record=await db.query.transactions.findFirst({where:and(eq(transactions.id,transactionId),accountAccess(transactions.accountId,actor)),with:{category:true}});
+  if(!record || record.category?.name!=="Balancing Transfer") return {success:false,error:"Balance adjustment not found"};
+  return deleteTransactions([transactionId]);
 }
 
 // ============================================================================
@@ -1505,200 +1190,87 @@ export async function createOrUpdateBalancingTransaction(
 // ============================================================================
 
 export interface AccountDeleteImpact {
-  accountId: string;
-  accountName: string;
-  currency: string;
-  amountChange: number;
-  currentBalance: number;
-  projectedBalance: number;
-  balanceIsAnchored: boolean;
+  accountId:string;
+  accountName:string;
+  currency:string;
+  amountChange:number|null;
+  currentBalance:number|null;
+  projectedBalance:number|null;
+  balanceIsAnchored:boolean;
 }
-
 export interface DeleteImpact {
-  accountImpacts: AccountDeleteImpact[];
-  totalTransactions: number;
-  earliestDate: Date;
+  accountImpacts:AccountDeleteImpact[];
+  totalTransactions:number;
+  earliestDate:Date;
 }
 
-/**
- * Computes the balance impact of deleting a set of transactions without modifying any data.
- * Used to populate the delete confirmation dialog before the user confirms.
- */
-export async function getDeleteImpact(
-  transactionIds: string[]
-): Promise<{ success: true; data: DeleteImpact } | { success: false; error: string }> {
-  const userId = await requireAuth();
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!transactionIds.length) return { success: false, error: "No transactions selected" };
-
+/** Preview the same permitted records and dated units used by the deletion. */
+export async function getDeleteImpact(transactionIds:string[]):Promise<{success:true;data:DeleteImpact}|{success:false;error:string}> {
+  const actor=await requireAuth();
+  if(!actor) return {success:false,error:"Not authenticated"};
+  const ids=[...new Set(transactionIds)];
+  if(!ids.length) return {success:false,error:"No transactions selected"};
   try {
-    const txRows = await db.query.transactions.findMany({
-      where: and(
-        inArray(transactions.id, transactionIds),
-        accountAccess(transactions.accountId, userId)
-      ),
-      with: { account: true },
-    });
-
-    if (!txRows.length) return { success: false, error: "Transactions not found" };
-
-    // Group by account
-    const byAccount = new Map<
-      string,
-      { account: NonNullable<(typeof txRows)[0]["account"]>; amountSum: number; earliestDate: Date }
-    >();
-
-    for (const tx of txRows) {
-      if (!tx.account) continue;
-      const amount = parseFloat(tx.amount);
-      const existing = byAccount.get(tx.accountId);
-      if (existing) {
-        existing.amountSum += amount;
-        if (tx.bookedAt < existing.earliestDate) existing.earliestDate = tx.bookedAt;
-      } else {
-        byAccount.set(tx.accountId, { account: tx.account, amountSum: amount, earliestDate: tx.bookedAt });
+    const data=await householdTransaction(async tx=>{
+      const rows=await tx.query.transactions.findMany({where:and(inArray(transactions.id,ids),accountAccess(transactions.accountId,actor)),with:{account:true}});
+      if(rows.length!==ids.length) throw new Error("Selection no longer available");
+      if(rows.some(row=>row.internalTransferId)) throw new Error("Unlink automatic transfers before deleting their records");
+      const byAccount=new Map(rows.filter(row=>row.account).map(row=>[row.accountId,row.account!]));
+      const accountImpacts:AccountDeleteImpact[]=[];
+      const day=new Date().toISOString().slice(0,10);
+      for(const [accountId,account] of byAccount) {
+        const [values]=await tx.select({
+          current:nativeBalanceEstimate(accountId,account.currency,account.startingBalance??"0",day),
+          projected:nativeBalanceEstimate(accountId,account.currency,account.startingBalance??"0",day,ids),
+          recorded:sql<boolean>`EXISTS(SELECT 1 FROM account_balances ab WHERE ab.account_id=${accountId} AND ab.balance_source<>'calculated' AND ab.date::date<=${day}::date)`,
+        }).from(accounts).where(and(eq(accounts.id,accountId),accountAccess(accounts.id,actor)));
+        if(!values) throw new Error("Selection no longer available");
+        const current=values.current===null?null:Number(values.current), projected=values.projected===null?null:Number(values.projected);
+        accountImpacts.push({accountId,accountName:account.name,currency:account.currency??"XXX",
+          currentBalance:current,projectedBalance:projected,amountChange:current===null||projected===null?null:projected-current,
+          balanceIsAnchored:values.recorded||!!account.balanceIsAnchored});
       }
-    }
-
-    const accountImpacts: AccountDeleteImpact[] = [];
-    let overallEarliestDate = new Date(8640000000000000); // max-date sentinel for min-reduction
-
-    // Single grouped query replaces the previous per-account SUM inside the loop (N queries → 1).
-    const accountIds = Array.from(byAccount.keys());
-    const remainingSums = await db
-      .select({
-        accountId: transactions.accountId,
-        sum: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(
-        and(
-          inArray(transactions.accountId, accountIds),
-          accountAccess(transactions.accountId, userId),
-          notInArray(transactions.id, transactionIds)
-        )
-      )
-      .groupBy(transactions.accountId);
-    const remainingSumMap = new Map(remainingSums.map((r) => [r.accountId, r.sum]));
-
-    for (const [accountId, { account, amountSum, earliestDate }] of byAccount) {
-      const currentBalance = parseFloat(account.functionalBalance || "0");
-      const startingBalance = parseFloat(account.startingBalance || "0");
-      const projectedBalance = startingBalance + parseFloat(remainingSumMap.get(accountId) ?? "0");
-
-      accountImpacts.push({
-        accountId,
-        accountName: account.name,
-        currency: account.currency ?? "EUR",
-        // Debits are stored as negative amounts; credits as positive (schema convention).
-        // Deleting a debit raises the balance (+), deleting a credit lowers it (-).
-        amountChange: -amountSum,
-        currentBalance,
-        projectedBalance,
-        balanceIsAnchored: account.balanceIsAnchored ?? false,
-      });
-
-      if (earliestDate < overallEarliestDate) overallEarliestDate = earliestDate;
-    }
-
-    return {
-      success: true,
-      data: {
-        accountImpacts,
-        totalTransactions: txRows.length,
-        earliestDate: overallEarliestDate,
-      },
-    };
-  } catch (error) {
-    console.error("Failed to compute delete impact:", error);
-    return { success: false, error: "Failed to compute impact" };
-  }
+      return {accountImpacts,totalTransactions:rows.length,earliestDate:new Date(Math.min(...rows.map(row=>row.bookedAt.valueOf())))};
+    });
+    return {success:true,data};
+  } catch(error) {return {success:false,error:error instanceof Error && error.message.startsWith("Unlink ") ? error.message : "Selection no longer available; refresh your transactions"};}
 }
 
-/**
- * Permanently deletes a set of transactions and updates account balances.
- * All transactions must belong to the authenticated user.
- * Balance recalculation runs after deletion.
+/** Delete the complete authorized selection and refresh derived caches atomically.
+ * Recorded balances are independent evidence and survive transaction deletion.
  */
-export async function deleteTransactions(
-  transactionIds: string[]
-): Promise<{ success: boolean; error?: string; affectedAccountIds?: string[]; deletedCount?: number }> {
-  const session = await getAuthenticatedSession();
-  const userId = session?.user?.id ?? null;
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (isDemoRestrictedUserEmail(session?.user?.email)) {
-    return { success: false, error: DEMO_RESTRICTED_ACTION_ERROR };
-  }
-  if (!transactionIds.length) return { success: false, error: "No transactions selected" };
-
+export async function deleteTransactions(transactionIds:string[]):Promise<{success:boolean;error?:string;affectedAccountIds?:string[];deletedCount?:number}> {
+  const session=await getAuthenticatedSession();
+  const actor=session?.user?.id;
+  if(!actor) return {success:false,error:"Not authenticated"};
+  if(isDemoRestrictedUserEmail(session.user.email)) return {success:false,error:DEMO_RESTRICTED_ACTION_ERROR};
+  const ids=[...new Set(transactionIds)];
+  if(!ids.length) return {success:false,error:"No transactions selected"};
   try {
-    // Fetch target transactions to get per-account data before deleting
-    const txRows = await db.query.transactions.findMany({
-      where: and(
-        inArray(transactions.id, transactionIds),
-        accountAccess(transactions.accountId, userId)
-      ),
-      with: { account: true },
-    });
-
-    if (!txRows.length) return { success: false, error: "Transactions not found" };
-    // No strict length equality check: the DELETE is already user-scoped (userId in WHERE),
-    // so foreign or concurrently-deleted IDs are safely ignored rather than aborting the batch.
-
-    // Build per-account: earliest bookedAt for recalculation range
-    const accountData = new Map<string, { startingBalance: number; earliestDate: Date }>();
-    for (const tx of txRows) {
-      if (!tx.account) continue;
-      const existing = accountData.get(tx.accountId);
-      if (existing) {
-        if (tx.bookedAt < existing.earliestDate) existing.earliestDate = tx.bookedAt;
-      } else {
-        accountData.set(tx.accountId, {
-          startingBalance: parseFloat(tx.account.startingBalance || "0"),
-          earliestDate: tx.bookedAt,
-        });
+    const result=await householdTransaction(async tx=>{
+      await tx.execute(sql`SELECT id FROM transactions WHERE id IN (${sql.join(ids.map(id=>sql`${id}::uuid`),sql`, `)}) AND ${accountAccess(sql`transactions.account_id`,actor)} ORDER BY id FOR UPDATE`);
+      const rows=await tx.query.transactions.findMany({where:and(inArray(transactions.id,ids),accountAccess(transactions.accountId,actor)),with:{account:true}});
+      if(rows.length!==ids.length) throw new Error("Selection no longer available; refresh your transactions");
+      // A linked generated leg is maintained by its transfer lifecycle. Removing
+      // an arbitrary leg here would orphan a second economic record.
+      if(rows.some(row=>row.internalTransferId)) throw new Error("Unlink automatic transfers before deleting their records");
+      const byAccount=new Map<string,{startingBalance:number;earliest:Date}>();
+      for(const row of rows) {
+        if(!row.account) throw new Error("Selection no longer available; refresh your transactions");
+        const existing=byAccount.get(row.accountId);
+        if(existing) {if(row.bookedAt<existing.earliest) existing.earliest=row.bookedAt;}
+        else byAccount.set(row.accountId,{startingBalance:Number(row.account.startingBalance??0),earliest:row.bookedAt});
       }
-    }
-
-    // Delete all transactions (userId filter ensures security)
-    await db
-      .delete(transactions)
-      .where(and(inArray(transactions.id, transactionIds), accountAccess(transactions.accountId, userId)));
-
-    // Update functionalBalance and recalculate daily snapshots per affected account
-    const affectedAccountIds: string[] = [];
-    for (const [accountId, { startingBalance, earliestDate }] of accountData) {
-      affectedAccountIds.push(accountId);
-
-      // Recompute functionalBalance from remaining transactions
-      const balanceResult = await db
-        .select({ total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)` })
-        .from(transactions)
-        .where(and(eq(transactions.accountId, accountId), accountAccess(transactions.accountId, userId)));
-
-      const transactionSum = parseFloat(balanceResult[0]?.total || "0");
-      const newFunctionalBalance = startingBalance + transactionSum;
-
-      await db
-        .update(accounts)
-        .set({ functionalBalance: newFunctionalBalance.toFixed(2), updatedAt: new Date() })
-        .where(and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)));
-
-      // Rebuild daily balance snapshots from the earliest deleted transaction date
-      await recalculateAccountBalancesFromDate(accountId, earliestDate, startingBalance);
-    }
-
-    revalidatePath("/transactions");
-    revalidatePath("/");
-    revalidatePath("/settings");
-    revalidatePath("/assets");
-    revalidatePath("/subscriptions");
-
-    return { success: true, affectedAccountIds, deletedCount: txRows.length };
-  } catch (error) {
-    console.error("Failed to delete transactions:", error);
-    return { success: false, error: "Failed to delete transactions" };
-  }
+      const deleted=await tx.delete(transactions).where(and(inArray(transactions.id,ids),accountAccess(transactions.accountId,actor))).returning({id:transactions.id});
+      if(deleted.length!==ids.length) throw new Error("Selection no longer available; refresh your transactions");
+      for(const [accountId,values] of [...byAccount.entries()].sort(([a],[b])=>a.localeCompare(b))) {
+        await refreshAccountBalances(tx,actor,accountId,values.earliest,values.startingBalance);
+      }
+      return {affectedAccountIds:[...byAccount.keys()],deletedCount:deleted.length};
+    });
+    for(const path of ["/transactions","/","/settings","/assets","/subscriptions",...result.affectedAccountIds.map(id=>`/accounts/${id}`)]) revalidatePath(path);
+    return {success:true,...result};
+  } catch(error) {return {success:false,error:error instanceof Error && /^(Selection|Unlink)/.test(error.message)?error.message:"Unable to delete transactions; no changes were saved"};}
 }
 
 /** Purpose is explicit reporting metadata; never infer principal from a payee or amount. */

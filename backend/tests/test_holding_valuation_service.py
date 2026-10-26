@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, MetaData, DefaultClause, text
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -17,13 +17,14 @@ from app.services.holding_valuation_service import HoldingValuationService
 @pytest.fixture
 def db():
     engine = create_engine("sqlite:///:memory:")
-    # Create only tables we need — Base.metadata.create_all chokes on JSONB elsewhere.
-    User.__table__.create(bind=engine)
-    Account.__table__.create(bind=engine)
-    Holding.__table__.create(bind=engine)
-    PriceSnapshot.__table__.create(bind=engine)
-    HoldingValuation.__table__.create(bind=engine)
-    AccountBalance.__table__.create(bind=engine)
+    # Clone schema metadata: the ORM's PostgreSQL JSONB default is not valid
+    # SQLite DDL. Adjust only this isolated test copy, never production metadata.
+    metadata = MetaData()
+    for table in User.metadata.tables.values():
+        table.to_metadata(metadata)
+    metadata.tables["accounts"].c.alias_patterns.server_default = DefaultClause(text("'[]'"))
+    for model in (User, Account, Holding, PriceSnapshot, HoldingValuation, AccountBalance):
+        metadata.tables[model.__tablename__].create(bind=engine)
     with Session(engine) as session:
         yield session
 

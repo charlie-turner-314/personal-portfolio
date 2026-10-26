@@ -1,7 +1,9 @@
 "use server";
 
+import { householdTransaction } from "@/lib/household/transaction";
+import { refreshAccountBalances } from "@/lib/balances/mutations";
 import { nativeBalanceEstimate } from "@/lib/balances/estimate";
-import { convertReportingAmount } from "@/lib/household/reporting-currency";
+import { convertReportingAmount, reportingCurrencyForUser } from "@/lib/household/reporting-currency";
 import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
 import { eq, and, gte, desc, sql, inArray, max } from "drizzle-orm";
@@ -99,7 +101,7 @@ export async function createAccount(
       institution: input.institution || null,
       currency: input.currency,
       startingBalance: balanceValue,
-      functionalBalance: balanceValue, // For manual accounts, functional = starting
+      functionalBalance: null, // Set below in the custodian's declared currency.
       ...buildLiabilityFields(input.accountType, input),
       provider: "manual",
       isActive: true,
@@ -107,6 +109,7 @@ export async function createAccount(
 
     const result = await db.transaction(async (tx) => {
       const [account] = await tx.insert(accounts).values(newAccount).returning({ id: accounts.id });
+      await tx.update(accounts).set({functionalBalance:convertReportingAmount(sql`${balanceValue}::numeric`,sql`${input.currency}`,reportingCurrencyForUser(userId),sql`CURRENT_DATE`)}).where(eq(accounts.id,account.id));
       if (input.accountType === "superannuation") {
         await tx.insert(superAccounts).values({
           accountId: account.id,
@@ -140,7 +143,8 @@ export async function updateAccount(
   }
 
   try {
-    const account = await db.query.accounts.findFirst({
+    const outcome=await householdTransaction(async tx=>{
+    const account = await tx.query.accounts.findFirst({
       where: and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)),
     });
 
@@ -148,6 +152,11 @@ export async function updateAccount(
       return { success: false, error: "Account not found" };
     }
 
+    if(input.currency!==undefined && input.currency!==account.currency) {
+      const [facts]=await tx.select({exists:sql<boolean>`EXISTS(SELECT 1 FROM transactions WHERE account_id=${accountId}) OR EXISTS(SELECT 1 FROM account_balances WHERE account_id=${accountId}) OR EXISTS(SELECT 1 FROM holdings WHERE account_id=${accountId})`}).from(sql`(SELECT 1) seed`);
+      if(facts.exists || Number(account.startingBalance??0)!==0) return {success:false,error:"Account currency cannot be renamed after financial records or an opening balance exist. Create an account in the correct currency instead."};
+    }
+    if(input.startingBalance!==undefined && (!Number.isFinite(input.startingBalance)||Math.abs(input.startingBalance)>=1e13)) return {success:false,error:"Enter a valid opening balance"};
     const updateData: Partial<NewAccount> = {
       updatedAt: new Date(),
     };
@@ -183,7 +192,14 @@ export async function updateAccount(
       Object.assign(updateData, buildLiabilityFields(nextAccountType, input));
     }
 
-    await db.update(accounts).set(updateData).where(eq(accounts.id, accountId));
+    await tx.update(accounts).set(updateData).where(and(eq(accounts.id, accountId),accountAccess(accounts.id,userId)));
+    if(input.startingBalance!==undefined || input.currency!==undefined && input.currency!==account.currency) {
+      const [first]=await tx.select({date:sql<Date|null>`min(${transactions.bookedAt})`}).from(transactions).where(eq(transactions.accountId,accountId));
+      await refreshAccountBalances(tx,userId,accountId,first?.date?new Date(first.date):new Date(),Number(input.startingBalance??account.startingBalance??0));
+    }
+    return {success:true};
+    });
+    if(!outcome.success) return outcome;
 
     revalidatePath("/assets");
     revalidatePath("/accounts");
@@ -391,81 +407,6 @@ export async function getAccountFreshnessForAccount(
   return freshness[accountId] ?? null;
 }
 
-export async function recalculateStartingBalance(
-  accountId: string,
-  knownCurrentBalance: number
-): Promise<{ success: boolean; error?: string; newStartingBalance?: number }> {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return { success: false, error: "Not authenticated" };
-  }
-
-  try {
-    // Verify account belongs to user
-    const account = await db.query.accounts.findFirst({
-      where: and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)),
-    });
-
-    if (!account) {
-      return { success: false, error: "Account not found" };
-    }
-
-    // Get sum of all transactions for this account
-    const result = await db
-      .select({
-        total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(eq(transactions.accountId, accountId));
-
-    const transactionSum = parseFloat(result[0]?.total || "0");
-
-    // Calculate new starting balance:
-    // known_current_balance = starting_balance + transaction_sum
-    // Therefore: starting_balance = known_current_balance - transaction_sum
-    const newStartingBalance = knownCurrentBalance - transactionSum;
-
-    // Update account's starting_balance and functional_balance
-    await db
-      .update(accounts)
-      .set({
-        startingBalance: newStartingBalance.toFixed(2),
-        functionalBalance: knownCurrentBalance.toFixed(2),
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
-
-    // Trigger backend timeseries recalculation
-    try {
-      const backendUrl = getBackendBaseUrl();
-      const pathWithQuery = `/api/accounts/${accountId}/recalculate-timeseries`;
-      await fetch(`${backendUrl}${pathWithQuery}`, {
-        method: "POST",
-        headers: createInternalAuthHeaders({
-          method: "POST",
-          pathWithQuery,
-          userId,
-        }),
-      });
-    } catch (backendError) {
-      console.warn("Failed to trigger backend timeseries recalculation:", backendError);
-      // Don't fail the operation if backend call fails
-    }
-
-    revalidatePath("/settings");
-    revalidatePath("/transactions");
-    revalidatePath("/");
-    revalidatePath("/assets");
-    updateTag(CACHE_TAGS.accounts(userId));
-
-    return { success: true, newStartingBalance };
-  } catch (error) {
-    console.error("Failed to recalculate starting balance:", error);
-    return { success: false, error: "Failed to recalculate starting balance" };
-  }
-}
-
 export async function getAccountById(accountId: string) {
   const userId = await requireAuth();
 
@@ -611,26 +552,6 @@ export async function recalculateAccountTimeseries(
     }
 
     const data = await response.json();
-
-    // Recalculate functional_balance on the account as well
-    const txResult = await db
-      .select({
-        total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(eq(transactions.accountId, accountId));
-
-    const transactionSum = parseFloat(txResult[0]?.total || "0");
-    const startingBalance = parseFloat(account.startingBalance || "0");
-    const newFunctionalBalance = startingBalance + transactionSum;
-
-    await db
-      .update(accounts)
-      .set({
-        functionalBalance: newFunctionalBalance.toFixed(2),
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
 
     revalidatePath("/settings");
     revalidatePath("/");

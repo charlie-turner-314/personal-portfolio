@@ -249,7 +249,7 @@ def consolidate_accounts(db, actor_id, connection_id, pairs, conflict_strategy=N
             if same_functional:
                 for balance in db.query(AccountBalance).filter(AccountBalance.account_id == source.id).all():
                     if not db.query(AccountBalance.id).filter(AccountBalance.account_id == target.id, AccountBalance.date == balance.date).first():
-                        db.add(AccountBalance(account_id=target.id, date=balance.date, balance_source=balance.balance_source, account_currency=balance.account_currency, functional_currency=balance.functional_currency, balance_in_account_currency=balance.balance_in_account_currency, balance_in_functional_currency=balance.balance_in_functional_currency))
+                        db.add(AccountBalance(account_id=target.id, date=balance.date, balance_source=balance.balance_source, recorded_by_user_id=balance.recorded_by_user_id, account_currency=balance.account_currency, functional_currency=balance.functional_currency, balance_in_account_currency=balance.balance_in_account_currency, balance_in_functional_currency=balance.balance_in_functional_currency))
             db.execute(text("DELETE FROM property_liability_links old WHERE old.account_id=:source AND EXISTS (SELECT 1 FROM property_liability_links kept WHERE kept.account_id=:target AND kept.property_id=old.property_id)"), {"source":source.id,"target":target.id})
             _remap(db, account_references, source.id, target.id, skip=("transactions", "account_balances", "account_balance_revisions", "account_owners", "account_ownership_allocations", "up_account_sources", "up_account_reconciliations", "household_account_shares"))
             # A duplicate property/account association represents the same link, not
