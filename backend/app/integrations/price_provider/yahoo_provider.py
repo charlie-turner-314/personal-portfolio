@@ -13,14 +13,36 @@ logger = logging.getLogger(__name__)
 
 
 class YahooPriceProvider:
-    name = "yahoo"
+    name = "yahoo-v2"
+
+    def _quote_terms(self, symbol: str, info=None) -> tuple[str, Decimal]:
+        info = info if info is not None else (yf.Ticker(symbol).info or {})
+        currency = info.get("currency")
+        if not currency:
+            raise ValueError(f"Quote currency unavailable for {symbol}")
+        # Provider minor-unit quotes must not become 100x major-unit prices.
+        minor_units = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ILA": "ILS"}
+        if currency in minor_units:
+            return minor_units[currency], Decimal("0.01")
+        if len(currency) != 3:
+            raise ValueError(f"Unsupported quote currency for {symbol}")
+        return currency.upper(), Decimal(1)
 
     def _currency_for(self, symbol: str) -> str:
-        try:
-            info = yf.Ticker(symbol).info or {}
-            return (info.get("currency") or "USD").upper()
-        except Exception:
-            return "USD"
+        return self._quote_terms(symbol)[0]
+
+    def resolve_symbol(self, symbol: str) -> SymbolMatch:
+        if yf is None:
+            raise RuntimeError("yfinance is not installed")
+        info = yf.Ticker(symbol).info or {}
+        currency, _ = self._quote_terms(symbol, info)
+        resolved = info.get("symbol")
+        if not resolved or resolved.upper() != symbol.upper():
+            raise ValueError("An exact instrument match is required")
+        types = {"EQUITY": "equity", "ETF": "etf", "MUTUALFUND": "fund", "CRYPTOCURRENCY": "crypto"}
+        return SymbolMatch(symbol=resolved, name=info.get("longName") or info.get("shortName") or resolved,
+                           exchange=info.get("fullExchangeName") or info.get("exchange"), currency=currency,
+                           instrument_type=types.get(info.get("quoteType")))
 
     def get_daily_close(self, symbol: str, on: date) -> PriceQuote | None:
         if yf is None:
@@ -34,11 +56,12 @@ class YahooPriceProvider:
         if df.empty:
             return None
         row = df.iloc[-1]
+        currency, scale = self._quote_terms(symbol)
         return PriceQuote(
             symbol=symbol,
-            currency=self._currency_for(symbol),
+            currency=currency,
             date=df.index[-1].date(),
-            close=Decimal(str(row["Close"])),
+            close=Decimal(str(row["Close"])) * scale,
         )
 
     def get_daily_closes(self, symbols: list[str], on: date) -> dict[str, PriceQuote]:
@@ -82,11 +105,16 @@ class YahooPriceProvider:
             series = series[series.index.date <= on]
             if series.empty:
                 continue
+            try:
+                currency, scale = self._quote_terms(sym)
+            except Exception:
+                logger.warning("Quote currency unavailable for %s; skipping its price", sym)
+                continue
             out[sym] = PriceQuote(
                 symbol=sym,
-                currency=self._currency_for(sym),
+                currency=currency,
                 date=series.index[-1].date(),
-                close=Decimal(str(series.iloc[-1])),
+                close=Decimal(str(series.iloc[-1])) * scale,
             )
         return out
 
@@ -107,7 +135,7 @@ class YahooPriceProvider:
         )
         if df is None or df.empty:
             return []
-        currency = self._currency_for(symbol)
+        currency, scale = self._quote_terms(symbol)
         out: list[PriceQuote] = []
         for ts, row in df.iterrows():
             d = ts.date()
@@ -117,7 +145,7 @@ class YahooPriceProvider:
                 symbol=symbol,
                 currency=currency,
                 date=d,
-                close=Decimal(str(row["Close"])),
+                close=Decimal(str(row["Close"])) * scale,
             ))
         return out
 
@@ -130,10 +158,11 @@ class YahooPriceProvider:
                     symbol=r.get("symbol", ""),
                     name=r.get("shortname") or r.get("longname") or r.get("symbol", ""),
                     exchange=r.get("exchDisp"),
-                    currency=None,
+                    currency=r.get("currency"),
                 )
                 for r in results
                 if r.get("symbol")
             ]
         except Exception:
-            return [SymbolMatch(symbol=query.upper(), name=query.upper(), exchange=None, currency=None)]
+            logger.exception("Symbol search unavailable")
+            raise RuntimeError("Symbol search is unavailable; try again or enter an instrument manually")

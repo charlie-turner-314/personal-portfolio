@@ -13,8 +13,10 @@ type Path = "broker" | "import" | "manual" | null;
 
 export function ConnectPathPicker({
   accounts,
+  defaultCurrency = "AUD",
 }: {
   accounts: InvestmentAccount[];
+  defaultCurrency?: string;
 }) {
   const [picked, setPicked] = useState<Path>(null);
 
@@ -59,7 +61,7 @@ export function ConnectPathPicker({
       <div className="flex-1 overflow-auto">
         <div className="p-8 max-w-3xl space-y-5">
           <p className="text-sm text-muted-foreground leading-relaxed max-w-xl">
-            Choose how to track your investments. You can use both methods
+            Choose how to track your investments. You can combine these methods
             across different accounts — a brokerage account synced from IBKR
             alongside a manually-managed account for assets held elsewhere.
           </p>
@@ -117,10 +119,10 @@ export function ConnectPathPicker({
           {pickedTitle}
         </div>
         {picked === "manual" && (
-          <ManualForm accounts={accounts} onCancel={() => setPicked(null)} />
+          <ManualForm defaultCurrency={defaultCurrency} accounts={accounts} onCancel={() => setPicked(null)} />
         )}
-        {picked === "broker" && <BrokerForm accounts={accounts} onCancel={() => setPicked(null)} />}
-        {picked === "import" && <InvestmentImportWizard accounts={accounts} />}
+        {picked === "broker" && <BrokerForm defaultCurrency={defaultCurrency} accounts={accounts} onCancel={() => setPicked(null)} />}
+        {picked === "import" && <InvestmentImportWizard defaultCurrency={defaultCurrency} accounts={accounts} />}
       </div>
     </div>
   );

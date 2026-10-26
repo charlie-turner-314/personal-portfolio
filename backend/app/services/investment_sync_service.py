@@ -15,7 +15,7 @@ from app.models import (
 )
 from app.services.credentials_crypto import decrypt
 from app.services.holding_valuation_service import HoldingValuationService, FxConverter
-from app.services.price_service import PriceService
+from app.services.price_service import PriceService, holding_price_lookup
 from app.integrations.ibkr_flex_adapter import (
     IBKRFlexAdapter, FlexAuthError, FlexStatementNotReady, FlexTransientError, FlexError,
 )
@@ -112,12 +112,35 @@ class InvestmentSyncService:
     def sync_account(self, account_id: UUID, on: date | None = None) -> None:
         on = on or date.today()
         account = self.db.query(Account).filter_by(id=account_id).one()
-        if account.account_type == "investment_brokerage":
-            self._sync_brokerage(account, on)
-        elif account.account_type == "investment_manual":
-            self._sync_manual(account, on)
-        else:
-            raise ValueError(f"Account {account_id} is not an investment account")
+        started = datetime.utcnow().isoformat()
+        account.investment_sync_state = {"status": "running", "started_at": started, "completed_at": None, "error": None}
+        self.db.commit()
+        try:
+            if account.account_type == "investment_brokerage":
+                self._sync_brokerage(account, on)
+            elif account.account_type == "investment_manual":
+                self._sync_manual(account, on)
+            else:
+                raise ValueError(f"Account {account_id} is not an investment account")
+            errors = [h.last_price_error for h in self.db.query(Holding).filter_by(account_id=account_id).all() if h.last_price_error and not h.archived_at]
+            connection = self.db.query(BrokerConnection).filter_by(account_id=account_id).one_or_none()
+            provider_partial = connection is not None and connection.last_sync_status in {"partial", "error", "needs_reauth"}
+            account.investment_sync_state = {
+                "status": "partial" if errors or provider_partial else "completed",
+                "started_at": started, "completed_at": datetime.utcnow().isoformat(),
+                "error": "Some prices, conversions or provider history require review" if errors or provider_partial else None,
+            }
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            account = self.db.query(Account).filter_by(id=account_id).one()
+            account.investment_sync_state = {
+                "status": "failed", "started_at": started,
+                "completed_at": datetime.utcnow().isoformat(),
+                "error": "Investment refresh failed. Review connection diagnostics or retry.",
+            }
+            self.db.commit()
+            raise
 
     def _sync_brokerage(self, account: Account, on: date) -> None:
         conn = self.db.query(BrokerConnection).filter_by(account_id=account.id).one()
@@ -800,7 +823,7 @@ class InvestmentSyncService:
                 holding.source = source
                 holding.provider_symbol = getattr(item, "provider_symbol", None)
             if instrument_type != "cash" and item.aud_rate > 0:
-                snapshot = self.db.query(PriceSnapshot).filter_by(symbol=symbol, date=on).one_or_none()
+                snapshot = self.db.query(PriceSnapshot).filter_by(symbol=symbol, date=on, provider=price_provider).one_or_none()
                 if snapshot is None:
                     self.db.add(PriceSnapshot(
                         symbol=symbol,
@@ -817,11 +840,12 @@ class InvestmentSyncService:
 
     def _sync_manual(self, account: Account, on: date) -> None:
         holdings = self.db.query(Holding).filter_by(account_id=account.id).all()
-        symbols = sorted({h.symbol for h in holdings if h.instrument_type != "cash"})
+        market_provider = self.price_service.provider.name
+        lookups = [holding_price_lookup(h, market_provider) for h in holdings if h.instrument_type != "cash" and not h.archived_at]
+        symbols = sorted({symbol for symbol, provider in lookups if provider == market_provider})
         if symbols:
             self.price_service.get_or_fetch(symbols, on)
         self.valuation_service.compute(account_id=account.id, on=on)
-        account.last_synced_at = datetime.utcnow()
         self.db.commit()
 
     def _upsert_positions(self, account: Account, positions) -> None:

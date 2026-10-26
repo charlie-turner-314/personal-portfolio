@@ -662,7 +662,7 @@ def backfill_history(
                 stmt = (
                     pg_insert(PriceSnapshot)
                     .values(rows_to_insert)
-                    .on_conflict_do_nothing(index_elements=["symbol", "date"])
+                    .on_conflict_do_nothing(index_elements=["symbol", "date", "provider"])
                 )
                 db.execute(stmt)
             for q in quotes:
@@ -724,6 +724,8 @@ def backfill_history(
                     "quantity": qty,
                     "price": last_price,
                     "value_user_currency": value_user,
+                    "value_currency": user_currency,
+                    "quote_currency": quote_ccy,
                     "is_stale": False,
                 })
                 daily_user_total[cur] = daily_user_total.get(cur, Decimal("0")) + value_user
@@ -743,6 +745,8 @@ def backfill_history(
                         "price": stmt.excluded.price,
                         "value_user_currency": stmt.excluded.value_user_currency,
                         "is_stale": stmt.excluded.is_stale,
+                        "value_currency": stmt.excluded.value_currency,
+                        "quote_currency": stmt.excluded.quote_currency,
                     },
                 )
                 db.execute(stmt)
@@ -808,6 +812,7 @@ def backfill_history(
             bal_rows.append({
                 "account_id": account.id,
                 "date": d,
+                "account_currency": account_currency,
                 "balance_in_account_currency": acct_total,
                 "balance_in_functional_currency": functional_total,
             })
@@ -819,6 +824,7 @@ def backfill_history(
             stmt = stmt.on_conflict_do_update(
                 index_elements=["account_id", "date"],
                 set_={
+                    "account_currency": stmt.excluded.account_currency,
                     "balance_in_account_currency": stmt.excluded.balance_in_account_currency,
                     "balance_in_functional_currency": stmt.excluded.balance_in_functional_currency,
                 },

@@ -46,10 +46,11 @@ import {
 import { EditHoldingDialog } from "./EditHoldingDialog";
 import { OwnerBadges } from "@/components/household/owner-badges";
 
-type Filter = "All" | "ETF" | "Equity" | "Crypto" | "Cash" | "Other";
+type Filter = "All" | "Fund" | "ETF" | "Equity" | "Crypto" | "Cash" | "Other";
 type SortKey = "sym" | "acct" | "type" | "qty" | "price" | "value" | "pnl";
 
 export function TypeBadge({ type }: { type: Holding["instrument_type"] }) {
+  if (type === "fund") return <Badge>Managed fund</Badge>;
   if (type === "etf") return <Badge>ETF</Badge>;
   if (type === "equity") return <Badge variant="secondary">Equity</Badge>;
   if (type === "crypto") return <Badge variant="secondary">Crypto</Badge>;
@@ -59,19 +60,21 @@ export function TypeBadge({ type }: { type: Holding["instrument_type"] }) {
 
 export function HoldingsTableHF({
   holdings,
+  personScope,
   accountNames,
   accountsCount,
   portfolioCurrencySymbol,
   onAddClick,
-  onDelete,
+  onArchive,
   readOnly = false,
 }: {
   holdings: Holding[];
+  personScope?: string;
   accountNames: Record<string, string>;
   accountsCount: number;
   portfolioCurrencySymbol: string;
   onAddClick?: () => void;
-  onDelete?: (id: string) => void;
+  onArchive?: (id: string) => void;
   readOnly?: boolean;
 }) {
   const router = useRouter();
@@ -95,6 +98,7 @@ export function HoldingsTableHF({
         (h) =>
           filter === "All" ||
           (filter === "ETF" && h.instrument_type === "etf") ||
+          (filter === "Fund" && h.instrument_type === "fund") ||
           (filter === "Equity" && h.instrument_type === "equity") ||
           (filter === "Crypto" && h.instrument_type === "crypto") ||
           (filter === "Cash" && h.instrument_type === "cash") ||
@@ -108,7 +112,7 @@ export function HoldingsTableHF({
           h.cost_basis_user_currency != null
             ? Number(h.cost_basis_user_currency)
             : null;
-        const pnl = cost != null ? value - cost : null;
+        const pnl = cost != null && h.current_value_user_currency != null && !h.valuation_error ? value - cost : null;
         return {
           ...h,
           _qty: qty,
@@ -177,7 +181,7 @@ export function HoldingsTableHF({
           variant="outline"
           size="sm"
         >
-          {(["All", "ETF", "Equity", "Crypto", "Cash", "Other"] as Filter[]).map((t) => (
+          {(["All", "ETF", "Fund", "Equity", "Crypto", "Cash", "Other"] as Filter[]).map((t) => (
             <ToggleGroupItem key={t} value={t} aria-label={`Filter ${t}`}>
               {t}
             </ToggleGroupItem>
@@ -224,12 +228,12 @@ export function HoldingsTableHF({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(["etf", "equity", "cash"] as const).flatMap((groupType) => {
+            {(["etf", "equity", "fund", "crypto", "cash", "other"] as const).flatMap((groupType) => {
               const groupRows = rows.filter((r) => r.instrument_type === groupType);
               if (groupRows.length === 0) return [];
               const groupTotal = groupRows.reduce((s, r) => s + r._value, 0);
               const groupLabel =
-                groupType === "etf" ? "ETF" : groupType === "equity" ? "Equity" : "Cash";
+                groupType === "etf" ? "ETF" : groupType === "fund" ? "Managed fund" : groupType.charAt(0).toUpperCase() + groupType.slice(1);
               return [
                 <TableRow key={`group-${groupType}`} className="bg-muted/40 hover:bg-muted/40">
                   <TableCell
@@ -249,17 +253,17 @@ export function HoldingsTableHF({
                   </TableCell>
                 </TableRow>,
                 ...groupRows.map((h) => {
-              const sym = currencySymbol(h.currency);
+              const sym = currencySymbol(h.quote_currency ?? h.currency);
               return (
                 <TableRow
                   key={h.id}
                   tabIndex={0}
                   aria-label={`View details for ${h.symbol}`}
-                  onClick={() => router.push(`/investments/${h.id}`)}
+                  onClick={() => router.push(`/investments/${h.id}${personScope ? `?personIds=${encodeURIComponent(personScope)}` : ""}`)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      router.push(`/investments/${h.id}`);
+                      router.push(`/investments/${h.id}${personScope ? `?personIds=${encodeURIComponent(personScope)}` : ""}`);
                     }
                   }}
                   className={`cursor-pointer ${
@@ -291,13 +295,11 @@ export function HoldingsTableHF({
                     {h._qty.toLocaleString()}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {h.current_price ? `${sym} ${h._price.toFixed(2)}` : "—"}
+                    {h.current_price != null ? `${sym} ${h._price.toFixed(2)}` : "—"}
                   </TableCell>
                   <TableCell className="text-right tabular-nums font-semibold">
-                    {portfolioCurrencySymbol} {h._value.toLocaleString("en", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {h.current_value_user_currency == null ? "Unavailable" : `${portfolioCurrencySymbol} ${h._value.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    {h.valuation_error && <div className="text-xs font-normal text-amber-700" title={h.valuation_error}>Last known / incomplete</div>}
                   </TableCell>
                   <TableCell className={`text-right tabular-nums ${
                     h._pnl == null
@@ -333,21 +335,21 @@ export function HoldingsTableHF({
                         onClick={(e) => e.stopPropagation()}
                       >
                         <DropdownMenuItem
-                          onClick={() => router.push(`/investments/${h.id}`)}
+                          onClick={() => router.push(`/investments/${h.id}${personScope ? `?personIds=${encodeURIComponent(personScope)}` : ""}`)}
                         >
                           View details
                         </DropdownMenuItem>
-                        {!readOnly && h.source === "manual" && (
+                        {!readOnly && (h.can_manage ?? h.source === "manual") && (
                           <>
-                            <DropdownMenuItem onClick={() => setEditingId(h.id)}>
+                            {(h.can_edit ?? h.source === "manual") && <DropdownMenuItem onClick={() => setEditingId(h.id)}>
                               Edit
-                            </DropdownMenuItem>
+                            </DropdownMenuItem>}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => setDeletingId(h.id)}
                               className="text-destructive focus:text-destructive"
                             >
-                              Delete
+                              Archive
                             </DropdownMenuItem>
                           </>
                         )}
@@ -363,7 +365,7 @@ export function HoldingsTableHF({
           <TableFooter>
             <TableRow>
               <TableCell colSpan={6} className="font-semibold text-muted-foreground">
-                Total
+                {rows.some((holding) => holding.current_value_user_currency == null || holding.valuation_error) ? "Known subtotal (incomplete)" : "Total"}
               </TableCell>
               <TableCell className="text-right tabular-nums font-bold">
                 {portfolioCurrencySymbol} {totalValue.toLocaleString("en", {
@@ -391,22 +393,21 @@ export function HoldingsTableHF({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this holding?</AlertDialogTitle>
+            <AlertDialogTitle>Archive this holding?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the manual position. Price history is retained but the
-              position will no longer count toward your portfolio.
+              This hides the position from your current portfolio and preserves financial records. Archiving does not record a sale or calculate a disposal.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (deletingId && onDelete) onDelete(deletingId);
+                if (deletingId && onArchive) onArchive(deletingId);
                 setDeletingId(null);
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              Archive
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

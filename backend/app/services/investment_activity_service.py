@@ -58,7 +58,7 @@ ACTIVITY_TYPES = frozenset(
 )
 INGESTION_TYPES = frozenset({"csv_import", "api_sync", "manual"})
 DIRECTIONS = frozenset({"in", "out", "internal"})
-ASSET_TYPES = frozenset({"equity", "fund", "crypto", "cash", "option", "bond", "other"})
+ASSET_TYPES = frozenset({"equity", "fund", "managed_fund", "crypto", "cash", "option", "bond", "other"})
 
 _PROVIDER_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -665,6 +665,8 @@ def _cross_source_duplicate_source_id(
 
 
 def _instrument_type(asset_type: str) -> str:
+    if asset_type == "managed_fund":
+        return "fund"
     if asset_type == "fund":
         return "etf"
     if asset_type in {"equity", "crypto", "cash"}:

@@ -24,8 +24,10 @@ import {
 } from "@/components/ui/toggle-group";
 import { Field, Input } from "./_form-bits";
 
+import { INVESTMENT_CURRENCIES } from "@/lib/utils/currency";
+
 const NEW = "__new__";
-type Inst = "etf" | "equity" | "cash";
+type Inst = "etf" | "equity" | "fund" | "crypto" | "cash";
 
 type Row = {
   id: string;
@@ -34,36 +36,43 @@ type Row = {
   qty: string;
   type: Inst;
   currency: string;
+  currencyExplicit: boolean;
   avgCost: string;
   error: string | null;
 };
 
 let _rowSeq = 0;
-function newRow(): Row {
+function newRow(currency = "AUD"): Row {
   return {
     id: `r${++_rowSeq}`,
     symbol: "",
     symbolConfirmed: false,
     qty: "",
     type: "etf",
-    currency: "EUR",
+    currency,
+    currencyExplicit: false,
     avgCost: "",
     error: null,
   };
 }
 
 export function ManualForm({
-  accounts,
+  accounts: allAccounts,
   onCancel,
+  defaultCurrency = "AUD",
 }: {
   accounts: InvestmentAccount[];
   onCancel: () => void;
+  defaultCurrency?: string;
 }) {
   const router = useRouter();
+  const [creationKey] = useState(() => crypto.randomUUID());
+  const [createdAccount, setCreatedAccount] = useState<InvestmentAccount | null>(null);
+  const accounts = [...allAccounts.filter((a) => a.can_add_holdings ?? a.source === "manual"), ...(createdAccount ? [createdAccount] : [])];
   const [accountId, setAccountId] = useState<string>(accounts[0]?.id ?? NEW);
   const [newName, setNewName] = useState("My Brokerage");
-  const [baseCcy, setBaseCcy] = useState("EUR");
-  const [rows, setRows] = useState<Row[]>([newRow()]);
+  const [baseCcy, setBaseCcy] = useState(defaultCurrency);
+  const [rows, setRows] = useState<Row[]>([newRow(accounts[0]?.base_currency ?? defaultCurrency)]);
   const [busy, setBusy] = useState(false);
   const [topErr, setTopErr] = useState<string | null>(null);
 
@@ -71,7 +80,7 @@ export function ManualForm({
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const removeRow = (id: string) =>
     setRows((rs) => (rs.length === 1 ? rs : rs.filter((r) => r.id !== id)));
-  const addRow = () => setRows((rs) => [...rs, newRow()]);
+  const addRow = () => setRows((rs) => [...rs, newRow(accounts.find((a) => a.id === accountId)?.base_currency ?? baseCcy)]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,24 +88,27 @@ export function ManualForm({
     setTopErr(null);
     setRows((rs) => rs.map((r) => ({ ...r, error: null })));
 
-    // Validate at least one row has symbol + qty
-    const valid = rows.filter((r) => r.symbol.trim() && r.qty.trim());
-    if (valid.length === 0) {
-      setTopErr("Add at least one holding with a symbol and quantity.");
+    const valid = rows.filter((r) => r.symbol.trim() || r.qty.trim() || r.avgCost.trim());
+    if (valid.length === 0 || valid.some((r) => !r.symbol.trim() || !r.qty.trim() || !Number.isFinite(Number(r.qty)) || Number(r.qty) < 0 || (r.avgCost !== "" && (!Number.isFinite(Number(r.avgCost)) || Number(r.avgCost) < 0)))) {
+      setTopErr("Complete every started row with a symbol, non-negative quantity and valid optional average cost.");
       setBusy(false);
       return;
     }
 
+    const keys = valid.map((row) => `${row.symbol.trim().toUpperCase()}:${row.type}`);
+    if (new Set(keys).size !== keys.length) { setTopErr("Use one row per symbol and instrument type."); setBusy(false); return; }
     try {
-      const target =
-        accountId === NEW
-          ? (await createManualAccount(newName, baseCcy)).account_id
-          : accountId;
+      let target = accountId;
+      if (target === NEW) {
+        target = (await createManualAccount(newName, baseCcy, creationKey)).account_id;
+        setCreatedAccount({ id: target, name: newName, base_currency: baseCcy, source: "manual", can_add_holdings: true });
+        setAccountId(target);
+      }
 
       const results = await Promise.allSettled(
         valid.map((r) =>
           addManualHolding(target, {
-            symbol: r.symbol,
+            symbol: r.symbol.trim().toUpperCase(),
             quantity: r.qty,
             instrument_type: r.type,
             currency: r.currency,
@@ -154,10 +166,10 @@ export function ManualForm({
             <Field label="Account" className="flex-1">
               <Select
                 value={accountId}
-                onValueChange={(v) => v && setAccountId(v)}
+                onValueChange={(v) => { if (v) { setAccountId(v); const currency = accounts.find((account) => account.id === v)?.base_currency ?? baseCcy; setRows((items) => items.map((row) => row.currencyExplicit ? row : { ...row, currency })); } }}
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue />
+                  <SelectValue>{accounts.find((a) => a.id === accountId) ? `${accounts.find((a) => a.id === accountId)!.name} · ${accounts.find((a) => a.id === accountId)!.base_currency}` : "+ Create new account…"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {accounts.map((a) => (
@@ -182,15 +194,13 @@ export function ManualForm({
               <Field label="Base currency" className="flex-1">
                 <Select
                   value={baseCcy}
-                  onValueChange={(v) => v && setBaseCcy(v)}
+                  onValueChange={(v) => { if (v) { setBaseCcy(v); setRows((items) => items.map((row) => row.currencyExplicit ? row : { ...row, currency: v })); } }}
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue />
+                    <SelectValue>{baseCcy}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="EUR">EUR</SelectItem>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="GBP">GBP</SelectItem>
+                    {INVESTMENT_CURRENCIES.map((ccy) => <SelectItem key={ccy} value={ccy}>{ccy}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </Field>
@@ -223,7 +233,7 @@ export function ManualForm({
             </Button>
           </div>
 
-          {topErr && <div className="text-destructive text-xs">{topErr}</div>}
+          {topErr && <div role="alert" className="text-destructive text-xs">{topErr}</div>}
 
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="outline" onClick={onCancel}>
@@ -259,11 +269,11 @@ function HoldingRow({
       Symbol
       {row.symbolConfirmed ? (
         <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-emerald-700 dark:text-emerald-400">
-          ✓ verified
+          Search result
         </span>
       ) : (
         <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-700 dark:text-amber-400">
-          ⚠ pick from list
+          Manually entered
         </span>
       )}
     </span>
@@ -300,7 +310,8 @@ function HoldingRow({
               onChange({
                 symbol: r.symbol,
                 symbolConfirmed: true,
-                ...(r.currency ? { currency: r.currency } : {}),
+                ...(r.currency ? { currency: r.currency, currencyExplicit: true } : {}),
+                ...(r.instrument_type ? { type: r.instrument_type } : {}),
               })
             }
             placeholder="Search symbol or name…"
@@ -311,6 +322,8 @@ function HoldingRow({
         <Field label="Quantity" className="flex-1">
           <Input
             type="number"
+            min="0"
+            step="any"
             placeholder="0.00"
             value={row.qty}
             onChange={(e) => onChange({ qty: e.target.value })}
@@ -326,13 +339,13 @@ function HoldingRow({
             variant="outline"
             size="sm"
           >
-            {(["etf", "equity", "cash"] as Inst[]).map((t) => (
+            {(["etf", "equity", "fund", "crypto", "cash"] as Inst[]).map((t) => (
               <ToggleGroupItem
                 key={t}
                 value={t}
                 className="capitalize flex-1"
               >
-                {t === "etf" ? "ETF" : t}
+                {t === "etf" ? "ETF" : t === "fund" ? "Managed fund" : t}
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
@@ -340,15 +353,13 @@ function HoldingRow({
         <Field label="Currency" className="flex-1">
           <Select
             value={row.currency}
-            onValueChange={(v) => v && onChange({ currency: v })}
+            onValueChange={(v) => v && onChange({ currency: v, currencyExplicit: true })}
           >
             <SelectTrigger className="w-full">
-              <SelectValue />
+              <SelectValue>{row.currency}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="EUR">EUR</SelectItem>
-              <SelectItem value="USD">USD</SelectItem>
-              <SelectItem value="GBP">GBP</SelectItem>
+              {Array.from(new Set([...INVESTMENT_CURRENCIES, row.currency])).map((ccy) => <SelectItem key={ccy} value={ccy}>{ccy}</SelectItem>)}
             </SelectContent>
           </Select>
         </Field>
@@ -365,6 +376,8 @@ function HoldingRow({
         >
           <Input
             type="number"
+            min="0"
+            step="any"
             placeholder="—"
             value={row.avgCost}
             onChange={(e) => onChange({ avgCost: e.target.value })}

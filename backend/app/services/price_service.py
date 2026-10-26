@@ -22,7 +22,7 @@ class PriceService:
             return {}
         cached_rows = (
             self.db.query(PriceSnapshot)
-            .filter(PriceSnapshot.symbol.in_(symbols), PriceSnapshot.date == on)
+            .filter(PriceSnapshot.symbol.in_(symbols), PriceSnapshot.date == on, PriceSnapshot.provider == self.provider.name)
             .all()
         )
         cached = {
@@ -43,16 +43,31 @@ class PriceService:
                     date=quote.date,
                     close=quote.close,
                     provider=self.provider.name,
-                ).on_conflict_do_nothing(index_elements=["symbol", "date"])
+                ).on_conflict_do_nothing(index_elements=["symbol", "date", "provider"])
                 self.db.execute(stmt)
                 cached[sym] = quote
             self.db.commit()
         return cached
 
-    def latest_snapshot(self, symbol: str, on: date) -> PriceSnapshot | None:
+    def latest_snapshot(self, symbol: str, on: date, provider: str | None = None) -> PriceSnapshot | None:
         return (
             self.db.query(PriceSnapshot)
-            .filter(PriceSnapshot.symbol == symbol, PriceSnapshot.date <= on)
+            .filter(PriceSnapshot.symbol == symbol, PriceSnapshot.date <= on,
+                    *([PriceSnapshot.provider == provider] if provider else []))
             .order_by(PriceSnapshot.date.desc())
             .first()
         )
+
+
+def holding_price_lookup(holding, market_provider):
+    """A ticker is not globally unique across exchange balance and market feeds."""
+    override = holding.provider_symbol
+    if override and override.startswith("manual:"):
+        return override, None
+    exchange_sources = {"coinspot_api": "coinspot", "binance_api": "binance", "crypto_com_api": "crypto_com_exchange"}
+    if holding.source in exchange_sources and (not override or len(override) > 64):
+        return holding.symbol, exchange_sources[holding.source]
+    symbol = override or holding.symbol
+    if not override and holding.instrument_type == "crypto" and "-" not in symbol:
+        symbol = f"{symbol}-{holding.currency}"
+    return symbol, market_provider

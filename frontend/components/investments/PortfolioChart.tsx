@@ -3,9 +3,11 @@
 export function PortfolioChart({
   data,
   currencySymbol,
+  dates,
 }: {
   data: number[];
   currencySymbol: string;
+  dates?: string[];
 }) {
   if (data.length < 2) {
     return (
@@ -22,7 +24,11 @@ export function PortfolioChart({
   const W = 800;
   const H = 160;
   const toY = (v: number) => H - ((v - lo) / (hi - lo)) * H;
-  const toX = (i: number, len: number) => (i / (len - 1)) * W;
+  const timestamps = dates?.map((day) => Date.parse(day));
+  const hasDates = timestamps?.length === data.length && timestamps.every(Number.isFinite) && timestamps.at(-1)! > timestamps[0];
+  const toX = (i: number, len: number) => hasDates
+    ? ((timestamps![i] - timestamps![0]) / (timestamps!.at(-1)! - timestamps![0])) * W
+    : (i / (len - 1)) * W;
   const pts = data.map((v, i) => [toX(i, data.length), toY(v)] as const);
   const linePath = pts
     .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
@@ -34,10 +40,15 @@ export function PortfolioChart({
 
   return (
     <svg
+      role="img"
+      aria-label={`Portfolio value history${dates?.length ? ` from ${dates[0]} to ${dates.at(-1)}` : ""}`}
       viewBox={`-44 -4 ${W + 52} ${H + 24}`}
       className="w-full h-[180px] block"
       preserveAspectRatio="none"
     >
+      <title>Portfolio value history</title>
+      <desc>{data.map((value, index) => `${dates?.[index] ?? index}: ${currencySymbol}${value}`).join("; ")}</desc>
+      {dates && <><text x="0" y={H + 18} fontSize="9" fill="var(--muted-foreground)">{dates[0]}</text><text x={W} y={H + 18} textAnchor="end" fontSize="9" fill="var(--muted-foreground)">{dates.at(-1)}</text></>}
       <defs>
         <linearGradient id="invAreaGrad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.12" />

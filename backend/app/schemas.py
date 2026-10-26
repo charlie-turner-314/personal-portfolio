@@ -437,25 +437,47 @@ class BinanceTradeSymbolsUpdate(BaseModel):
 
 
 class ManualAccountCreate(BaseModel):
-    name: str
-    base_currency: str = "EUR"
+    name: str = Field(min_length=1, max_length=255)
+    base_currency: str = "AUD"
+    creation_key: Optional[str] = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trimmed_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("base_currency")
+    @classmethod
+    def currency_code(cls, value):
+        value = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            raise ValueError("Use a three-letter currency code")
+        return value
 
 
 class HoldingCreate(BaseModel):
-    symbol: str
+    symbol: str = Field(min_length=1, max_length=64)
     provider_symbol: Optional[str] = None
-    quantity: Decimal
-    instrument_type: Literal["equity", "etf", "cash"]
-    currency: str
+    quantity: Decimal = Field(ge=0, allow_inf_nan=False)
+    instrument_type: Literal["equity", "etf", "fund", "crypto", "cash"]
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
     as_of_date: Optional[_date_date] = None
-    avg_cost: Optional[Decimal] = None
+    avg_cost: Optional[Decimal] = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalized_symbol(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
 
 
 class HoldingUpdate(BaseModel):
-    symbol: Optional[str] = None
-    quantity: Optional[Decimal] = None
+    symbol: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    currency: Optional[str] = Field(default=None, pattern=r"^[A-Z]{3}$")
+    instrument_type: Optional[Literal["equity", "etf", "fund", "crypto", "cash"]] = None
+    quantity: Optional[Decimal] = Field(default=None, ge=0, allow_inf_nan=False)
     as_of_date: Optional[_date_date] = None
-    avg_cost: Optional[Decimal] = None
+    avg_cost: Optional[Decimal] = Field(default=None, ge=0, allow_inf_nan=False)
     provider_symbol: Optional[str] = None
 
 
@@ -475,6 +497,23 @@ class HoldingResponse(BaseModel):
     current_value_user_currency: Optional[Decimal] = None
     cost_basis_user_currency: Optional[Decimal] = None
     is_stale: bool = False
+    valuation_date: Optional[_date_date] = None
+    valuation_error: Optional[str] = None
+    quote_currency: Optional[str] = None
+    quote_date: Optional[_date_date] = None
+    quote_source: Optional[str] = None
+    cost_basis_kind: str = "unavailable"
+    archived_at: Optional[datetime] = None
+    can_manage: bool = False
+    can_edit: bool = False
+    ownership_share: Decimal = Decimal("1")
+
+
+class ManualPriceCreate(BaseModel):
+    date: _date_date
+    price: Decimal = Field(ge=0, allow_inf_nan=False)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    source: str = Field(min_length=1, max_length=20)
 
 
 class PortfolioSummary(BaseModel):
@@ -484,6 +523,9 @@ class PortfolioSummary(BaseModel):
     accounts: list[dict]
     allocation_by_type: dict[str, Decimal]
     allocation_by_currency: dict[str, Decimal]
+    valuation_status: str = "complete"
+    unavailable_holdings: int = 0
+    as_of: Optional[_date_date] = None
 
 
 class ValuationPoint(BaseModel):
@@ -567,6 +609,9 @@ class CgtFinancialYearSummary(BaseModel):
     discounted_gains_aud: Decimal
     net_capital_gain_before_losses_aud: Decimal
     allocation_count: int
+    disposal_count: int = 0
+    allocation_result_aud: Optional[Decimal] = None
+    coverage_warnings: list[str] = Field(default_factory=list)
     missing_fx_allocation_count: int
     assumptions: list[str]
 
@@ -695,6 +740,7 @@ class SymbolSearchResult(BaseModel):
     symbol: str
     name: str
     exchange: Optional[str] = None
+    instrument_type: Optional[str] = None
     currency: Optional[str] = None
 
 

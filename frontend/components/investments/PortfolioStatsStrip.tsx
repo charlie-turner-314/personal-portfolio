@@ -21,9 +21,9 @@ export function PortfolioStatsStrip({
   bestDay,
   currencySymbol,
 }: {
-  costBasis: number;
-  unrealizedPnl: number;
-  returnPct: number;
+  costBasis: number | null;
+  unrealizedPnl: number | null;
+  returnPct: number | null;
   holdingsCount: number;
   accountsCount: number;
   bestDay: { delta: number; label: string } | null;
@@ -32,18 +32,18 @@ export function PortfolioStatsStrip({
   const cells: { label: string; value: string; tone: Tone }[] = [
     {
       label: "Cost basis",
-      value: `${currencySymbol} ${costBasis.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      value: costBasis == null ? "Unavailable" : `${currencySymbol} ${costBasis.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
       tone: "neutral",
     },
     {
       label: "Unrealized P&L",
-      value: `${unrealizedPnl >= 0 ? "▲ +" : "▼ -"}${currencySymbol} ${Math.abs(unrealizedPnl).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      tone: unrealizedPnl >= 0 ? "positive" : "negative",
+      value: unrealizedPnl == null ? "Unavailable" : `${unrealizedPnl >= 0 ? "▲ +" : "▼ -"}${currencySymbol} ${Math.abs(unrealizedPnl).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      tone: unrealizedPnl == null ? "neutral" : unrealizedPnl >= 0 ? "positive" : "negative",
     },
     {
-      label: "Return",
-      value: `${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(1)}%`,
-      tone: returnPct >= 0 ? "positive" : "negative",
+      label: "Investment return",
+      value: returnPct == null ? "Unavailable" : `${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(1)}%`,
+      tone: returnPct == null ? "neutral" : returnPct >= 0 ? "positive" : "negative",
     },
     {
       label: "Holdings",
@@ -56,7 +56,7 @@ export function PortfolioStatsStrip({
       tone: "neutral",
     },
     {
-      label: "Best day",
+      label: "Best investment day",
       value: bestDay
         ? `▲ +${currencySymbol} ${bestDay.delta.toLocaleString("en", { maximumFractionDigits: 0 })} (${bestDay.label})`
         : "—",

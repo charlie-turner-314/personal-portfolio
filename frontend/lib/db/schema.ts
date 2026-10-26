@@ -221,6 +221,8 @@ export const accounts = pgTable(
     institution: varchar("institution", { length: 255 }),
     logoId: uuid("logo_id").references(() => companyLogos.id, { onDelete: "set null" }),
     currency: char("currency", { length: 3 }).default("EUR"),
+    investmentCreationKey: varchar("investment_creation_key", { length: 64 }),
+    investmentSyncState: jsonb("investment_sync_state").$type<Record<string, unknown>>(),
     provider: varchar("provider", { length: 50 }), // ponto, gocardless, manual
     externalId: varchar("external_id", { length: 255 }), // Provider's account ID
     externalIdCiphertext: text("external_id_ciphertext"),
@@ -257,6 +259,7 @@ export const accounts = pgTable(
       table.provider,
       table.externalIdHash
     ),
+    uniqueIndex("accounts_user_investment_creation_key_uq").on(table.userId, table.investmentCreationKey).where(sql`${table.investmentCreationKey} IS NOT NULL`),
     index("idx_accounts_user_iban_hash").on(table.userId, table.ibanHash),
     // Prevent two concurrent create-pocket requests from racing and inserting
     // duplicate manual IBANs. Partial index scoped to provider='manual' so a
@@ -971,6 +974,7 @@ export const accountBalances = pgTable(
       .references(() => accounts.id, { onDelete: "cascade" })
       .notNull(),
     date: timestamp("date").notNull(), // Date of the balance snapshot
+    accountCurrency: varchar("account_currency", { length: 3 }),
     balanceInAccountCurrency: decimal("balance_in_account_currency", { precision: 15, scale: 2 }).notNull(), // Balance in account's currency
     balanceInFunctionalCurrency: decimal("balance_in_functional_currency", { precision: 15, scale: 2 }).notNull(), // Balance converted to functional currency
     createdAt: timestamp("created_at").defaultNow(),
@@ -1060,6 +1064,7 @@ export const holdings = pgTable("holdings", {
   asOfDate: date("as_of_date"),
   source: text("source").notNull(),
   lastPriceError: text("last_price_error"),
+  archivedAt: timestamp("archived_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (t) => ({
@@ -1400,8 +1405,9 @@ export const priceSnapshots = pgTable("price_snapshots", {
   date: date("date").notNull(),
   close: numeric("close", { precision: 28, scale: 8 }).notNull(),
   provider: text("provider").notNull(),
+  sourceLabel: varchar("source_label", { length: 64 }),
 }, (t) => ({
-  uniqSnap: uniqueIndex("price_snapshots_symbol_date_uq").on(t.symbol, t.date),
+  uniqSnap: uniqueIndex("price_snapshots_symbol_date_uq").on(t.symbol, t.date, t.provider),
 }));
 
 export const holdingValuations = pgTable("holding_valuations", {
@@ -1412,6 +1418,10 @@ export const holdingValuations = pgTable("holding_valuations", {
   price: numeric("price", { precision: 28, scale: 8 }).notNull(),
   valueUserCurrency: numeric("value_user_currency", { precision: 15, scale: 2 }).notNull(),
   isStale: boolean("is_stale").default(false),
+  valueCurrency: varchar("value_currency", { length: 3 }),
+  quoteCurrency: varchar("quote_currency", { length: 3 }),
+  quoteDate: date("quote_date"),
+  quoteSource: varchar("quote_source", { length: 64 }),
 }, (t) => ({
   uniqVal: uniqueIndex("holding_valuations_holding_date_uq").on(t.holdingId, t.date),
 }));

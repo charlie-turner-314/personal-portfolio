@@ -49,7 +49,7 @@ const PROVIDER_DETAILS: Record<Provider, {
   crypto_com_exchange: {
     initials: "CDC",
     name: "Crypto.com Exchange",
-    description: "Exchange Spot balances, fills, transfers, and supported staking rewards",
+    description: "Exchange Spot balances, available fills, transfers, and supported staking rewards. Older trade records require statements or provider support.",
     historyMinimum: "2019-01-01",
     guideUrl: "https://exchange-developer.crypto.com/exchange/v1/docs/api/rest-common-api-reference",
     guideLabel: "Crypto.com Exchange API guide",
@@ -67,9 +67,11 @@ const PROVIDER_DETAILS: Record<Provider, {
 export function BrokerForm({
   accounts = [],
   onCancel,
+  defaultCurrency = "AUD",
 }: {
   accounts?: InvestmentAccount[];
   onCancel: () => void;
+  defaultCurrency?: string;
 }) {
   const router = useRouter();
   const [provider, setProvider] = useState<Provider>("coinspot");
@@ -110,7 +112,7 @@ export function BrokerForm({
       setHistoryStart("2019-01-01");
     } else {
       setAccountName("IBKR Main");
-      setBaseCurrency("EUR");
+      setBaseCurrency(defaultCurrency);
     }
   };
 

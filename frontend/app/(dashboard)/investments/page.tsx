@@ -4,12 +4,15 @@ import { CardGridSkeleton, ChartSkeleton, DetailListSkeleton } from "@/component
 import { InvestmentsSection } from "./_sections";
 import { InvestmentsPersonFilterBar } from "./_client";
 
-export default function InvestmentsPage() {
+export default async function InvestmentsPage({ searchParams }: { searchParams: Promise<{ financialYearStart?: string; personIds?: string }> }) {
+  const params = await searchParams;
+  const year = Number(params.financialYearStart);
+  const financialYearStart = Number.isInteger(year) && year >= 1900 && year <= 2200 ? year : undefined;
   return (
     <>
       <Header title="Investments" />
       <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-        <InvestmentsPersonFilterBar />
+        <Suspense><InvestmentsPersonFilterBar /></Suspense>
         <Suspense
           fallback={
             <>
@@ -19,7 +22,7 @@ export default function InvestmentsPage() {
             </>
           }
         >
-          <InvestmentsSection />
+          <InvestmentsSection financialYearStart={financialYearStart} personScope={params.personIds || "self"} />
         </Suspense>
       </div>
     </>
