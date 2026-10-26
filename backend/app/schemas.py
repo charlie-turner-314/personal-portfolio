@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from datetime import date, datetime
 from datetime import time as _time_type
 from decimal import Decimal
-from typing import Any, Optional, List
+from typing import Literal, Any, Optional, List
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -120,6 +120,7 @@ class AccountOwnershipAllocationSetResponse(BaseModel):
 
 # Category Schemas
 class CategoryBase(BaseModel):
+    cash_flow_kind: Optional[Literal["investment", "loan_principal"]] = None
     name: str
     parent_id: Optional[UUID] = None
     category_type: str = "expense"

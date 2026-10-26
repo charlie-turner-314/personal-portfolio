@@ -9,6 +9,7 @@ import time
 from fastapi import HTTPException
 from sqlalchemy import or_, func, text
 
+from app.services.financial_access import account_access, category_access, category_definition_for_actor
 from app.models import Account, Category, CategorizationSuggestion, InternalTransfer, Transaction
 from app.services.categorization_context import precedent_fingerprint, transaction_record
 from app.services.category_matcher import CategoryMatcher
@@ -33,7 +34,7 @@ def fingerprint(transaction):
 
 def owned_transaction(db, user_id, transaction_id, *, lock=False):
     query = db.query(Transaction).join(Account, Transaction.account_id == Account.id).filter(
-        Transaction.id == transaction_id, Transaction.user_id == user_id, Account.user_id == user_id)
+        Transaction.id == transaction_id, account_access(Transaction.account_id, user_id))
     if lock:
         query = query.with_for_update(of=Transaction).populate_existing()
     transaction = query.first()
@@ -52,8 +53,9 @@ def ensure_eligible(db, user_id, transaction):
 
 
 def present(db, suggestion):
+    owned_transaction(db, suggestion.user_id, suggestion.transaction_id)
     category = db.query(Category).filter(Category.id == suggestion.suggested_category_id,
-                                        Category.user_id == suggestion.user_id).first() if suggestion.suggested_category_id else None
+                                        category_access(suggestion.user_id)).first() if suggestion.suggested_category_id else None
     return {"id": str(suggestion.id), "transaction_id": str(suggestion.transaction_id),
             "category_id": str(category.id) if category else None, "category_name": category.name if category else None,
             "category_type": category.category_type if category else None,
@@ -162,6 +164,7 @@ def mark_shown(db, user_id, suggestion_id):
     ).with_for_update().first()
     if not suggestion:
         raise HTTPException(404, "Suggestion not found")
+    owned_transaction(db, user_id, suggestion.transaction_id)
     if suggestion.shown_at is None:
         suggestion.shown_at = datetime.utcnow()
         db.commit()
@@ -191,7 +194,7 @@ def review_suggestion(db, user_id, suggestion_id, *, outcome, category_id=None, 
         if category_id is not None:
             raise HTTPException(422, "Dismissal does not assign a category")
     else:
-        category = db.query(Category).filter(Category.id == category_id, Category.user_id == user_id,
+        category = db.query(Category).filter(Category.id == category_id, category_access(user_id),
                                              Category.hide_from_selection.isnot(True)).first()
         if not category:
             raise HTTPException(404, "Category not found")
@@ -203,7 +206,7 @@ def review_suggestion(db, user_id, suggestion_id, *, outcome, category_id=None, 
         transaction.category_verified_at = datetime.utcnow()
         suggestion.reviewed_category_id = category.id
     suggestion.record = {**suggestion.record, "review": {"outcome": outcome,
-        "category": serializable({key: getattr(category, key, None) for key in
+        "category": serializable({key: getattr(category_definition_for_actor(category, user_id), key, None) for key in
             ("id", "name", "category_type", "description", "categorization_instructions")}) if outcome != "dismissed" else None}}
     suggestion.review_outcome = outcome
     suggestion.reviewed_at = datetime.utcnow()
@@ -216,7 +219,7 @@ def trial_summary(db, user_id):
     require_trial()
     rows = db.query(CategorizationSuggestion.review_outcome, func.count(CategorizationSuggestion.id),
                     func.sum(CategorizationSuggestion.review_duration_ms), func.count(CategorizationSuggestion.review_duration_ms)
-                    ).filter(CategorizationSuggestion.user_id == user_id, CategorizationSuggestion.inference_status.in_(["assigned", "abstained"])).group_by(CategorizationSuggestion.review_outcome).all()
+                    ).join(Transaction, Transaction.id == CategorizationSuggestion.transaction_id).filter(CategorizationSuggestion.user_id == user_id, account_access(Transaction.account_id, user_id), CategorizationSuggestion.inference_status.in_(["assigned", "abstained"])).group_by(CategorizationSuggestion.review_outcome).all()
     outcomes = {outcome or "unreviewed": count for outcome, count, _, _ in rows}
     duration_count = sum(count for _, _, _, count in rows)
     reviews = outcomes.get("accepted", 0) + outcomes.get("corrected", 0)

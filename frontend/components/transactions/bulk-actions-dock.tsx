@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import {
@@ -237,7 +238,7 @@ export function BulkActionsDock({
                     className="mr-2 h-3 w-3 rounded-full shrink-0"
                     style={{ backgroundColor: category.color || "#666" }}
                   />
-                  <span className="truncate">{category.name}</span>
+                  <span className="truncate">{categorySelectionLabel(category, categories)}</span>
                 </Button>
               ))}
               {filteredCategories.length === 0 && searchQuery && (

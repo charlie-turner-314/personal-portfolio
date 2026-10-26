@@ -71,12 +71,12 @@ def category_access(actor_user_id: str):
     Household definitions form one selectable vocabulary. Classifications on
     permitted accounts remain applicable when an account changes household.
     """
-    from app.models import Category, Transaction
-    classified = aliased(Transaction)
-    retained = exists(select(classified.id).where(and_(
-        or_(classified.category_id == Category.id,
-            classified.category_system_id == Category.id),
-        account_access(classified.account_id, actor_user_id),
+    from app.models import Category
+    from sqlalchemy import column, table
+    vocabulary = table("category_vocabulary_entries", column("owner_user_id"), column("category_id"))
+    retained = exists(select(vocabulary.c.category_id).where(and_(
+        vocabulary.c.category_id == Category.id,
+        vocabulary.c.owner_user_id == household_root(actor_user_id),
     )))
     return or_(household_root(Category.user_id) == household_root(actor_user_id), retained)
 

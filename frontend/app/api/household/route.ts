@@ -5,8 +5,10 @@ import { db } from "@/lib/db";
 import { householdInvitations, householdMemberships, users } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { getHouseholdAccess } from "@/lib/household/access";
-import { acceptHouseholdInvitation, createHouseholdInvitation, leaveHousehold, revokeHouseholdAccess } from "@/lib/household/invitations";
+import { acceptHouseholdInvitation, createHouseholdInvitation, leaveHousehold, revokeHouseholdAccess, dissolveHousehold } from "@/lib/household/invitations";
 import { isDemoRestrictedUserEmail } from "@/lib/demo-access";
+
+import { previewHouseholdTransition, confirmHouseholdTransition } from "@/lib/household/transitions";
 
 export const dynamic = "force-dynamic";
 
@@ -25,9 +27,10 @@ export async function GET() {
 
 const requestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("invite"), personId: z.string().uuid(), email: z.string().email().max(320) }),
-  z.object({ action: z.literal("revoke"), personId: z.string().uuid() }),
-  z.object({ action: z.literal("accept"), token: z.string().regex(/^[a-f0-9]{64}$/) }),
-  z.object({ action: z.literal("leave") }),
+  z.object({ action: z.literal("revoke"), personId: z.string().uuid(), phase: z.enum(["preview", "commit"]).optional(), confirmation: z.string().optional() }),
+  z.object({ action: z.literal("accept"), token: z.string().regex(/^[a-f0-9]{64}$/), phase: z.enum(["preview", "commit"]).optional(), confirmation: z.string().optional() }),
+  z.object({ action: z.literal("leave"), phase: z.enum(["preview", "commit"]).optional(), confirmation: z.string().optional() }),
+  z.object({ action: z.literal("dissolve"), phase: z.enum(["preview", "commit"]).optional(), confirmation: z.string().optional() }),
 ]);
 
 export async function POST(req: NextRequest) {
@@ -42,9 +45,13 @@ export async function POST(req: NextRequest) {
   try {
     const body = parsed.data;
     if (body.action === "invite") return NextResponse.json(await createHouseholdInvitation(session.user.id, body.personId, body.email));
-    if (body.action === "accept") await acceptHouseholdInvitation(session.user.id, body.token);
-    if (body.action === "revoke") await revokeHouseholdAccess(session.user.id, body.personId);
-    if (body.action === "leave") await leaveHousehold(session.user.id);
+    if (body.phase === "preview") return NextResponse.json(await previewHouseholdTransition(session.user.id, body), { headers: { "Cache-Control": "private, no-store" } });
+    await confirmHouseholdTransition(session.user.id, body, body.confirmation, async () => {
+      if (body.action === "accept") await acceptHouseholdInvitation(session.user.id, body.token);
+      if (body.action === "revoke") await revokeHouseholdAccess(session.user.id, body.personId);
+      if (body.action === "leave") await leaveHousehold(session.user.id);
+      if (body.action === "dissolve") await dissolveHousehold(session.user.id);
+    });
     return NextResponse.json({ success: true });
   } catch (error) {
     // Expected policy conflicts are safe to display; database internals are not.

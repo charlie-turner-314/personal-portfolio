@@ -2258,3 +2258,19 @@ export const upAccountReconciliations = pgTable("up_account_reconciliations", {
   result: jsonb("result").notNull().default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// Definitions form a canonical set without rewriting historical classifications.
+export const categoryVocabularyEntries = pgTable("category_vocabulary_entries", {
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  categoryId: uuid("category_id").notNull().references(() => categories.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => [primaryKey({ columns: [t.ownerUserId, t.categoryId] })]);
+
+export const householdTransitionEvents = pgTable("household_transition_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  actorUserId: text("actor_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  action: text("action").notNull(),
+  requestDigest: text("request_digest").notNull(),
+  preview: jsonb("preview").notNull(),
+  committedAt: timestamp("committed_at", { withTimezone: true }).defaultNow().notNull(),
+});

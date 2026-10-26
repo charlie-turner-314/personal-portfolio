@@ -28,3 +28,13 @@
 - release-lab prepare succeeded in this worktree, port 8128. No candidate application build or upgrade has run yet. Its backup/configuration remains in ignored .release-lab/.
 - Synthetic-only Postgres container syllogic-household-model-test was created for tests; no host port is published.
 - Primary checkout's unrelated changes remain untouched.
+
+## Vocabulary and lifecycle checkpoint
+
+- Added stable-ID category vocabulary entries; current membership selects one set. Definitions imported on join are retained on both sides before exit/dissolution. No name-based merge, financial rewrite, credential transfer or account grant is performed by migration.
+- Join/share/withdraw/leave/remove/dissolve now have server previews, actor-bound HMAC confirmation, live state recheck under the existing household lock, atomic mutation/audit, and matching review UI. Property and aggregate access effects are included without private totals.
+- Added read-only lab inventory script: protected restore has 42 definitions, 21 duplicate labels retained and 11 category-reference columns. Detailed mappings stay in ignored mode-600 lab state.
+- Added synthetic lifecycle tests for stale consent, injected failure, post-write recovery, repeated migration, entry/exit/move/dissolution and preserved ownership. They pass; full browser and delivery review remain outstanding.
+- AI category lookup now preserves ambiguous definitions and strips partner guidance. Suggestion reads/reviews check current account access, including after inference. Category removal retires definitions instead of deleting historical/planning references; onboarding preserves existing references too.
+- Backend focused category/context/suggestion/MCP suite: 64 tests passed using candidate app/tasks mounted in a cached runtime with test dependencies added only to the ephemeral container. This is not a candidate image build.
+- Known remaining major work: effective-dated property/vehicle attribution; complete scope/coverage and boundary-transfer audit; queued jobs/exports/cache matrix; UI/browser validation; full candidate build; exact-revision rehearsal and recovery receipt; reviewable PR/UAT delivery. Goal remains active.

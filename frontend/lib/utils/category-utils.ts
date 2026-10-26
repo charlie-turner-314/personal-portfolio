@@ -74,3 +74,10 @@ export function getCategoryTypeLabel(type: CategoryType): string {
       return "Transfer";
   }
 }
+
+/** Unresolved definitions keep their identity and show their financial meaning. */
+export function categorySelectionLabel<T extends { id: string; name: string; categoryType?: string | null; cashFlowKind?: string | null }>(category: T, vocabulary: T[]): string {
+  if (!vocabulary.some(other => other.id !== category.id && other.name.trim().toLowerCase() === category.name.trim().toLowerCase())) return category.name;
+  const purpose = category.cashFlowKind === "loan_principal" ? "loan principal" : category.cashFlowKind ?? "activity";
+  return `${category.name} (${category.categoryType ?? "definition"} · ${purpose} · ${category.id.slice(0,8)})`;
+}

@@ -8,6 +8,8 @@ import { sameHousehold } from "@/lib/household/account-access";
 import { setAccountSharing, setPropertySharing, setNetWorthSharing } from "@/lib/household/sharing";
 import { isDemoRestrictedUserEmail } from "@/lib/demo-access";
 
+import { previewHouseholdTransition, confirmHouseholdTransition } from "@/lib/household/transitions";
+
 export const dynamic = "force-dynamic";
 export async function GET() {
   const session = await getAuthenticatedSession();
@@ -24,7 +26,7 @@ export async function GET() {
   return NextResponse.json({ properties: ownedProperties.map(property => ({ ...property, sharedWith: propertyGrants.filter(g => g.propertyId === property.id && members.some(m => m.id === g.memberUserId)).map(g => g.memberUserId) })), members, accounts: ownedAccounts.map((account) => ({ ...account, sharedWith: grants.filter((g) => g.accountId === account.id && members.some((m) => m.id === g.memberUserId)).map((g) => g.memberUserId) })), netWorthSharedWith: netWorthGrants.filter((g) => members.some((m) => m.id === g.memberUserId)).map((g) => g.memberUserId) }, { headers: { "Cache-Control": "private, no-store" } });
 }
 const bodySchema = z.discriminatedUnion("resource", [
-  z.object({ resource: z.literal("account"), accountId: z.string().uuid(), memberUserIds: z.array(z.string().min(1).max(255)).max(100) }),
+  z.object({ resource: z.literal("account"), accountId: z.string().uuid(), memberUserIds: z.array(z.string().min(1).max(255)).max(100), phase: z.enum(["preview", "commit"]).optional(), confirmation: z.string().optional() }),
   z.object({ resource: z.literal("property"), propertyId: z.string().uuid(), memberUserIds: z.array(z.string().min(1).max(255)).max(100) }),
   z.object({ resource: z.literal("net-worth"), memberUserIds: z.array(z.string().min(1).max(255)).max(100) }),
 ]);
@@ -38,13 +40,19 @@ export async function POST(req: NextRequest) {
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid sharing request" }, { status: 400 });
   try {
-    if (parsed.data.resource === "account") await setAccountSharing(session.user.id, parsed.data.accountId, parsed.data.memberUserIds);
+    if (parsed.data.resource === "account") {
+      const body = parsed.data;
+      const transition = { action: "share-account" as const, accountId: body.accountId, memberUserIds: body.memberUserIds };
+      if (body.phase === "preview") return NextResponse.json(await previewHouseholdTransition(session.user.id, transition), { headers: { "Cache-Control": "private, no-store" } });
+      await confirmHouseholdTransition(session.user.id, transition, body.confirmation,
+        () => setAccountSharing(session.user.id, body.accountId, body.memberUserIds));
+    }
     else if (parsed.data.resource === "property") await setPropertySharing(session.user.id, parsed.data.propertyId, parsed.data.memberUserIds);
     else await setNetWorthSharing(session.user.id, parsed.data.memberUserIds);
     return NextResponse.json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    const expected = /^(Only the (?:account|property) owner|Choose )/.test(message);
+    const expected = /^(Only the |Choose |This )/.test(message);
     return NextResponse.json({ error: expected ? message : "Could not update sharing" }, { status: expected ? 403 : 500 });
   }
 }

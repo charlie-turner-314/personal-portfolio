@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { CategoryDisplay } from "@/types";
@@ -115,7 +116,7 @@ export function CategorizationSuggestionPanel({ transactionId, categories, onCat
         <span>Choose a different category</span>
         <select className="w-full rounded-md border bg-background p-2 text-sm" value={alternative} onChange={event => setAlternative(event.target.value)} disabled={busy}>
           <option value="">Select a category</option>
-          {categories.filter(category => category.id !== suggestion.category_id).map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+          {categories.filter(category => category.id !== suggestion.category_id).map(category => <option key={category.id} value={category.id}>{categorySelectionLabel(category, categories)}</option>)}
         </select>
       </label>
       <div className="flex flex-wrap gap-2">

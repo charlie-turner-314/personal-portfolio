@@ -38,6 +38,7 @@ describe.skipIf(!container)("category vocabulary boundaries on PostgreSQL", () =
       CREATE TEMP TABLE accounts(id text,user_id text,is_active boolean,consolidated_into_account_id text);
       CREATE TEMP TABLE categories(id text,user_id text);
       CREATE TEMP TABLE transactions(id text,account_id text,category_id text,category_system_id text);
+      CREATE TEMP TABLE category_vocabulary_entries(owner_user_id text,category_id text);
       INSERT INTO household_memberships VALUES ('member','admin');
       INSERT INTO accounts VALUES ('joint','admin',true,NULL),('private','admin',true,NULL),('personal','member',true,NULL);
       INSERT INTO household_account_shares VALUES ('joint','member','admin');
@@ -46,6 +47,7 @@ describe.skipIf(!container)("category vocabulary boundaries on PostgreSQL", () =
       ${query('member')};
       SELECT 'admin'; ${query('admin')};
       SELECT 'outsider'; ${query('outsider')};
+      INSERT INTO category_vocabulary_entries VALUES ('member','admin-used');
       DELETE FROM household_memberships;
       SELECT 'after-leaving'; ${query('member')};
       ROLLBACK;`;

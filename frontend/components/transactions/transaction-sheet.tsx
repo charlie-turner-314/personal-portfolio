@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { CashFlowPurpose } from "./cash-flow-purpose";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -365,7 +366,7 @@ export function TransactionSheet({
                         className="h-3 w-3 shrink-0"
                         style={{ backgroundColor: category.color || "#A1A1AA" }}
                       />
-                      <span>{category.name}</span>
+                      <span>{categorySelectionLabel(category, categories)}</span>
                     </div>
                   </SelectItem>
                 ))}

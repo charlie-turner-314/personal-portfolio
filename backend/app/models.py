@@ -160,6 +160,8 @@ class Category(Base):
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
+    cash_flow_kind = Column(String(20), nullable=True)
+    hide_from_selection = Column(Boolean, default=False)
     category_type = Column(String(20), default="expense")  # expense, income, transfer
     color = Column(String(7))  # Hex color
     icon = Column(String(50))  # Remix icon name

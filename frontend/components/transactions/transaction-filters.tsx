@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { groupReportingCategories } from "@/lib/categories/reporting";
 
 import * as React from "react";
@@ -442,8 +443,7 @@ export function TransactionFilters({
     (filters.minAmount || filters.maxAmount ? 1 : 0);
   const categoryOptions: FilterOption[] = groupedCategories.map((category) => ({
     id: category.id,
-    label: groupedCategories.some(other => other.id !== category.id && other.name.trim().toLowerCase() === category.name.trim().toLowerCase())
-      ? `${category.name} (${category.categoryType})` : category.name,
+    label: categorySelectionLabel(category, groupedCategories),
     color: category.color ?? undefined,
   }));
 

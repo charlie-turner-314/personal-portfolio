@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import inspect, text
 
+from app.services.financial_access import category_access, category_definition_for_actor
 from app.models import Account, Category, InternalTransfer, Transaction
 from app.services.categorization_context import transaction_record
 
@@ -37,7 +38,7 @@ def export_snapshot(db, user_id, path, *, trust_current_labels=False):
     """
     db.execute(text("SET TRANSACTION READ ONLY"))
     now = datetime.now(timezone.utc).isoformat()
-    categories = db.query(Category).filter(Category.user_id == user_id).all()
+    categories = [category_definition_for_actor(category, user_id) for category in db.query(Category).filter(category_access(user_id)).all()]
     accounts = db.query(Account).filter(Account.user_id == user_id, Account.is_active.is_(True)).all()
     # Export can run before rollout/migration: select only the fields present in
     # the source schema rather than requiring the new verification column.

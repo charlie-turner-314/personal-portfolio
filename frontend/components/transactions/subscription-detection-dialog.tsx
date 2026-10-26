@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { useState, useEffect } from "react";
 import {
   Dialog,
@@ -256,7 +257,7 @@ export function SubscriptionDetectionDialog({
                               className="h-3 w-3 shrink-0"
                               style={{ backgroundColor: cat.color || "#A1A1AA" }}
                             />
-                            {cat.name}
+                            {categorySelectionLabel(cat, categories)}
                           </div>
                         </SelectItem>
                       ))}

@@ -17,13 +17,15 @@ vehicle ownership still use undated allocations. The saving summary and Sankey
 labels imply a funding provenance that recorded transactions cannot establish.
 
 1. Household membership establishes a vocabulary, never financial access. Keep
-   one administrator (the current household owner), who manages the vocabulary.
-   All current members can apply it to records they can edit. Standalone users
-   manage their own vocabulary. Budgets and rules remain personal configurations;
+   one household administrator for membership. A category creator manages its
+   definition; all current members can apply the shared vocabulary to records
+   they can edit. This uses existing custody permissions rather than adding roles.
+   Standalone users manage their own definitions. Budgets and rules remain personal configurations;
    sharing their category meanings does not publish their amounts or conditions.
 2. Separate category definition from private guidance and activity. Canonical
-   shared definitions contain name, type, parent meaning, cash-flow default,
-   colour and icon only. Never copy descriptions, instructions, usage or linked
+   shared definitions expose name, type, cash-flow default, colour and icon only.
+   A vocabulary-entry relation retains stable source definition IDs; no financial
+   reference is rewritten just to change its vocabulary. Never copy descriptions, instructions, usage or linked
    resources into a shared definition. Preserve original private definitions and
    source mappings for audit and personal rules. A common name alone is not an
    equivalence: type, cash-flow purpose and parent meaning must also agree.
@@ -70,7 +72,11 @@ The single administrator cannot leave while members remain. Offer dissolution:
 revoke all financial grants and invitations, remove memberships, retain every
 account, credential and person identity. Everyone returns to standalone use.
 No ownership or bank-feed transfer accompanies dissolution or a household move.
-Category mappings retain readable classifications in every destination.
+Category mappings retain readable classifications in every destination. At join,
+copy safe definition IDs into the destination vocabulary; at exit, retain the
+whole safe vocabulary for both sides before removing membership. Copy no activity
+or private instructions. Duplicate names remain distinct IDs and visible
+conflicts. This avoids destructive classification migration and budget collisions.
 
 ## Migration and recovery contract
 

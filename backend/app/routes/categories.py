@@ -117,22 +117,9 @@ def delete_category(
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    # Set category_id and category_system_id to NULL for transactions using this category
-    # Update transactions where category_id matches
-    db.query(Transaction).filter(
-        Transaction.user_id == user_id,
-        Transaction.category_id == category_id
-    ).update({"category_id": None, "category_verified_at": None}, synchronize_session=False)
-    
-    # Update transactions where category_system_id matches
-    db.query(Transaction).filter(
-        Transaction.user_id == user_id,
-        Transaction.category_system_id == category_id
-    ).update({"category_system_id": None, "category_confidence": None}, synchronize_session=False)
-    
-    db.commit()
-
-    db.delete(category)
+    if category.is_system:
+        raise HTTPException(status_code=400, detail="System categories cannot be retired")
+    category.hide_from_selection = True
     db.commit()
     return None
 

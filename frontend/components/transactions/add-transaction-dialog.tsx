@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -278,7 +279,7 @@ export function AddTransactionDialog({ open, onOpenChange, categories: propCateg
                           className="h-3 w-3 rounded-full"
                           style={{ backgroundColor: category.color || "#666" }}
                         />
-                        {category.name}
+                        {categorySelectionLabel(category, categories)}
                       </div>
                     </SelectItem>
                   ))}

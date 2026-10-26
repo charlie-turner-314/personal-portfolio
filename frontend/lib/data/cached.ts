@@ -2,7 +2,7 @@ import { categoryAccess, categoryDefinitionForActor } from "@/lib/household/cate
 // Cached read layer. NOT a "use server" module.
 // Two cache layers:
 // - React.cache: per-request dedup (no TTL, scoped to a single render).
-// - unstable_cache: personal categories/onboarding only. Account access is checked live.
+// - unstable_cache: onboarding only. Vocabulary and account access are checked live.
 // Mutations MUST call revalidateTag(...) for the relevant tag below.
 
 import { accountAccess } from "@/lib/household/account-access";

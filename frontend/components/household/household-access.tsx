@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { TransitionReview, type TransitionReviewData } from "./transition-review";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -13,6 +14,7 @@ export function HouseholdAccess({ people }: { people: { id: string; name: string
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<(TransitionReviewData & { body: { action: string; personId?: string } }) | null>(null);
   async function refresh() {
     const response = await fetch("/api/household", { cache: "no-store" });
     const data = await response.json();
@@ -20,12 +22,14 @@ export function HouseholdAccess({ people }: { people: { id: string; name: string
     setAccess(data);
   }
   useEffect(() => { refresh().catch((e) => setError(e.message)); }, []);
-  async function request(body: object) {
+  async function request(body: { action: string; personId?: string; email?: string }, confirmation?: string) {
     setBusy(true); setError(""); setLink("");
     try {
-      const response = await fetch("/api/household", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const response = await fetch("/api/household", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, phase: body.action !== "invite" && !confirmation ? "preview" : "commit", confirmation }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not update household");
+      if (result.preview) { setPending({ ...result, body }); return false; }
+      setPending(null);
       if (result.token) setLink(`${window.location.origin}/household/join?token=${result.token}`);
       await refresh();
       return true;
@@ -34,6 +38,9 @@ export function HouseholdAccess({ people }: { people: { id: string; name: string
   }
   return <section className="space-y-4 rounded-md border p-4">
     <h3 className="font-medium">Household logins</h3>
+    {pending && <TransitionReview review={pending} busy={busy} onCancel={() => setPending(null)} onConfirm={async () => {
+      if (await request(pending.body, pending.confirmation) && ["leave", "dissolve"].includes(pending.body.action)) window.location.assign("/");
+    }} />}
     {error && <p role="alert" className="text-destructive">{error}</p>}
     {!access && !error && <p>Loading household access…</p>}
     {access && !access.isOwner && <>
@@ -42,6 +49,7 @@ export function HouseholdAccess({ people }: { people: { id: string; name: string
       <Button disabled={busy} variant="outline" onClick={async () => { if (await request({ action: "leave" })) window.location.assign("/"); }}>Leave household</Button>
     </>}
     {access?.isOwner && <>
+      <Button variant="outline" disabled={busy || !!pending} onClick={() => void request({ action: "dissolve" })}>Dissolve household</Button>
       <p className="text-sm text-muted-foreground">Invite a placeholder to use their own login. Personal finances and bank connections stay private. Account owners choose which accounts to share; shared accounts can be edited by the selected members. Existing ownership and history stay in place. Links expire after seven days and only work for the invited email.</p>
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); void request({ action: "invite", personId, email }); }}>
         <label className="block text-sm">Household person

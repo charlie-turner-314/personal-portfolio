@@ -4,7 +4,7 @@ import type { Category, Account } from "@/lib/db/schema";
  * Reusable category subset for UI components
  * Contains only the fields needed for display purposes
  */
-export type CategoryDisplay = Pick<Category, "id" | "name" | "color" | "icon">;
+export type CategoryDisplay = Pick<Category, "id" | "name" | "color" | "icon"> & Partial<Pick<Category, "categoryType" | "cashFlowKind" | "hideFromSelection">>;
 
 /**
  * Account subset for filters and dropdowns
@@ -24,6 +24,7 @@ export interface AccountForFilter {
  * Minimal category type for filter components
  */
 export interface CategoryForFilter {
+  cashFlowKind?: string | null;
   categoryType?: string | null;
   id: string;
   name: string;
