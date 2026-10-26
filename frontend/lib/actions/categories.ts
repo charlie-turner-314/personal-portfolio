@@ -1,9 +1,9 @@
 "use server";
 
-import { categoryAccess, categoryDefinitionForActor } from "@/lib/household/category-access";
+import { categoryAccess, categoryDefinitionForActor, categorySelectionHidden } from "@/lib/household/category-access";
 import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
-import { eq, and, count, sql, asc } from "drizzle-orm";
+import { eq, and, count, sql, asc, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { categories, transactions, type Category, type NewCategory } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/household/financial-auth";
@@ -59,7 +59,8 @@ export async function createCategory(
       where: and(
         eq(categories.userId, userId),
         eq(categories.name, input.name.trim()),
-        eq(categories.categoryType, input.categoryType)
+        eq(categories.categoryType, input.categoryType),
+        input.cashFlowKind ? eq(categories.cashFlowKind,input.cashFlowKind) : isNull(categories.cashFlowKind)
       ),
     });
 
@@ -118,6 +119,10 @@ export async function updateCategory(
       return { success: false, error: "Invalid cash-flow purpose for this category" };
     }
 
+    if (input.cashFlowKind !== undefined && input.cashFlowKind !== existing.cashFlowKind) {
+      return { success:false, error:"Financial type and cash-flow purpose are fixed. Create a new definition for a different meaning" };
+    }
+
     // System categories accept description/categorization_instructions updates
     // (user-tailored context) but reject structural changes.
     if (existing.isSystem) {
@@ -156,7 +161,8 @@ export async function updateCategory(
         where: and(
           eq(categories.userId, userId),
           eq(categories.name, input.name.trim()),
-          eq(categories.categoryType, existing.categoryType)
+          eq(categories.categoryType, existing.categoryType),
+          existing.cashFlowKind ? eq(categories.cashFlowKind,existing.cashFlowKind) : isNull(categories.cashFlowKind)
         ),
       });
 
@@ -224,9 +230,10 @@ export async function getCategoriesByType(
       categoryAccess(userId),
       eq(categories.categoryType, type)
     ),
+    extras: { selectionHidden: categorySelectionHidden(userId).as("selection_hidden") },
     orderBy: (categories, { asc }) => [asc(categories.name), asc(categories.id)],
   });
-  return rows.map(category => categoryDefinitionForActor(category, userId));
+  return rows.map(category => ({ ...categoryDefinitionForActor(category,userId), hideFromSelection: category.selectionHidden }));
 }
 
 export async function getCategoryByName(name: string): Promise<Category | null> {
@@ -236,14 +243,12 @@ export async function getCategoryByName(name: string): Promise<Category | null> 
     return null;
   }
 
-  const category = await db.query.categories.findFirst({
-    where: and(
-      categoryAccess(userId),
-      eq(categories.name, name)
-    ),
+  const matches = await db.query.categories.findMany({
+    where: and(categoryAccess(userId), eq(categories.name,name)), limit:2,
+    extras: { selectionHidden: categorySelectionHidden(userId).as("selection_hidden") },
   });
-
-  return category ? categoryDefinitionForActor(category, userId) : null;
+  if (matches.length !== 1) return null;
+  return { ...categoryDefinitionForActor(matches[0],userId), hideFromSelection: matches[0].selectionHidden };
 }
 
 /**
@@ -307,6 +312,9 @@ export async function deleteCategoryWithReassignment(
         reassigned = changed.length;
       }
       await tx.update(categories).set({ hideFromSelection: true }).where(eq(categories.id, source.id));
+      await tx.execute(sql`INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+        VALUES (coalesce((SELECT owner_user_id FROM household_memberships WHERE member_user_id=${userId}),${userId}),${source.id},true)
+        ON CONFLICT(owner_user_id,category_id) DO UPDATE SET hidden_from_selection=true`);
       return reassigned;
     });
     revalidatePath("/"); revalidatePath("/settings"); revalidatePath("/transactions");

@@ -15,6 +15,14 @@ export function categoryAccess(actorUserId: string): SQL {
   ))`;
 }
 
+/** Selection retirement belongs to a vocabulary, not another household's history. */
+export function categorySelectionHidden(actorUserId: string): SQL<boolean> {
+  return sql<boolean>`coalesce((SELECT entry.hidden_from_selection FROM category_vocabulary_entries entry
+    WHERE entry.category_id=${categories.id} AND entry.owner_user_id=coalesce(
+      (SELECT owner_user_id FROM household_memberships WHERE member_user_id=${actorUserId}),${actorUserId})),
+    CASE WHEN ${sameHousehold(categories.userId,actorUserId)} THEN coalesce(${categories.hideFromSelection},false) ELSE false END)`;
+}
+
 /** Shared vocabulary never carries the source user's private guidance or links. */
 export function categoryDefinitionForActor(category: Category, actorUserId: string): Category {
   if (category.userId === actorUserId) return category;

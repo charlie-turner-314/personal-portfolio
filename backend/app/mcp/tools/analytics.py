@@ -458,7 +458,7 @@ def get_financial_summary(
         def _acc_balance(acc) -> float:
             full = float(acc.functional_balance or acc.balance_available or 0)
             if single_person:
-                return attribute_amount(full, owners_cache[str(acc.id)], person_ids[0])
+                return attribute_amount(full, owners_cache[str(acc.id)], person_ids[0], db=db)
             return full
 
         gross_assets = 0.0

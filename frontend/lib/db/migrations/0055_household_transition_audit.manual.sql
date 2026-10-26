@@ -18,8 +18,13 @@ CREATE TABLE IF NOT EXISTS category_vocabulary_entries (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY(owner_user_id, category_id)
 );
-INSERT INTO category_vocabulary_entries(owner_user_id,category_id)
-  SELECT user_id,id FROM categories ON CONFLICT DO NOTHING;
+ALTER TABLE category_vocabulary_entries ADD COLUMN IF NOT EXISTS hidden_from_selection boolean;
+UPDATE category_vocabulary_entries entry SET hidden_from_selection=coalesce(definition.hide_from_selection,false)
+ FROM categories definition WHERE definition.id=entry.category_id AND entry.hidden_from_selection IS NULL;
+ALTER TABLE category_vocabulary_entries ALTER COLUMN hidden_from_selection SET DEFAULT false;
+ALTER TABLE category_vocabulary_entries ALTER COLUMN hidden_from_selection SET NOT NULL;
+INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+  SELECT user_id,id,coalesce(hide_from_selection,false) FROM categories ON CONFLICT DO NOTHING;
 -- Preserve every existing personal consumer, not merely transaction labels.
 -- Discover scalar category foreign keys rather than maintain a lossy allowlist.
 DO $$
@@ -35,12 +40,15 @@ BEGIN
      AND EXISTS (SELECT 1 FROM information_schema.columns own
        WHERE own.table_schema='public' AND own.table_name=tc.table_name AND own.column_name='user_id')
  LOOP
-   EXECUTE format('INSERT INTO category_vocabulary_entries(owner_user_id,category_id)
-     SELECT DISTINCT user_id,%I FROM %I WHERE %I IS NOT NULL ON CONFLICT DO NOTHING',
-     reference.column_name,reference.table_name,reference.column_name);
+   EXECUTE format('INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+     SELECT DISTINCT consumer.user_id,consumer.%I,coalesce(definition.hide_from_selection,false)
+     FROM %I consumer JOIN categories definition ON definition.id=consumer.%I
+     WHERE consumer.%I IS NOT NULL ON CONFLICT DO NOTHING',
+     reference.column_name,reference.table_name,reference.column_name,reference.column_name);
  END LOOP;
- INSERT INTO category_vocabulary_entries(owner_user_id,category_id)
-   SELECT DISTINCT coalesce(m.owner_user_id,e.owner_user_id),e.category_id
+ INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+   SELECT coalesce(m.owner_user_id,e.owner_user_id),e.category_id,bool_and(e.hidden_from_selection)
    FROM category_vocabulary_entries e LEFT JOIN household_memberships m ON m.member_user_id=e.owner_user_id
+   GROUP BY coalesce(m.owner_user_id,e.owner_user_id),e.category_id
    ON CONFLICT DO NOTHING;
 END $$;

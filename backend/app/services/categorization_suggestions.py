@@ -9,7 +9,7 @@ import time
 from fastapi import HTTPException
 from sqlalchemy import or_, func, text
 
-from app.services.financial_access import account_access, category_access, category_definition_for_actor
+from app.services.financial_access import account_access, category_access, category_definition_for_actor, category_selection_hidden
 from app.models import Account, Category, CategorizationSuggestion, InternalTransfer, Transaction
 from app.services.categorization_context import precedent_fingerprint, transaction_record
 from app.services.category_matcher import CategoryMatcher
@@ -195,7 +195,7 @@ def review_suggestion(db, user_id, suggestion_id, *, outcome, category_id=None, 
             raise HTTPException(422, "Dismissal does not assign a category")
     else:
         category = db.query(Category).filter(Category.id == category_id, category_access(user_id),
-                                             Category.hide_from_selection.isnot(True)).first()
+                                             category_selection_hidden(user_id).isnot(True)).first()
         if not category:
             raise HTTPException(404, "Category not found")
         matches = str(category.id) == str(suggestion.suggested_category_id)

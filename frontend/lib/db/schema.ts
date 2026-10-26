@@ -2263,6 +2263,7 @@ export const upAccountReconciliations = pgTable("up_account_reconciliations", {
 export const categoryVocabularyEntries = pgTable("category_vocabulary_entries", {
   ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   categoryId: uuid("category_id").notNull().references(() => categories.id, { onDelete: "restrict" }),
+  hiddenFromSelection: boolean("hidden_from_selection").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, t => [primaryKey({ columns: [t.ownerUserId, t.categoryId] })]);
 
@@ -2274,3 +2275,21 @@ export const householdTransitionEvents = pgTable("household_transition_events", 
   preview: jsonb("preview").notNull(),
   committedAt: timestamp("committed_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const propertyOwnershipAllocations = pgTable("property_ownership_allocations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+  personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "restrict" }),
+  effectiveFrom: date("effective_from").notNull(),
+  share: numeric("share", { precision: 18, scale: 14 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => [unique().on(t.propertyId, t.personId, t.effectiveFrom), index().on(t.propertyId, t.effectiveFrom)]);
+
+export const vehicleOwnershipAllocations = pgTable("vehicle_ownership_allocations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  vehicleId: uuid("vehicle_id").notNull().references(() => vehicles.id, { onDelete: "cascade" }),
+  personId: uuid("person_id").notNull().references(() => people.id, { onDelete: "restrict" }),
+  effectiveFrom: date("effective_from").notNull(),
+  share: numeric("share", { precision: 18, scale: 14 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => [unique().on(t.vehicleId, t.personId, t.effectiveFrom), index().on(t.vehicleId, t.effectiveFrom)]);

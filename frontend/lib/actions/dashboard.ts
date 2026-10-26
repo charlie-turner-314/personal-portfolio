@@ -14,9 +14,7 @@ import {
   resolveIncomeExpenseGrouping,
   type IncomeExpenseGrouping,
 } from "@/lib/dashboard/income-expense-buckets";
-import { ownershipShareSql, propertyOwnershipShareSql } from "@/lib/people/ownership-sql";
-import { getOwnersForEntities } from "@/lib/people/queries";
-import { attributeAmount } from "@/lib/people/attribution";
+import { ownershipShareSql, propertyOwnershipShareSql, vehicleOwnershipShareSql } from "@/lib/people/ownership-sql";
 import { getPortfolio } from "@/lib/api/investments";
 import { getUpcomingPlannedExpenses } from "@/lib/actions/planned-expenses";
 import {
@@ -318,6 +316,10 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
     return emptyNetWorthOverview();
   }
 
+  const ownershipScope = personId === "all" ? undefined : personId ?? {
+    userId: session.user.id, householdPersonId: session.householdPersonId,
+  };
+
   const [userAccounts, userProperties, userVehicles, currency, portfolio] = await Promise.all([
     db
       .select({
@@ -330,7 +332,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         currency: accounts.currency,
         superAccountId: superAccounts.id,
         includeSuperInNetWorth: superAccounts.includeInNetWorth,
-        ownershipShare: ownershipShareSql(personId, accounts.id, sql`CURRENT_DATE`),
+        ownershipShare: ownershipShareSql(ownershipScope, accounts.id, sql`CURRENT_DATE`),
       })
       .from(accounts)
       .leftJoin(
@@ -349,7 +351,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         address: properties.address,
         currentValue: properties.currentValue,
         currency: properties.currency,
-        ownershipShare: propertyOwnershipShareSql(personId, properties.id),
+        ownershipShare: propertyOwnershipShareSql(ownershipScope, properties.id),
       })
       .from(properties)
       .where(and(propertyAccess(properties.id, session.user.id), eq(properties.isActive, true))),
@@ -362,6 +364,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         model: vehicles.model,
         year: vehicles.year,
         currentValue: vehicles.currentValue,
+        ownershipShare: vehicleOwnershipShareSql(ownershipScope, vehicles.id),
         currency: vehicles.currency,
       })
       .from(vehicles)
@@ -370,10 +373,6 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
     getPortfolio().catch(() => null),
   ]);
 
-  const [propertyOwners, vehicleOwners] = personId ? await Promise.all([
-    getOwnersForEntities("property", userProperties.map((property) => property.id)),
-    getOwnersForEntities("vehicle", userVehicles.map((vehicle) => vehicle.id)),
-  ]) : [new Map(), new Map()];
   const selectedIds = normalizeAccountIds(accountIds);
   const portfolioById = new Map((portfolio?.accounts || []).map((account) => [account.id, account]));
   const entries: NetWorthEntry[] = [
@@ -395,9 +394,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
       id: property.id,
       name: property.name,
       institution: property.address,
-      value: property.ownershipShare === undefined
-        ? attributeAmount(Number(property.currentValue || 0), propertyOwners.get(property.id) || [], personId || null)
-        : Number(property.currentValue || 0) * Number(property.ownershipShare),
+      value: Number(property.currentValue || 0) * Number(property.ownershipShare),
       currency: property.currency || currency,
       source: "property" as const,
     }))),
@@ -405,7 +402,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
       id: vehicle.id,
       name: vehicle.name,
       institution: [vehicle.make, vehicle.model].filter(Boolean).join(" ") || null,
-      value: attributeAmount(Number(vehicle.currentValue || 0), vehicleOwners.get(vehicle.id) || [], personId || null),
+      value: Number(vehicle.currentValue || 0) * Number(vehicle.ownershipShare),
       currency: vehicle.currency || currency,
       source: "vehicle" as const,
     }))),
@@ -413,7 +410,8 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
 
   return {
     ...calculateNetWorthOverview(entries, currency),
-    scope: personId ? "Selected person’s share of visible accounts" : "Your visible finances",
+    scope: personId === "all" ? "Household view · permitted accounts counted once"
+      : personId ? "Selected person’s share of permitted records" : "My view · economic share of permitted records",
     accountFiltered: Boolean(selectedIds),
   };
 }

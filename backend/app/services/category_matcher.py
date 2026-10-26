@@ -14,7 +14,7 @@ import json
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 
-from app.services.financial_access import category_access, category_definition_for_actor
+from app.services.financial_access import category_access, category_definition_for_actor, category_definitions_for_actor
 from collections import Counter
 from app.models import Category, Transaction
 from app.db_helpers import get_user_id
@@ -211,8 +211,7 @@ class CategoryMatcher:
         """
         if self._category_cache is None:
             logger.debug(f"[CATEGORY_MATCHER] Loading categories for user_id: {self.user_id}")
-            categories = [category_definition_for_actor(category, self.user_id) for category in
-                          self.db.query(Category).filter(category_access(self.user_id), Category.hide_from_selection.isnot(True)).order_by(Category.id).all()]
+            categories = category_definitions_for_actor(self.db, self.user_id, selectable_only=True)
             counts = Counter(category.name.strip().casefold() for category in categories)
             # Never overwrite a same-name definition in a name-keyed AI cache.
             # Disambiguate prompt labels without modifying persistent definitions.

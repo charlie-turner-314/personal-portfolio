@@ -252,7 +252,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
         <CardHeader>
           <CardTitle>Categories</CardTitle>
           <CardDescription>
-            Manage your transaction categories. Categories help you organize and track your spending.
+            Household members apply one shared vocabulary. Category creators manage their definitions; private guidance stays with its author. Retiring a category preserves recorded classifications.
           </CardDescription>
         </CardHeader>
         <CardContent>

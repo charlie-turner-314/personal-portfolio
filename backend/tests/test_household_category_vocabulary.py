@@ -75,3 +75,17 @@ def test_shared_edit_accepts_partners_category_and_revocation_denies_current_acc
     with pytest.raises(HTTPException) as error:
         owned_transaction(db, member, transaction.id)
     assert error.value.status_code == 404
+
+
+def test_retirement_does_not_disable_a_former_members_retained_vocabulary(household):
+    from sqlalchemy import text
+    from app.services.financial_access import category_definitions_for_actor
+    db, _, member, _, membership, _, categories, _ = household
+    categories[0].hide_from_selection = True
+    db.delete(membership); db.flush()
+    db.execute(text("""INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+      VALUES(:actor,:category,false) ON CONFLICT DO NOTHING"""), {"actor":member,"category":categories[0].id})
+    retained = next(category for category in category_definitions_for_actor(db,member,selectable_only=True)
+                    if category.id == categories[0].id)
+    assert retained.hide_from_selection is False
+    assert retained.categorization_instructions is None and retained.description is None

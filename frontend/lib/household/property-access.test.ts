@@ -25,6 +25,7 @@ describe.skipIf(!container)("property consent and ownership on PostgreSQL", () =
       CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
       CREATE TEMP TABLE people(id text, user_id text, kind text, linked_user_id text);
       CREATE TEMP TABLE property_owners(property_id text, person_id text, share numeric);
+      CREATE TEMP TABLE property_ownership_allocations(property_id text, person_id text, share numeric, effective_from date);
       CREATE TEMP TABLE property_liability_links(property_id text, account_id text);
       INSERT INTO household_memberships VALUES ('member','owner','linked');
       INSERT INTO people(id,user_id,kind) VALUES ('linked','owner','member'),('owner-self','owner','self'),('self','member','self');

@@ -140,6 +140,7 @@ class CategoryUpdate(BaseModel):
 
 
 class CategoryResponse(CategoryBase):
+    hide_from_selection: bool = False
     id: UUID
     is_system: bool
     created_at: Optional[datetime] = None

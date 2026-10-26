@@ -27,7 +27,10 @@ labels imply a funding provenance that recorded transactions cannot establish.
    A vocabulary-entry relation retains stable source definition IDs; no financial
    reference is rewritten just to change its vocabulary. Never copy descriptions, instructions, usage or linked
    resources into a shared definition. Preserve original private definitions and
-   source mappings for audit and personal rules. A common name alone is not an
+   source mappings for audit and personal rules. Financial type and cash-flow
+   purpose are immutable after creation; a different meaning gets a new ID.
+   Retirement is scoped to each vocabulary, so a former creator cannot disable
+   another household’s retained selection. A common name alone is not an
    equivalence: type, cash-flow purpose and parent meaning must also agree.
    Different meanings remain separate selectable definitions with a visible
    distinction. Migration never destroys the original classification.
@@ -107,3 +110,18 @@ to joint cash then mortgage principal, Charlie's 35,000 ownership transfer and
 35,000 principal allocation, plus other amounts and ratios. Reconcile member sums
 only over the same complete permitted record set. Browser verification and a
 reviewable PR to develop are required; document exact revisions and concrete UAT.
+
+## Ownership implementation detail
+
+Accounts, properties and vehicles now use one complete-set resolution rule in
+TypeScript and Python. Properties/vehicles receive additive dated tables. Existing
+legacy owner rows stay intact as provenance; migration supplies a baseline at
+0001-01-01, preserving their prior timeless meaning. Equal thirds use a final
+residual at stored precision so a complete set totals exactly one. Invalid legacy
+partial/mixed explicit splits fail closed; they are not silently normalized.
+
+The generic owner endpoint writes dated facts for all three resource types;
+legacy owner tables are no longer an alternative writer. Edits require an
+explicit effective date when allocations change. Stable linked login identities
+resolve through retained people, independently of present membership. Dated
+history prevents deleting a person. Economic changes never grant resource access.

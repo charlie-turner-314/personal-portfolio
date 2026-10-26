@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath, updateTag } from "next/cache";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, categories, type User, type NewCategory } from "@/lib/db/schema";
 import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
@@ -189,6 +189,10 @@ export async function saveOnboardingCategories(
     await db.transaction(async tx => {
     // Retain every existing classification and planning reference.
     await tx.update(categories).set({ hideFromSelection: true }).where(eq(categories.userId, userId));
+    await tx.execute(sql`INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+      SELECT coalesce((SELECT owner_user_id FROM household_memberships WHERE member_user_id=${userId}),${userId}),id,true
+      FROM categories WHERE user_id=${userId}
+      ON CONFLICT(owner_user_id,category_id) DO UPDATE SET hidden_from_selection=true`);
 
     // Insert new categories
     const newCategories: NewCategory[] = categoryInputs.map((cat) => ({

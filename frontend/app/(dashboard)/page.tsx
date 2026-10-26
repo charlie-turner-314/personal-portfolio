@@ -144,7 +144,7 @@ async function DashboardContent({
           />
           </div>
           <Suspense fallback={<CardLoading label="Loading liabilities" height="h-32" />}>
-            <LiabilitiesKpi accountIds={accountIds} personId={personId === "all" ? undefined : personId} />
+            <LiabilitiesKpi accountIds={accountIds} personId={personId} />
           </Suspense>
           <div data-walkthrough="walkthrough-spending">
           <KpiSparkCard
@@ -227,7 +227,7 @@ async function DashboardContent({
             <NetWorthTotals />
           </Suspense>
           <Suspense fallback={<CardLoading label="Loading assets overview" height="h-64" />}>
-            <AssetsOverviewSection accountIds={accountIds} personId={personId === "all" ? undefined : personId} />
+            <AssetsOverviewSection accountIds={accountIds} personId={personId} />
           </Suspense>
         </div>
 

@@ -1892,3 +1892,25 @@ class UpAccountReconciliation(Base):
     canonical_snapshot = Column(JSONB, nullable=False)
     result = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime, nullable=False, server_default=text("now()"))
+
+
+class PropertyOwnershipAllocation(Base):
+    __tablename__ = "property_ownership_allocations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), nullable=False, index=True)
+    person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="RESTRICT"), nullable=False)
+    effective_from = Column(Date, nullable=False)
+    share = Column(Numeric(18, 14), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    __table_args__ = (UniqueConstraint("property_id", "person_id", "effective_from"),)
+
+
+class VehicleOwnershipAllocation(Base):
+    __tablename__ = "vehicle_ownership_allocations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    vehicle_id = Column(UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False, index=True)
+    person_id = Column(UUID(as_uuid=True), ForeignKey("people.id", ondelete="RESTRICT"), nullable=False)
+    effective_from = Column(Date, nullable=False)
+    share = Column(Numeric(18, 14), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    __table_args__ = (UniqueConstraint("vehicle_id", "person_id", "effective_from"),)

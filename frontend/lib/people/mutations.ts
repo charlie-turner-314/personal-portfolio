@@ -5,9 +5,9 @@ import {
   propertyOwners,
   vehicleOwners,
   householdMemberships,
-  accounts, properties, vehicles, accountOwnershipAllocations,
+  accounts, properties, vehicles, accountOwnershipAllocations, propertyOwnershipAllocations, vehicleOwnershipAllocations,
 } from "@/lib/db/schema";
-import { eq, and, inArray, or, ne } from "drizzle-orm";
+import { eq, and, inArray, or, ne, sql } from "drizzle-orm";
 import { getHouseholdAccess } from "@/lib/household/access";
 import { validateOwners, type OwnerInput } from "./validation";
 import type { EntityType } from "./queries";
@@ -61,6 +61,10 @@ export async function deletePerson(input: { userId: string; id: string }) {
     if (target.kind === "self") throw new Error("cannot delete the self person");
     if (target.linkedUserId) {
       throw Object.assign(new Error("Keep this linked person to preserve their login identity and ownership history"), { code: "LINKED_LOGIN" });
+    }
+    for (const history of [accountOwnershipAllocations, propertyOwnershipAllocations, vehicleOwnershipAllocations]) {
+      const [reference] = await tx.select({ id: history.personId }).from(history).where(eq(history.personId, input.id)).limit(1);
+      if (reference) throw Object.assign(new Error("Keep this person to preserve dated ownership history"), { code: "OWNERSHIP_HISTORY" });
     }
     // Never disclose or cascade-delete another login's private ownership records.
     for (const [ownership, resource, idColumn] of [
@@ -132,6 +136,7 @@ export async function setOwners(input: {
   entityType: EntityType;
   entityId: string;
   owners: OwnerInput[];
+  effectiveFrom?: string;
 }) {
   validateOwners(input.owners);
 
@@ -153,33 +158,49 @@ export async function setOwners(input: {
     throw new Error("one or more personIds do not belong to this user");
   }
 
-  const table =
-    input.entityType === "account"
-      ? accountOwners
-      : input.entityType === "property"
-        ? propertyOwners
-        : vehicleOwners;
-  const idCol =
-    input.entityType === "account"
-      ? accountOwners.accountId
-      : input.entityType === "property"
-        ? propertyOwners.propertyId
-        : vehicleOwners.vehicleId;
-  const idField =
-    input.entityType === "account"
-      ? "accountId"
-      : input.entityType === "property"
-        ? "propertyId"
-        : "vehicleId";
-
-  await db.transaction(async (tx) => {
-    await tx.delete(table).where(eq(idCol, input.entityId));
-    await tx.insert(table).values(
-      input.owners.map((o) => ({
-        [idField]: input.entityId,
-        personId: o.personId,
-        share: o.share === null ? null : String(o.share),
-      })) as any
-    );
+  const entity = input.entityType;
+  const field = sql.identifier(`${entity}_id`);
+  const history = sql.identifier(`${entity}_ownership_allocations`);
+  const resource = sql.identifier(entity === "property" ? "properties" : `${entity}s`);
+  if (input.effectiveFrom && (!/^\d{4}-\d{2}-\d{2}$/.test(input.effectiveFrom)
+    || input.effectiveFrom.startsWith("0000") || Number.isNaN(Date.parse(input.effectiveFrom))
+    || new Date(`${input.effectiveFrom}T00:00:00Z`).toISOString().slice(0,10) !== input.effectiveFrom)) throw new Error("Choose a valid ownership effective date");
+  await db.transaction(async tx => {
+    const owned = await tx.execute(sql`SELECT id FROM ${resource} WHERE id=${input.entityId} AND user_id=${input.userId} FOR UPDATE`);
+    if (!owned.length) throw new Error("Only the custodian can change economic ownership");
+    const before = await tx.execute(sql`SELECT person_id,share,effective_from::text FROM ${history}
+      WHERE ${field}=${input.entityId} ORDER BY effective_from,person_id`);
+    let effectiveFrom = input.effectiveFrom;
+    if (!effectiveFrom && before.length) {
+      const current = await tx.execute(sql`SELECT person_id,share FROM ${history} WHERE ${field}=${input.entityId}
+        AND effective_from=(SELECT max(effective_from) FROM ${history} WHERE ${field}=${input.entityId} AND effective_from<=CURRENT_DATE)`);
+      const equal = 1 / input.owners.length;
+      if (current.length === input.owners.length && input.owners.every(owner => current.some(row =>
+        row.person_id === owner.personId && Math.abs(Number(row.share)-(owner.share ?? equal))<0.00000002))) return;
+      throw new Error("Choose an effective date for the ownership change");
+    }
+    effectiveFrom ??= "0001-01-01";
+    // Existing dated sets, including all earlier dates, remain intact. No
+    // timeless ownership writer is allowed to supersede these dated facts.
+    await tx.execute(sql`DELETE FROM ${history} WHERE ${field}=${input.entityId} AND effective_from=${effectiveFrom}::date`);
+    const precision = entity === "account" ? 8 : 14;
+    const unit = BigInt(10 ** precision);
+    const allEqual = input.owners.every(owner => owner.share === null);
+    const equalAtoms = unit / BigInt(input.owners.length);
+    const atoms = input.owners.map((owner,index) => allEqual
+      ? index === input.owners.length-1 ? unit-equalAtoms*BigInt(input.owners.length-1) : equalAtoms
+      : BigInt(Math.round(Number(owner.share) * 10**precision)));
+    if (atoms.reduce((sum,share) => sum+share,BigInt(0)) !== unit) throw new Error("Shares must sum exactly to one at the stored precision; use equal split for thirds");
+    const resolvedOwners = input.owners.map((owner,index) => ({ personId: owner.personId,
+      share: `${atoms[index]/unit}.${String(atoms[index]%unit).padStart(precision,"0")}` }));
+    for (const owner of resolvedOwners) {
+      await tx.execute(sql`INSERT INTO ${history}(${field},person_id,effective_from,share)
+        VALUES (${input.entityId},${owner.personId},${effectiveFrom}::date,${owner.share})`);
+    }
+    await tx.execute(sql`INSERT INTO household_transition_events(actor_user_id,action,request_digest,preview)
+      VALUES (${input.userId},${`ownership-${entity}`},'dated-ownership',${JSON.stringify({
+        entityId: input.entityId, effectiveFrom, previousSets: before,
+        owners: resolvedOwners, accessAndCustodyChanged: false,
+      })}::jsonb)`);
   });
 }

@@ -6,7 +6,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import postgres from "postgres";
 import * as schema from "@/lib/db/schema";
 import { accountAccess } from "./account-access";
-import { categoryAccess } from "./category-access";
+import { categoryAccess, categorySelectionHidden } from "./category-access";
 
 const actionActor = vi.hoisted(() => ({ id: "" }));
 vi.mock("@/lib/household/financial-auth", () => ({ requireAuth: async () => actionActor.id }));
@@ -182,6 +182,13 @@ describe.skipIf(!url)("household lifecycle over a migrated PostgreSQL database",
     expect(await db.select().from(schema.transactions).where(eq(schema.transactions.id, transferId))).toEqual(before);
     expect((await db.select().from(schema.categories).where(eq(schema.categories.id, principal)))[0].hideFromSelection).toBe(true);
     expect(await definitions(member)).toContain(principal);
+    expect(await actions.updateCategory(principal,{cashFlowKind:"investment"})).toMatchObject({success:false});
+    actionActor.id = member;
+    const retained = (await actions.getCategoriesByType("expense")).find(category=>category.id===principal);
+    expect(retained).toMatchObject({hideFromSelection:false,categorizationInstructions:null});
+    actionActor.id = admin;
+    const retired = (await actions.getCategoriesByType("expense")).find(category=>category.id===principal);
+    expect(retired?.hideFromSelection).toBe(true);
   });
 
 });

@@ -1,4 +1,4 @@
-import { categoryAccess, categoryDefinitionForActor } from "@/lib/household/category-access";
+import { categoryAccess, categoryDefinitionForActor, categorySelectionHidden } from "@/lib/household/category-access";
 // Cached read layer. NOT a "use server" module.
 // Two cache layers:
 // - React.cache: per-request dedup (no TTL, scoped to a single render).
@@ -31,9 +31,10 @@ export const getCachedSession = cache(async () => {
 async function fetchCategoriesForUser(userId: string) {
   const rows = await db.query.categories.findMany({
     where: categoryAccess(userId),
+    extras: { selectionHidden: categorySelectionHidden(userId).as("selection_hidden") },
     orderBy: (c, { asc }) => [asc(c.name), asc(c.id)],
   });
-  return rows.map(category => categoryDefinitionForActor(category, userId));
+  return rows.map(category => ({ ...categoryDefinitionForActor(category,userId), hideFromSelection: category.selectionHidden }));
 }
 
 // Membership and retained classification access are evaluated on every request.

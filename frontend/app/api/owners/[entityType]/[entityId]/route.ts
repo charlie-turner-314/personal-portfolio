@@ -34,6 +34,7 @@ export async function GET(
 }
 
 const putSchema = z.object({
+  effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   owners: z
     .array(
       z.object({
@@ -41,7 +42,7 @@ const putSchema = z.object({
         share: z.number().nullable(),
       })
     )
-    .min(1),
+    .min(1).max(100),
 });
 
 export async function PUT(
@@ -74,6 +75,7 @@ export async function PUT(
       entityType: entityType as EntityType,
       entityId,
       owners: body.owners,
+      effectiveFrom: body.effectiveFrom,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

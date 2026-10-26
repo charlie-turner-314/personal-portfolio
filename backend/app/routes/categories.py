@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from typing import List, Optional
 from uuid import UUID
 import logging
@@ -8,7 +8,7 @@ import csv
 import io
 from decimal import Decimal
 
-from app.services.financial_access import category_access, category_definition_for_actor
+from app.services.financial_access import category_access, category_definition_for_actor, category_definitions_for_actor
 from app.database import get_db
 from app.models import Category, Transaction
 from app.db_helpers import get_user_id
@@ -39,8 +39,7 @@ def list_categories(
 ):
     """List all categories for the current user."""
     user_id = get_user_id(user_id)
-    categories = db.query(Category).filter(category_access(user_id)).order_by(Category.name, Category.id).all()
-    return [category_definition_for_actor(category, user_id) for category in categories]
+    return category_definitions_for_actor(db,user_id)
 
 
 @router.get("/{category_id}", response_model=CategoryResponse)
@@ -51,13 +50,10 @@ def get_category(
 ):
     """Get a specific category by ID."""
     user_id = get_user_id(user_id)
-    category = db.query(Category).filter(
-        Category.id == category_id,
-        category_access(user_id)
-    ).first()
+    category = next((category for category in category_definitions_for_actor(db,user_id) if category.id == category_id),None)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    return category_definition_for_actor(category, user_id)
+    return category
 
 
 @router.post("/", response_model=CategoryResponse, status_code=201)
@@ -68,6 +64,8 @@ def create_category(
 ):
     """Create a new category."""
     user_id = get_user_id(user_id)
+    if category.cash_flow_kind and category.category_type != "expense":
+        raise HTTPException(status_code=422,detail="Capital defaults require an expense definition")
     category_data = category.model_dump()
     category_data["user_id"] = user_id
     db_category = Category(**category_data)
@@ -120,6 +118,9 @@ def delete_category(
     if category.is_system:
         raise HTTPException(status_code=400, detail="System categories cannot be retired")
     category.hide_from_selection = True
+    db.execute(text("""INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+      VALUES(coalesce((SELECT owner_user_id FROM household_memberships WHERE member_user_id=:actor),:actor),:category,true)
+      ON CONFLICT(owner_user_id,category_id) DO UPDATE SET hidden_from_selection=true"""), {"actor":user_id,"category":category.id})
     db.commit()
     return None
 
