@@ -10,7 +10,7 @@ export async function PortfolioSummaryCard() {
   }
   const total = Number(portfolio.total_value);
   if (!total) return null;
-  const change = Number(portfolio.total_value_today_change);
+  const change = portfolio.total_value_today_change == null ? null : Number(portfolio.total_value_today_change);
   return (
     <Link
       href="/investments"
@@ -20,13 +20,12 @@ export async function PortfolioSummaryCard() {
         <h3 className="font-medium">Investments</h3>
         <span
           className={
-            change >= 0
+            change == null ? "text-muted-foreground text-sm" : change >= 0
               ? "text-green-600 text-sm"
               : "text-red-600 text-sm"
           }
         >
-          {change >= 0 ? "+" : ""}
-          {change.toFixed(2)} today
+          {change == null ? "Today’s change unavailable" : `${change >= 0 ? "+" : ""}${change.toFixed(2)} today`}
         </span>
       </div>
       <p className="text-2xl mt-1">

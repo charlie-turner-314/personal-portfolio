@@ -5,7 +5,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -26,12 +25,18 @@ def crypto_key(monkeypatch):
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite:///:memory:")
-    for model in (User, Account, BrokerConnection, Holding, BrokerTrade,
-                  PriceSnapshot, HoldingValuation, AccountBalance):
-        model.__table__.create(bind=engine)
-    with Session(engine) as session:
+    from app.database import Base, engine
+    Base.metadata.create_all(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
+    finally:
+        session.close()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
 
 
 def test_sync_brokerage_upserts_holdings_trades_and_cash(db):

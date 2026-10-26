@@ -27,6 +27,7 @@ import {
   ToggleGroupItem,
 } from "@/components/ui/toggle-group";
 import { currencySymbol } from "@/lib/utils/currency";
+import { ManualPriceForm } from "./ManualPriceForm";
 import { PortfolioChart } from "./PortfolioChart";
 import { TypeBadge } from "./HoldingsTableHF";
 import { EditHoldingDialog } from "./EditHoldingDialog";
@@ -59,6 +60,8 @@ export function HoldingDetailView({
   onCreateIncomeEvent,
   realisedCgtDisposals = [],
   isDemoRestricted = false,
+  dataErrors = [],
+  personScope,
 }: {
   holding: Holding;
   portfolio: PortfolioSummary;
@@ -70,6 +73,8 @@ export function HoldingDetailView({
   onCreateIncomeEvent?: (event: Omit<CreateInvestmentIncomeEvent, "account_id" | "holding_id">) => Promise<unknown>;
   realisedCgtDisposals?: RealisedCgtDisposal[];
   isDemoRestricted?: boolean;
+  dataErrors?: string[];
+  personScope?: string;
 }) {
   const router = useRouter();
   const [range, setRange] = useState<Range>("1M");
@@ -85,6 +90,7 @@ export function HoldingDetailView({
 
   const portfolioCurrSym = currencySymbol(portfolio.currency);
   const holdingCurrSym = currencySymbol(holding.currency);
+  const quoteCurrSym = currencySymbol(holding.quote_currency ?? holding.currency);
   const marketValue = Number(holding.current_value_user_currency ?? 0);
   const totalValue = Number(portfolio.total_value);
   const weight = totalValue > 0 ? (marketValue / totalValue) * 100 : 0;
@@ -93,7 +99,7 @@ export function HoldingDetailView({
       ? Number(holding.cost_basis_user_currency)
       : null;
   const totalReturn =
-    costBasis != null && costBasis > 0
+    costBasis != null && costBasis > 0 && holding.current_value_user_currency != null && !holding.valuation_error
       ? ((marketValue - costBasis) / costBasis) * 100
       : null;
 
@@ -108,7 +114,7 @@ export function HoldingDetailView({
     activeRangeRef.current = r;
     startTransition(async () => {
       try {
-        const next = await fetchHoldingHistoryRange(holding.id, r);
+        const next = await fetchHoldingHistoryRange(holding.id, r, personScope);
         if (activeRangeRef.current === r) setHistory(next);
       } catch {
         if (activeRangeRef.current === r) {
@@ -124,15 +130,15 @@ export function HoldingDetailView({
     {
       label: "Current price",
       value: holding.current_price
-        ? `${holdingCurrSym} ${fmt(Number(holding.current_price))}`
+        ? `${quoteCurrSym} ${fmt(Number(holding.current_price))}`
         : "—",
     },
     {
-      label: "Market value",
-      value: `${portfolioCurrSym} ${fmt(marketValue)}`,
+      label: holding.archived_at ? "Last recorded value" : "Market value",
+      value: holding.current_value_user_currency == null ? "Unavailable" : `${portfolioCurrSym} ${fmt(marketValue)}`,
     },
     {
-      label: "Total return",
+      label: "Unrealised return on recorded cost",
       value:
         totalReturn != null
           ? `${totalReturn >= 0 ? "+" : ""}${fmt(totalReturn)}%`
@@ -152,17 +158,21 @@ export function HoldingDetailView({
     },
     {
       label: "Portfolio weight",
-      value: `${fmt(weight, 1)}%`,
+      value: holding.current_value_user_currency == null || holding.archived_at ? "Unavailable" : `${fmt(weight, 1)}%`,
     },
   ];
 
   return (
     <div className="flex flex-col gap-4">
+      {dataErrors.length > 0 && <div role="alert" className="rounded border border-destructive p-3 text-sm">{dataErrors.join(" ")}</div>}
+      {holding.ownership_share != null && Number(holding.ownership_share) !== 1 && <p className="text-sm text-muted-foreground">Value and chart reflect the selected ownership share ({Number(holding.ownership_share) * 100}%). Units and source transaction records describe the whole account position.</p>}
+      {holding.archived_at && <p role="status" className="text-sm">Archived position. Financial records are preserved.</p>}
+      {holding.valuation_error && <p role="status" className="text-sm text-amber-700">{holding.valuation_error}. Any displayed valuation is the last known value.</p>}
       <Button
         variant="ghost"
         size="sm"
         className="self-start"
-        onClick={() => router.push("/investments")}
+        onClick={() => router.push(`/investments${personScope ? `?personIds=${encodeURIComponent(personScope)}` : ""}`)}
       >
         <RiArrowLeftLine className="size-4" />
         All holdings
@@ -184,7 +194,7 @@ export function HoldingDetailView({
           <Badge variant="outline" className="ml-auto">
             {accountName}
           </Badge>
-          {!isDemoRestricted && holding.source === "manual" && (
+          {!isDemoRestricted && (holding.can_edit ?? holding.source === "manual") && (
             <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
               <RiEditLine className="size-4" />
               Edit
@@ -236,7 +246,7 @@ export function HoldingDetailView({
           {chartErr && (
             <p className="text-xs text-destructive mb-2">{chartErr}</p>
           )}
-          <PortfolioChart data={series} currencySymbol={portfolioCurrSym} />
+          <PortfolioChart dates={history.map((point) => point.date)} data={series} currencySymbol={portfolioCurrSym} />
         </CardContent>
       </Card>
 
@@ -389,11 +399,15 @@ export function HoldingDetailView({
           <RealisedCgtDisposals disposals={realisedCgtDisposals} />
         </TabsContent>
         <TabsContent value="about">
+          {!isDemoRestricted && (holding.can_manage ?? holding.source === "manual") && holding.instrument_type !== "cash" && !holding.archived_at && <ManualPriceForm holding={holding} />}
           <Card>
             <CardContent className="p-4 text-sm">
               <dl className="grid grid-cols-2 gap-y-2 gap-x-6">
                 <dt className="text-muted-foreground">Symbol</dt>
                 <dd>{holding.symbol}</dd>
+                <dt className="text-muted-foreground">Price date</dt><dd>{holding.quote_date ?? "Unavailable"}</dd>
+                <dt className="text-muted-foreground">Price source</dt><dd>{holding.quote_source ?? "Unverified"}</dd>
+                <dt className="text-muted-foreground">Cost basis source</dt><dd>{holding.cost_basis_kind === "recorded_lots" ? "Recorded lots with dated FX" : holding.cost_basis_kind === "manual_opening_estimate" ? "Manual opening estimate" : "Unavailable / incomplete"}</dd>
                 <dt className="text-muted-foreground">Instrument type</dt>
                 <dd className="capitalize">{holding.instrument_type}</dd>
                 <dt className="text-muted-foreground">Currency</dt>
@@ -408,7 +422,7 @@ export function HoldingDetailView({
         </TabsContent>
       </Tabs>
 
-      {!isDemoRestricted && holding.source === "manual" && (
+      {!isDemoRestricted && (holding.can_edit ?? holding.source === "manual") && (
         <EditHoldingDialog
           open={editOpen}
           onOpenChange={setEditOpen}

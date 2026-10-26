@@ -43,22 +43,7 @@ def _resolve_demo_user_id(db) -> str | None:
     return user.id if user else None
 
 
-class _FxAdapter:
-    """Adapts ExchangeRateService.convert_amount to the FxConverter protocol."""
-    def __init__(self, db):
-        self.db = db
-        self._svc = ExchangeRateService(db=db)
-
-    def convert(self, amount, src, dst, on):
-        if src.upper() == dst.upper():
-            return amount
-        result = self._svc.convert_amount(
-            amount=amount,
-            from_currency=src,
-            to_currency=dst,
-            for_date=on,
-        )
-        return result if result is not None else amount
+from app.services.investment_fx import InvestmentFxAdapter as _FxAdapter
 
 
 @shared_task(name="tasks.investment_tasks.daily_investment_sync_all")

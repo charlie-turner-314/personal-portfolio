@@ -7,7 +7,7 @@ from io import StringIO
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.db_helpers import get_user_id
-from app.services.financial_access import account_access, value_in_actor_currency as _value_in_actor_currency
+from app.services.investment_scope import InvestmentScope
+from app.services.financial_access import account_access
 from app.integrations.price_provider import get_price_provider
 from app.integrations.coinspot_adapter import (
     CoinSpotAdapter,
@@ -49,6 +50,7 @@ from app.models import (
     CgtAllocation,
     Holding,
     HoldingValuation,
+    PriceSnapshot,
     InvestmentIncomeEvent,
     InvestmentCostBaseAdjustment,
     InvestmentCryptoTransfer,
@@ -74,6 +76,7 @@ from app.schemas import (
     HoldingTrade,
     HoldingUpdate,
     HoldingResponse,
+    ManualPriceCreate,
     InvestmentIncomeEventCreate,
     InvestmentIncomeEventResponse,
     InvestmentIncomeSummary,
@@ -149,17 +152,7 @@ def _run_sync_in_process(account_id: UUID) -> None:
     from app.services.investment_sync_service import InvestmentSyncService
     from app.services.exchange_rate_service import ExchangeRateService
 
-    class _FxAdapter:
-        def __init__(self, db):
-            self._svc = ExchangeRateService(db=db)
-
-        def convert(self, amount, src, dst, on):
-            if src.upper() == dst.upper():
-                return amount
-            result = self._svc.convert_amount(
-                amount=amount, from_currency=src, to_currency=dst, for_date=on,
-            )
-            return result if result is not None else amount
+    from app.services.investment_fx import InvestmentFxAdapter as _FxAdapter
 
     logger.info("[INVESTMENT_SYNC] Starting in-process sync for account %s", account_id)
     db = SessionLocal()
@@ -171,6 +164,13 @@ def _run_sync_in_process(account_id: UUID) -> None:
         logger.exception("[INVESTMENT_SYNC] Failed in-process sync for account %s", account_id)
     finally:
         db.close()
+
+
+def _enqueue_account_refresh(db, background_tasks, account_id):
+    account = db.query(Account).filter_by(id=account_id).one()
+    account.investment_sync_state = {"request_id": str(uuid4()), "status": "queued", "queued_at": datetime.utcnow().isoformat(), "error": None}
+    db.commit()
+    background_tasks.add_task(_run_sync_in_process, account_id)
 
 
 router = APIRouter()
@@ -257,6 +257,7 @@ def preview_investment_import(
 @router.post("/imports")
 def apply_investment_import(
     payload: InvestmentImportApplyRequest,
+    background_tasks: BackgroundTasks,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -287,6 +288,7 @@ def apply_investment_import(
             profile = _save_investment_import_profile(db, user_id=user_id, payload=profile_payload)
             db.commit()
             result["profile_id"] = str(profile.id)
+        _enqueue_account_refresh(db, background_tasks, payload.account_id)
         return result
     except (InvestmentCsvImportError, ActivityApplicationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -374,12 +376,16 @@ def list_investment_import_source_records(
 @router.post("/imports/{run_id:uuid}/revert")
 def revert_investment_import(
     run_id: UUID,
+    background_tasks: BackgroundTasks,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
     try:
-        return revert_run(db, user_id=user_id, run_id=run_id)
+        result = revert_run(db, user_id=user_id, run_id=run_id)
+        run = db.query(InvestmentIngestionRun).filter_by(id=run_id, user_id=user_id).one()
+        _enqueue_account_refresh(db, background_tasks, run.account_id)
+        return result
     except ActivityApplicationError as exc:
         status_code = 404 if "not found" in str(exc) else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
@@ -617,25 +623,39 @@ def delete_investment_income_event(
     return None
 
 
+@router.get("/reporting-years")
+def investment_reporting_years(user_id: Optional[str] = None, db: Session = Depends(get_db)):
+    user_id = get_user_id(user_id)
+    years = set()
+    for model, column in ((InvestmentIncomeEvent, InvestmentIncomeEvent.pay_date), (CgtAllocation, CgtAllocation.disposal_date)):
+        dates = db.query(column).filter(account_access(model.account_id, user_id)).distinct().all()
+        years.update(day.year if day.month >= 7 else day.year - 1 for (day,) in dates)
+    today = date.today()
+    years.add(today.year if today.month >= 7 else today.year - 1)
+    return sorted(years, reverse=True)
+
+
 @router.get("/income-events/summary", response_model=list[InvestmentIncomeSummary])
 def investment_income_summary(
     financial_year_start: int = Query(..., ge=1900, le=2200),
     account_id: Optional[UUID] = None,
     holding_id: Optional[UUID] = None,
+    trailing: bool = False,
+    person_ids: Optional[str] = None,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Summarise statement-supplied income components by Australian FY/currency."""
     user_id = get_user_id(user_id)
+    scope = InvestmentScope(db, user_id, person_ids)
     start, end = _financial_year_bounds(financial_year_start)
-    query = db.query(
-        InvestmentIncomeEvent.currency,
-        func.coalesce(func.sum(InvestmentIncomeEvent.cash_received), 0).label("cash_income"),
-        func.coalesce(func.sum(InvestmentIncomeEvent.franking_credit), 0).label("franking_credits"),
-        func.coalesce(func.sum(InvestmentIncomeEvent.foreign_income), 0).label("foreign_income"),
-        func.coalesce(func.sum(InvestmentIncomeEvent.foreign_tax_paid), 0).label("foreign_tax_paid"),
-        func.coalesce(func.sum(InvestmentIncomeEvent.tfn_withholding), 0).label("tfn_withholding"),
-    ).filter(
+    if trailing:
+        end = date.today() + timedelta(days=1)
+        try:
+            start = end.replace(year=end.year - 1)
+        except ValueError:
+            start = end.replace(year=end.year - 1, day=28)
+    query = db.query(InvestmentIncomeEvent).filter(
         account_access(InvestmentIncomeEvent.account_id, user_id),
         InvestmentIncomeEvent.pay_date >= start,
         InvestmentIncomeEvent.pay_date < end,
@@ -650,19 +670,16 @@ def investment_income_summary(
         if not holding or (account_id is not None and holding.account_id != account_id):
             raise HTTPException(status_code=404, detail="Holding not found in this investment account")
         query = query.filter(InvestmentIncomeEvent.holding_id == holding.id)
-    rows = query.group_by(InvestmentIncomeEvent.currency).order_by(InvestmentIncomeEvent.currency).all()
-    return [
-        InvestmentIncomeSummary(
-            financial_year_start=financial_year_start,
-            currency=row.currency,
-            cash_income=Decimal(row.cash_income),
-            franking_credits=Decimal(row.franking_credits),
-            foreign_income=Decimal(row.foreign_income),
-            foreign_tax_paid=Decimal(row.foreign_tax_paid),
-            tfn_withholding=Decimal(row.tfn_withholding),
-        )
-        for row in rows
-    ]
+    totals = {}
+    fields = {"cash_income": "cash_received", "franking_credits": "franking_credit", "foreign_income": "foreign_income", "foreign_tax_paid": "foreign_tax_paid", "tfn_withholding": "tfn_withholding"}
+    for event in query.all():
+        share = scope.share(event.account_id, event.pay_date)
+        if share == 0:
+            continue
+        group = totals.setdefault(event.currency, {name: Decimal(0) for name in fields})
+        for name, field in fields.items():
+            group[name] += Decimal(getattr(event, field) or 0) * share
+    return [InvestmentIncomeSummary(financial_year_start=financial_year_start, currency=currency, **values) for currency, values in sorted(totals.items())]
 
 
 @router.get("/reconciliation-items")
@@ -919,6 +936,8 @@ def create_broker_connection(
                 status_code=400,
                 detail="The existing account currency must match the connector base currency.",
             )
+        if db.query(Holding.id).filter(Holding.account_id == account.id, Holding.source == "manual").first():
+            raise HTTPException(status_code=409, detail="This account contains manual opening snapshots. Use a separate connected account so its history and balances cannot be mixed ambiguously.")
         account.account_type = "investment_brokerage"
         account.provider = payload.provider
     else:
@@ -992,7 +1011,7 @@ def create_broker_connection(
     db.refresh(conn)
 
     # Kick off background sync.
-    background_tasks.add_task(_run_sync_in_process, account.id)
+    _enqueue_account_refresh(db, background_tasks, account.id)
 
     return {
         "connection_id": str(conn.id),
@@ -1126,7 +1145,7 @@ def trigger_sync(
     conn.last_sync_error = None
     conn.next_retry_at = None
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    _enqueue_account_refresh(db, background_tasks, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
 
@@ -1191,7 +1210,7 @@ def update_coinspot_credentials(
         ),
     }
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    _enqueue_account_refresh(db, background_tasks, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
 
@@ -1224,7 +1243,7 @@ def update_binance_configuration(
         "configured_trade_symbols": payload.trade_symbols,
     }
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    _enqueue_account_refresh(db, background_tasks, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
 
@@ -1248,8 +1267,19 @@ def trigger_sync_all(
         .all()
     )
     for account in accounts:
+        account.investment_sync_state = {"request_id": str(uuid4()), "status": "queued", "queued_at": datetime.utcnow().isoformat(), "error": None}
+    db.commit()
+    for account in accounts:
         background_tasks.add_task(_run_sync_in_process, account.id)
-    return {"status": "queued", "count": len(accounts)}
+    return {"status": "queued", "count": len(accounts), "account_ids": [str(account.id) for account in accounts]}
+
+
+@router.get("/sync-status")
+def investment_sync_status(user_id: Optional[str] = None, db: Session = Depends(get_db)):
+    user_id = get_user_id(user_id)
+    accounts = db.query(Account).filter(account_access(Account.id, user_id), Account.account_type.in_(["investment_manual", "investment_brokerage"])).all()
+    return [{"account_id": str(account.id), "name": account.name, **(account.investment_sync_state or {"status": "idle"})} for account in accounts]
+
 
 
 @router.delete("/broker-connections/{connection_id}", status_code=204)
@@ -1288,21 +1318,27 @@ def create_manual_account(
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
-    account = Account(
-        user_id=user_id,
-        name=payload.name,
-        account_type="investment_manual",
-        currency=payload.base_currency,
-        provider="manual",
-    )
-    db.add(account)
-    db.commit()
-    db.refresh(account)
-    return {
-        "account_id": str(account.id),
-        "name": account.name,
-        "currency": account.currency,
-    }
+    def existing_account():
+        if not payload.creation_key:
+            return None
+        existing = db.query(Account).filter_by(user_id=user_id, investment_creation_key=payload.creation_key).one_or_none()
+        if existing and (existing.name != payload.name or existing.currency != payload.base_currency):
+            raise HTTPException(status_code=409, detail="This account request was already used with different details")
+        return existing
+    account = existing_account()
+    if account is None:
+        account = Account(user_id=user_id, name=payload.name, account_type="investment_manual", currency=payload.base_currency, provider="manual", investment_creation_key=payload.creation_key)
+        db.add(account)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            account = existing_account()
+            if account is None:
+                raise HTTPException(status_code=409, detail="Account creation conflicted; reload and retry")
+        db.refresh(account)
+    return {"account_id": str(account.id), "name": account.name, "currency": account.currency}
+
 
 
 @router.post("/manual-accounts/{account_id}/holdings")
@@ -1322,17 +1358,28 @@ def create_manual_holding(
     if not account or account.account_type != "investment_manual":
         raise HTTPException(status_code=404, detail="Manual investment account not found")
 
-    # Resolve symbol metadata via the price provider.
-    name: Optional[str] = None
-    try:
-        provider = get_price_provider()
-        matches = provider.search_symbols(payload.symbol)
-        if matches:
-            top = matches[0]
-            name = getattr(top, "name", None)
-    except Exception:
-        # Symbol lookup is best-effort; do not fail the holding creation.
-        name = None
+    if payload.provider_symbol and payload.provider_symbol.startswith(("manual:", "ibkr:")):
+        raise HTTPException(status_code=422, detail="Private price references are created through this holding's unit-price form")
+
+    def existing_position():
+        existing = db.query(Holding).filter_by(account_id=account.id, symbol=payload.symbol, instrument_type=payload.instrument_type).one_or_none()
+        if existing is None:
+            return None
+        if existing.source == "manual" and not existing.archived_at and all((
+            existing.quantity == payload.quantity, existing.currency == payload.currency,
+            existing.avg_cost == payload.avg_cost, existing.as_of_date == payload.as_of_date,
+            existing.provider_symbol == (payload.provider_symbol or None),
+        )):
+            return {"holding_id": str(existing.id), "account_id": str(account.id), "symbol": existing.symbol, "name": existing.name, "quantity": str(existing.quantity)}
+        raise HTTPException(status_code=409, detail="This symbol and type already exist with different details; edit the existing position")
+    repeated = existing_position()
+    if repeated:
+        _enqueue_account_refresh(db, background_tasks, account.id)
+        return repeated
+
+    # Symbol resolution is an explicit UI step. Saving a manual or unlisted
+    # instrument must not depend on a live market-data request.
+    name = payload.name or payload.symbol
 
     holding = Holding(
         user_id=account.user_id,
@@ -1352,17 +1399,14 @@ def create_manual_holding(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"A {payload.instrument_type} holding for {payload.symbol} already "
-                "exists in this account. Edit the existing holding instead of adding a new one."
-            ),
-        )
+        repeated = existing_position()
+        if repeated:
+            return repeated
+        raise HTTPException(status_code=409, detail="Holding creation conflicted; reload and retry")
     db.refresh(holding)
 
     # Trigger an async revaluation so the new holding gets priced.
-    background_tasks.add_task(_run_sync_in_process, account.id)
+    _enqueue_account_refresh(db, background_tasks, account.id)
 
     return {
         "holding_id": str(holding.id),
@@ -1378,13 +1422,44 @@ def create_manual_holding(
 # ---------------------------------------------------------------------------
 
 
+def _latest_valuation_map(db, user_id):
+    latest = db.query(HoldingValuation.holding_id.label("holding_id"), func.max(HoldingValuation.date).label("date")).join(
+        Holding, Holding.id == HoldingValuation.holding_id
+    ).filter(account_access(Holding.account_id, user_id)).group_by(HoldingValuation.holding_id).subquery()
+    rows = db.query(HoldingValuation).join(latest, (HoldingValuation.holding_id == latest.c.holding_id) & (HoldingValuation.date == latest.c.date)).all()
+    return {row.holding_id: row for row in rows}
+
+
+def _recorded_amount_in_currency(db, amount, source, target, on, rates):
+    if not source:
+        raise HTTPException(status_code=503, detail="Historical valuation currency is unverified. Refresh current prices or rebuild history from source records.")
+    amount = Decimal(amount)
+    if source == target or not amount:
+        return amount
+    from app.services.exchange_rate_service import ExchangeRateService
+    key = (source, target, on)
+    if key not in rates:
+        rates[key] = ExchangeRateService(db=db).get_exchange_rate(source, target, on)
+    rate = rates[key]
+    if rate is None or not Decimal(rate).is_finite() or Decimal(rate) <= 0:
+        raise HTTPException(status_code=503, detail="Valuation FX is unavailable")
+    return (amount * Decimal(rate)).quantize(Decimal("0.01"))
+
+
+def _valuation_in_actor_currency(db, valuation, owner_user_id, actor_user_id, target=None, rates=None):
+    target = target or db.get(User, actor_user_id).functional_currency or "AUD"
+    return _recorded_amount_in_currency(db, valuation.value_user_currency, valuation.value_currency, target, valuation.date, rates if rates is not None else {})
+
+
 @router.get("/holdings", response_model=list[HoldingResponse])
 def list_holdings(
     account_id: Optional[UUID] = None,
+    person_ids: Optional[str] = None,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
+    scope = InvestmentScope(db, user_id, person_ids)
     user = db.query(User).filter(User.id == user_id).first()
     user_currency = (
         getattr(user, "functional_currency", None) or "EUR"
@@ -1394,47 +1469,22 @@ def list_holdings(
 
     fx_svc = ExchangeRateService(db=db)
 
-    def _convert_cost_to_user(
-        avg_cost: Optional[Decimal],
-        qty: Decimal,
-        src_currency: str,
-        on: Optional[date],
-    ) -> Optional[Decimal]:
-        if avg_cost is None:
-            return None
-        cost_native = Decimal(avg_cost) * Decimal(qty)
-        src = (src_currency or user_currency).upper()
-        if src == user_currency:
-            return cost_native.quantize(Decimal("0.01"))
-        for_date = on or date.today()
-        # Use the fallback resolver: DB → yfinance backfill at as_of date →
-        # today's FX. Avoids `cost_basis_user_currency = null` (which
-        # makes the dashboard render P&L as "—") for older as_of dates
-        # that don't have FX history yet.
-        rate = fx_svc.get_exchange_rate_with_fallback(
-            base_currency=src,
-            target_currency=user_currency,
-            for_date=for_date,
-        )
-        if rate is None:
-            return None
-        return (cost_native * Decimal(rate)).quantize(Decimal("0.01"))
-
     query = db.query(Holding).filter(account_access(Holding.account_id, user_id))
     if account_id is not None:
         query = query.filter(Holding.account_id == account_id)
 
+    valuations = _latest_valuation_map(db, user_id)
+    valuation_rates = {}
+    account_types = dict(db.query(Account.id, Account.account_type).filter(account_access(Account.id, user_id)).all())
+    from app.services.investment_cost_basis import InvestmentCostBasis
+    basis = InvestmentCostBasis(db, list(account_types), fx_svc, user_currency)
     results: list[HoldingResponse] = []
     for h in query.all():
-        latest_val = (
-            db.query(HoldingValuation)
-            .filter(HoldingValuation.holding_id == h.id)
-            .order_by(desc(HoldingValuation.date))
-            .first()
-        )
-        cost_basis_user = _convert_cost_to_user(
-            h.avg_cost, h.quantity, h.currency, h.as_of_date
-        )
+        latest_val = valuations.get(h.id)
+        share = scope.share(h.account_id, latest_val.date if latest_val else date.today())
+        if share == 0:
+            continue
+        cost_basis_user, basis_kind = basis.for_holding(h, latest_val.date if latest_val else date.today())
         results.append(
             HoldingResponse(
                 id=h.id,
@@ -1448,12 +1498,22 @@ def list_holdings(
                 avg_cost=h.avg_cost,
                 as_of_date=h.as_of_date,
                 source=h.source,
-                current_price=latest_val.price if latest_val else None,
+                current_price=latest_val.price if latest_val and latest_val.quote_currency else None,
                 current_value_user_currency=(
-                    _value_in_actor_currency(db, latest_val.value_user_currency, h.user_id, user_id, latest_val.date) if latest_val else None
+                    _valuation_in_actor_currency(db, latest_val, h.user_id, user_id, user_currency, valuation_rates) * share if latest_val and latest_val.value_currency else None
                 ),
-                cost_basis_user_currency=cost_basis_user,
-                is_stale=bool(latest_val.is_stale) if latest_val else False,
+                cost_basis_user_currency=cost_basis_user * share if cost_basis_user is not None else None,
+                ownership_share=share,
+                is_stale=bool(h.last_price_error) or not latest_val or bool(latest_val.is_stale) or (date.today() - latest_val.date).days > 3,
+                valuation_date=latest_val.date if latest_val else None,
+                valuation_error=("Position quantity changed; revaluation pending" if latest_val and latest_val.quantity != h.quantity else None) or h.last_price_error or ("Valuation currency is unverified; refresh this holding" if latest_val and not latest_val.value_currency else None if latest_val else "No valuation available"),
+                quote_currency=latest_val.quote_currency if latest_val else None,
+                quote_date=latest_val.quote_date if latest_val else None,
+                quote_source=latest_val.quote_source if latest_val else None,
+                archived_at=h.archived_at,
+                can_manage=account_types[h.account_id] == "investment_manual" and not h.archived_at,
+                can_edit=account_types[h.account_id] == "investment_manual" and not h.archived_at and h.source in {"manual", "ibkr_flex", "coinspot_api", "binance_api", "crypto_com_api"},
+                cost_basis_kind=basis_kind,
             )
         )
     return results
@@ -1475,46 +1535,122 @@ def update_holding(
     )
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
-    if holding.source != "manual":
-        raise HTTPException(status_code=400, detail="Only manual holdings can be edited")
+    account = db.query(Account).filter_by(id=holding.account_id).one()
+    if holding.archived_at or account.account_type != "investment_manual" or holding.source not in {"manual", "ibkr_flex", "coinspot_api", "binance_api", "crypto_com_api"}:
+        raise HTTPException(status_code=400, detail="Only current manual or disconnected-broker positions can be edited")
 
     payload = updates.model_dump(exclude_unset=True)
-    lookup_changed = (
-        ("symbol" in payload and payload["symbol"] != holding.symbol)
-        or ("provider_symbol" in payload and payload["provider_symbol"] != holding.provider_symbol)
-    )
+    reference = payload.get("provider_symbol")
+    if reference and reference.startswith(("manual:", "ibkr:")) and reference.split(":", 1)[1] != holding.id.hex:
+        raise HTTPException(status_code=422, detail="A private price belongs to its original holding")
+    if any(field in payload and payload[field] is None for field in ("symbol", "currency", "instrument_type", "quantity")):
+        raise HTTPException(status_code=422, detail="Instrument identity and quantity cannot be null")
+    if payload:
+        holding.last_price_error = "Position updated; revaluation pending"
+    if any(field in payload for field in ("currency", "instrument_type", "symbol")) and db.query(BrokerTrade).filter(BrokerTrade.account_id == holding.account_id, BrokerTrade.symbol == holding.symbol).first():
+        raise HTTPException(status_code=409, detail="Instrument identity is linked to transaction history. Archive this position or correct the source records instead.")
     for field, value in payload.items():
         setattr(holding, field, value)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A holding with that symbol and type already exists")
     db.refresh(holding)
 
-    # Re-price the account if the lookup symbol changed so the new ticker
-    # gets fetched from the price provider immediately.
-    if lookup_changed:
-        background_tasks.add_task(_run_sync_in_process, holding.account_id)
+    # Every position correction invalidates current valuation, including quantity.
+    if payload:
+        _enqueue_account_refresh(db, background_tasks, holding.account_id)
 
     return {"id": str(holding.id), "symbol": holding.symbol, "quantity": str(holding.quantity)}
+
+
+@router.post("/holdings/{holding_id}/archive", status_code=204)
+def archive_holding(
+    holding_id: UUID,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    holding = db.query(Holding).filter(
+        Holding.id == holding_id, account_access(Holding.account_id, user_id)
+    ).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    account = db.query(Account).filter_by(id=holding.account_id).one()
+    if account.account_type != "investment_manual":
+        raise HTTPException(status_code=400, detail="Disconnect the broker before archiving positions")
+    holding.archived_at = datetime.utcnow()
+    db.commit()
+    _enqueue_account_refresh(db, background_tasks, holding.account_id)
 
 
 @router.delete("/holdings/{holding_id}", status_code=204)
 def delete_holding(
     holding_id: UUID,
+    background_tasks: BackgroundTasks,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
-    holding = (
-        db.query(Holding)
-        .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
-        .first()
-    )
+    holding = db.query(Holding).filter(
+        Holding.id == holding_id, account_access(Holding.account_id, user_id)
+    ).first()
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
     if holding.source != "manual":
         raise HTTPException(status_code=400, detail="Only manual holdings can be deleted")
+    dependent = any((
+        db.query(model).filter(model.holding_id == holding.id).first() is not None
+        for model in (HoldingValuation, InvestmentIncomeEvent, InvestmentCostBaseAdjustment)
+    )) or db.query(BrokerTrade).filter(
+        BrokerTrade.account_id == holding.account_id,
+        BrokerTrade.symbol == holding.symbol,
+        BrokerTrade.instrument_type == holding.instrument_type,
+    ).first() is not None
+    if dependent:
+        raise HTTPException(status_code=409, detail="This holding has financial history. Archive it to preserve the records.")
+    account_id = holding.account_id
     db.delete(holding)
     db.commit()
-    return None
+    _enqueue_account_refresh(db, background_tasks, account_id)
+
+
+@router.post("/holdings/{holding_id}/prices")
+def save_manual_price(
+    holding_id: UUID,
+    payload: ManualPriceCreate,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(user_id)
+    holding = db.query(Holding).filter(
+        Holding.id == holding_id, account_access(Holding.account_id, user_id)
+    ).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    account = db.query(Account).filter_by(id=holding.account_id).one()
+    if account.account_type != "investment_manual" or holding.archived_at or holding.instrument_type == "cash":
+        raise HTTPException(status_code=400, detail="A current non-cash manual-account holding is required")
+    if payload.date > date.today():
+        raise HTTPException(status_code=422, detail="A unit price cannot be future-dated")
+    # Per-holding keys prevent one user's NAV overriding any public ticker or
+    # another user's private price. The source label is retained with the quote.
+    symbol = f"manual:{holding.id.hex}"
+    snap = db.query(PriceSnapshot).filter_by(symbol=symbol, date=payload.date, provider="manual").one_or_none()
+    if snap is None:
+        snap = PriceSnapshot(symbol=symbol, date=payload.date)
+        db.add(snap)
+    snap.currency = payload.currency
+    snap.close = payload.price
+    snap.provider = "manual"
+    snap.source_label = payload.source
+    holding.provider_symbol = symbol
+    db.commit()
+    _enqueue_account_refresh(db, background_tasks, holding.account_id)
+    return {"date": payload.date, "price": payload.price, "currency": payload.currency, "source": payload.source}
 
 
 # ---------------------------------------------------------------------------
@@ -1524,10 +1660,12 @@ def delete_holding(
 
 @router.get("/portfolio/summary", response_model=PortfolioSummary)
 def portfolio_summary(
+    person_ids: Optional[str] = None,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
+    scope = InvestmentScope(db, user_id, person_ids)
     user = db.query(User).filter(User.id == user_id).first()
     currency = getattr(user, "functional_currency", "EUR") or "EUR"
 
@@ -1540,25 +1678,41 @@ def portfolio_summary(
         .all()
     )
 
+    valuations = _latest_valuation_map(db, user_id)
+    valuation_rates = {}
+    account_holdings = {}
+    for holding in db.query(Holding).filter(account_access(Holding.account_id, user_id), Holding.archived_at.is_(None)).all():
+        account_holdings.setdefault(holding.account_id, []).append(holding)
+    unavailable_holdings = 0
+    valuation_dates = []
+    priced_holdings = 0
     total_value = Decimal("0")
     today_change = Decimal("0")
     allocation_by_type: dict[str, Decimal] = {}
     allocation_by_currency: dict[str, Decimal] = {}
     accounts_payload: list[dict] = []
+    change_complete = True
+    ranked_balances = db.query(AccountBalance.id.label("id"), func.row_number().over(partition_by=AccountBalance.account_id, order_by=AccountBalance.date.desc()).label("rank")).filter(AccountBalance.account_id.in_([account.id for account in accounts]), AccountBalance.date <= date.today()).subquery()
+    recent_balances = {}
+    for balance in db.query(AccountBalance).join(ranked_balances, AccountBalance.id == ranked_balances.c.id).filter(ranked_balances.c.rank <= 2).order_by(AccountBalance.date.desc()).all():
+        recent_balances.setdefault(balance.account_id, []).append(balance)
 
     for account in accounts:
         # Account total = sum of latest valuations across its holdings.
         account_value = Decimal("0")
-        holdings = db.query(Holding).filter(Holding.account_id == account.id).all()
+        holdings = account_holdings.get(account.id, [])
         for h in holdings:
-            latest = (
-                db.query(HoldingValuation)
-                .filter(HoldingValuation.holding_id == h.id)
-                .order_by(desc(HoldingValuation.date))
-                .first()
-            )
-            if latest:
-                visible_value = _value_in_actor_currency(db, latest.value_user_currency, account.user_id, user_id, latest.date)
+            latest = valuations.get(h.id)
+            share = scope.share(account.id, latest.date if latest else date.today())
+            if share == 0:
+                continue
+            if not latest or not latest.value_currency or latest.quantity != h.quantity or h.last_price_error or latest.is_stale or (date.today() - latest.date).days > 3:
+                unavailable_holdings += 1
+            if latest and latest.value_currency:
+                priced_holdings += 1
+                if latest.quote_date:
+                    valuation_dates.append(latest.quote_date)
+                visible_value = _valuation_in_actor_currency(db, latest, account.user_id, user_id, currency, valuation_rates) * share
                 account_value += visible_value
                 allocation_by_type[h.instrument_type] = (
                     allocation_by_type.get(h.instrument_type, Decimal("0"))
@@ -1571,31 +1725,18 @@ def portfolio_summary(
 
         total_value += account_value
 
-        # Today change: today's snapshot vs the immediately prior snapshot.
-        # Skip if no snapshot for today (e.g. weekend, holiday, missed Celery run)
-        # so we don't surface a stale delta as "today's" movement.
-        today_iso = date.today()
-        latest_balance = (
-            db.query(AccountBalance)
-            .filter(
-                AccountBalance.account_id == account.id,
-                AccountBalance.date == today_iso,
-            )
-            .order_by(desc(AccountBalance.date))
-            .first()
-        )
-        if latest_balance is not None:
-            prior_balance = (
-                db.query(AccountBalance)
-                .filter(
-                    AccountBalance.account_id == account.id,
-                    AccountBalance.date < today_iso,
-                )
-                .order_by(desc(AccountBalance.date))
-                .first()
-            )
-            if prior_balance is not None:
-                today_change += _value_in_actor_currency(db, latest_balance.balance_in_functional_currency, account.user_id, user_id, latest_balance.date) - _value_in_actor_currency(db, prior_balance.balance_in_functional_currency, account.user_id, user_id, prior_balance.date)
+        # Only compare verified native-currency observations, never amounts
+        # interpreted using the owner's current reporting-currency preference.
+        recent = recent_balances.get(account.id, [])
+        if holdings and scope.share(account.id, date.today()) != 0:
+            if len(recent) < 2 or recent[0].date.date() != date.today():
+                change_complete = False
+            else:
+                try:
+                    amounts = [_recorded_amount_in_currency(db, balance.balance_in_account_currency, balance.account_currency, currency, balance.date.date(), valuation_rates) * scope.share(account.id, balance.date.date()) for balance in recent]
+                    today_change += amounts[0] - amounts[1]
+                except HTTPException:
+                    change_complete = False
 
         accounts_payload.append(
             {
@@ -1603,17 +1744,23 @@ def portfolio_summary(
                 "name": account.name,
                 "type": account.account_type,
                 "currency": account.currency,
+                "source": account.provider,
+                "sync_state": account.investment_sync_state,
+                "can_add_holdings": account.account_type == "investment_manual",
                 "value": str(account_value),
             }
         )
 
     return PortfolioSummary(
         total_value=total_value,
-        total_value_today_change=today_change,
+        total_value_today_change=today_change if change_complete else None,
         currency=currency,
         accounts=accounts_payload,
         allocation_by_type=allocation_by_type,
         allocation_by_currency=allocation_by_currency,
+        valuation_status="unavailable" if unavailable_holdings and not priced_holdings else "partial" if unavailable_holdings else "complete",
+        unavailable_holdings=unavailable_holdings,
+        as_of=min(valuation_dates) if valuation_dates and len(valuation_dates) == priced_holdings else None,
     )
 
 
@@ -1623,10 +1770,12 @@ def holding_history(
     days: int = Query(30, ge=1, le=3650),
     from_date: Optional[date] = Query(None, alias="from"),
     to_date: Optional[date] = Query(None, alias="to"),
+    person_ids: Optional[str] = None,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
+    scope = InvestmentScope(db, user_id, person_ids)
     holding = (
         db.query(Holding)
         .filter(Holding.id == holding_id, account_access(Holding.account_id, user_id))
@@ -1634,7 +1783,7 @@ def holding_history(
     )
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
-    end_date = to_date or date.today()
+    end_date = min(to_date or date.today(), date.today())
     cutoff = from_date or (date.today() - timedelta(days=days))
     if end_date < cutoff:
         raise HTTPException(status_code=400, detail="to must be on or after from")
@@ -1648,8 +1797,10 @@ def holding_history(
         .order_by(HoldingValuation.date.asc())
         .all()
     )
+    valuation_rates = {}
+    target_currency = db.get(User, user_id).functional_currency or "AUD"
     return [
-        ValuationPoint(date=r.date, value=_value_in_actor_currency(db, r.value_user_currency, holding.user_id, user_id, r.date))
+        ValuationPoint(date=r.date, value=_valuation_in_actor_currency(db, r, holding.user_id, user_id, target_currency, valuation_rates) * scope.share(holding.account_id, r.date))
         for r in rows
     ]
 
@@ -1659,17 +1810,19 @@ def portfolio_history(
     days: int = Query(30, ge=1, le=3650),
     from_date: Optional[date] = Query(None, alias="from"),
     to_date: Optional[date] = Query(None, alias="to"),
+    person_ids: Optional[str] = None,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user_id = get_user_id(user_id)
-    end_date = to_date or date.today()
+    scope = InvestmentScope(db, user_id, person_ids)
+    end_date = min(to_date or date.today(), date.today())
     cutoff = from_date or (date.today() - timedelta(days=days))
     if end_date < cutoff:
         raise HTTPException(status_code=400, detail="to must be on or after from")
 
     accounts = (
-        db.query(Account.id, Account.user_id)
+        db.query(Account.id, Account.user_id, Account.currency)
         .filter(
             account_access(Account.id, user_id),
             Account.account_type.in_(["investment_brokerage", "investment_manual"]),
@@ -1677,7 +1830,6 @@ def portfolio_history(
         .all()
     )
     account_ids = [a.id for a in accounts]
-    owners_by_account = {a.id: a.user_id for a in accounts}
     if not account_ids:
         return []
 
@@ -1685,19 +1837,60 @@ def portfolio_history(
         db.query(AccountBalance)
         .filter(
             AccountBalance.account_id.in_(account_ids),
-            AccountBalance.date >= cutoff,
             AccountBalance.date <= end_date,
         )
         .order_by(AccountBalance.date.asc())
         .all()
     )
 
-    by_date: dict[date, Decimal] = {}
-    for r in rows:
-        d = r.date.date() if isinstance(r.date, datetime) else r.date
-        by_date[d] = by_date.get(d, Decimal("0")) + _value_in_actor_currency(db, r.balance_in_functional_currency, owners_by_account[r.account_id], user_id, d)
-
-    return [ValuationPoint(date=d, value=v) for d, v in sorted(by_date.items())]
+    actor = db.query(User).filter_by(id=user_id).one()
+    target_currency = actor.functional_currency or "AUD"
+    from app.models import ExchangeRate
+    rate_rows = db.query(ExchangeRate).filter(
+        ExchangeRate.target_currency == target_currency,
+        ExchangeRate.date >= cutoff - timedelta(days=7),
+        ExchangeRate.date <= datetime.combine(end_date, time.max),
+    ).all()
+    rates = {(row.base_currency, row.date.date() if isinstance(row.date, datetime) else row.date): Decimal(row.rate) for row in rate_rows}
+    def rate_on(source, day):
+        for days_back in range(8):
+            value = rates.get((source, day - timedelta(days=days_back)))
+            if value is not None:
+                return value
+        return None
+    # Seed balances before the selected range and carry each account forward.
+    # Accounts with no opening observation do not exist in this series yet.
+    observations = {}
+    for row in rows:
+        observed = row.date.date() if isinstance(row.date, datetime) else row.date
+        observations.setdefault(observed, []).append(row)
+    latest = {}
+    for observed in sorted(observations):
+        if observed >= cutoff:
+            break
+        for row in observations[observed]:
+            latest[row.account_id] = row
+    out = []
+    day = cutoff
+    while day <= end_date:
+        for row in observations.get(day, []):
+            latest[row.account_id] = row
+        if latest:
+            total = Decimal("0")
+            for account_id, row in latest.items():
+                source = row.account_currency
+                if not source:
+                    raise HTTPException(status_code=503, detail="Historical account currency is unverified. Rebuild from source records before reporting this history.")
+                amount = Decimal(row.balance_in_account_currency)
+                if source != target_currency:
+                    rate = rate_on(source, day)
+                    if rate is None:
+                        raise HTTPException(status_code=503, detail=f"Portfolio history FX unavailable on {day}")
+                    amount *= rate
+                total += amount * scope.share(account_id, day)
+            out.append(ValuationPoint(date=day, value=total))
+        day += timedelta(days=1)
+    return out
 
 
 @router.get("/holdings/{holding_id}/trades", response_model=list[HoldingTrade])
@@ -1849,17 +2042,14 @@ def holding_lots(
     for lot in fifo.open_lots:
         if lot.symbol != holding.symbol:
             continue
-        cost_per_share_user: Optional[Decimal] = None
-        if lot.currency.upper() == user_currency:
-            cost_per_share_user = lot.cost_per_share_native
-        else:
-            rate = fx_svc.get_exchange_rate_with_fallback(
-                lot.currency.upper(), user_currency, lot.open_date
-            )
-            if rate is not None:
-                cost_per_share_user = (
-                    Decimal(lot.cost_per_share_native) * Decimal(rate)
-                ).quantize(Decimal("0.00000001"))
+        def converted(amount, on):
+            if lot.currency.upper() == user_currency:
+                return Decimal(amount)
+            rate = fx_svc.get_exchange_rate(lot.currency.upper(), user_currency, on)
+            return Decimal(amount) * Decimal(rate) if rate is not None else None
+        original = converted(lot.original_cost_per_share_native, lot.open_date)
+        adjustments = [converted(item.amount_native, item.effective_date) for item in lot.adjustments]
+        cost_per_share_user = (original + sum(adjustments, Decimal(0))).quantize(Decimal("0.00000001")) if original is not None and all(value is not None for value in adjustments) else None
         out.append(
             HoldingLot(
                 open_date=lot.open_date,
@@ -1995,6 +2185,7 @@ def export_cgt_allocations_csv(
 def cgt_financial_year_summary(
     financial_year_start: int = Query(..., ge=1900, le=2200),
     account_id: Optional[UUID] = None,
+    person_ids: Optional[str] = None,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -2004,23 +2195,33 @@ def cgt_financial_year_summary(
     transaction-date FX rate are deliberately excluded from AUD totals.
     """
     user_id = get_user_id(user_id)
+    scope = InvestmentScope(db, user_id, person_ids)
     rows = _cgt_allocations_query(db, user_id, financial_year_start, account_id).all()
+    rows = [row for row in rows if scope.share(row.account_id, row.disposal_date) > 0]
     known = [row for row in rows if not row.fx_missing and row.gain_aud is not None]
-    gross_gains = sum((max(Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
-    losses = sum((max(-Decimal(row.gain_aud), Decimal("0")) for row in known), Decimal("0"))
-    discounted = sum((Decimal(row.gain_aud) / 2 for row in known if row.discount_eligible and row.gain_aud > 0), Decimal("0"))
+    def attributed_gain(row):
+        return Decimal(row.gain_aud) * scope.share(row.account_id, row.disposal_date)
+    gross_gains = sum((max(attributed_gain(row), Decimal("0")) for row in known), Decimal("0"))
+    losses = sum((max(-attributed_gain(row), Decimal("0")) for row in known), Decimal("0"))
+    discounted = sum((attributed_gain(row) / 2 for row in known if row.discount_eligible and row.gain_aud > 0), Decimal("0"))
     net_before_losses = sum((
-        Decimal(row.gain_aud) / 2 if row.discount_eligible and row.gain_aud > 0 else Decimal(row.gain_aud)
+        attributed_gain(row) / 2 if row.discount_eligible and row.gain_aud > 0 else attributed_gain(row)
         for row in known
     ), Decimal("0"))
     assumptions = [
         "FIFO matching is calculated from recorded broker trades and their recorded fees.",
+        "The allocation result sums discounted positive gains and negative gains; it is not a final net capital gain or a tax loss-ordering calculation.",
+        "Completeness refers only to recorded allocations, not completeness of the taxpayer history.",
         "Statement-supplied AMIT/AMMA net amounts are included on their recorded effective dates.",
         "Corporate actions and tax elections other than recorded AMIT/AMMA adjustments are not calculated.",
     ]
+    from app.services.investment_report_coverage import investment_report_warnings
+    start, end = _financial_year_bounds(financial_year_start)
+    coverage_warnings = investment_report_warnings(db, user_id, start, end, scope, account_id)
+    assumptions.extend(coverage_warnings)
     missing = len(rows) - len(known)
     if missing:
-        assumptions.append(f"{missing} allocation(s) excluded from AUD totals because transaction-date FX is missing.")
+        assumptions.append(f"{missing} allocation(s) excluded from AUD totals because required AUD valuation, fee or transaction-date FX inputs are missing.")
     return CgtFinancialYearSummary(
         financial_year_start=financial_year_start,
         gross_gains_aud=gross_gains.quantize(Decimal("0.01")),
@@ -2028,6 +2229,9 @@ def cgt_financial_year_summary(
         discounted_gains_aud=discounted.quantize(Decimal("0.01")),
         net_capital_gain_before_losses_aud=net_before_losses.quantize(Decimal("0.01")),
         allocation_count=len(rows),
+        disposal_count=len({row.disposal_trade_id for row in rows}),
+        allocation_result_aud=net_before_losses.quantize(Decimal("0.01")),
+        coverage_warnings=coverage_warnings,
         missing_fx_allocation_count=missing,
         assumptions=assumptions,
     )
@@ -2041,7 +2245,10 @@ def cgt_financial_year_summary(
 @router.get("/symbols/search", response_model=list[SymbolSearchResult])
 def search_symbols(q: str = Query(..., min_length=1)):
     provider = get_price_provider()
-    matches = provider.search_symbols(q)
+    try:
+        matches = provider.search_symbols(q)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Symbol search is unavailable; try again or enter the instrument manually")
     return [
         SymbolSearchResult(
             symbol=getattr(m, "symbol", ""),
@@ -2051,3 +2258,12 @@ def search_symbols(q: str = Query(..., min_length=1)):
         )
         for m in matches
     ]
+
+
+@router.get("/symbols/resolve", response_model=SymbolSearchResult)
+def resolve_investment_symbol(symbol: str = Query(..., min_length=1, max_length=64)):
+    try:
+        match = get_price_provider().resolve_symbol(symbol.strip())
+    except Exception:
+        raise HTTPException(status_code=503, detail="Instrument identity or currency could not be verified. Enter it manually or retry.")
+    return SymbolSearchResult(symbol=match.symbol, name=match.name, exchange=match.exchange, currency=match.currency, instrument_type=match.instrument_type)

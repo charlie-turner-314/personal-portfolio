@@ -17,7 +17,7 @@ export default async function ConnectPage() {
     <>
       <Header title="Connect investments" />
       <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-        <ConnectPathPicker accounts={accounts} />
+        <ConnectPathPicker accounts={accounts} defaultCurrency={user.functionalCurrency ?? "AUD"} />
       </div>
     </>
   );

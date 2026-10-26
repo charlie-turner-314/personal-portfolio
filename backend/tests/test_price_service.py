@@ -14,11 +14,18 @@ from app.integrations.price_provider.base import PriceQuote
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite:///:memory:")
-    # Only create tables that work with SQLite (no JSONB etc.)
-    PriceSnapshot.__table__.create(bind=engine)
-    with Session(engine) as session:
+    from app.database import engine
+    Base.metadata.create_all(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
+    finally:
+        session.close()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
 
 
 def test_returns_cached_snapshot_without_calling_provider(db):
@@ -26,6 +33,7 @@ def test_returns_cached_snapshot_without_calling_provider(db):
                          close=Decimal("234.56"), provider="yahoo"))
     db.commit()
     provider = MagicMock()
+    provider.name = "yahoo"
     svc = PriceService(db=db, provider=provider)
     out = svc.get_or_fetch(["AAPL"], date(2026, 4, 18))
     assert out["AAPL"].close == Decimal("234.56")

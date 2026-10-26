@@ -24,7 +24,7 @@ export type Holding = {
   provider_symbol?: string | null;
   name: string | null;
   currency: string;
-  instrument_type: "equity" | "etf" | "cash" | "crypto" | "other";
+  instrument_type: "equity" | "etf" | "fund" | "cash" | "crypto" | "other";
   quantity: string;
   avg_cost?: string | null;
   as_of_date?: string | null;
@@ -33,6 +33,16 @@ export type Holding = {
   current_value_user_currency?: string | null;
   cost_basis_user_currency?: string | null;
   is_stale: boolean;
+  valuation_date?: string | null;
+  valuation_error?: string | null;
+  quote_currency?: string | null;
+  quote_date?: string | null;
+  quote_source?: string | null;
+  cost_basis_kind?: string;
+  archived_at?: string | null;
+  ownership_share?: string;
+  can_manage?: boolean;
+  can_edit?: boolean;
 };
 
 export type PortfolioAccount = {
@@ -41,20 +51,27 @@ export type PortfolioAccount = {
   value: string | number;
   type: string;
   currency?: string;
+  source?: string;
+  can_add_holdings?: boolean;
+  sync_state?: Omit<InvestmentSyncState, "account_id" | "name"> | null;
 };
 
 export type PortfolioSummary = {
   total_value: string;
-  total_value_today_change: string;
+  total_value_today_change: string | null;
   currency: string;
   accounts: PortfolioAccount[];
   allocation_by_type: Record<string, string>;
   allocation_by_currency: Record<string, string>;
+  valuation_status?: "complete" | "partial" | "unavailable";
+  unavailable_holdings?: number;
+  as_of?: string | null;
 };
 
 export type ValuationPoint = { date: string; value: string };
 
 export type SymbolSearchResult = {
+  instrument_type?: "equity" | "etf" | "fund" | "crypto" | "cash" | null;
   symbol: string;
   name: string;
   exchange?: string | null;
@@ -115,29 +132,30 @@ async function readJsonOrThrow<T>(resp: Response): Promise<T> {
   return (await resp.json()) as T;
 }
 
-export async function listHoldings(accountId?: string): Promise<Holding[]> {
+export async function listHoldings(accountId?: string, personIds?: string): Promise<Holding[]> {
   const resp = await signedFetch("GET", "/api/investments/holdings", {
-    query: accountId ? { account_id: accountId } : undefined,
+    query: { account_id: accountId, person_ids: personIds },
   });
   return readJsonOrThrow<Holding[]>(resp);
 }
 
 // Request/render scoped only: share the dashboard's identical portfolio reads,
 // while rechecking access on the next request after a grant/revocation.
-const getPortfolioForRender = cache(async (): Promise<PortfolioSummary> => {
-  const resp = await signedFetch("GET", "/api/investments/portfolio/summary");
+const getPortfolioForRender = cache(async (personIds?: string): Promise<PortfolioSummary> => {
+  const resp = await signedFetch("GET", "/api/investments/portfolio/summary", { query: { person_ids: personIds } });
   return readJsonOrThrow<PortfolioSummary>(resp);
 });
 
-export async function getPortfolio(): Promise<PortfolioSummary> {
-  return getPortfolioForRender();
+export async function getPortfolio(personIds?: string): Promise<PortfolioSummary> {
+  return getPortfolioForRender(personIds);
 }
 
 export type InvestmentAccount = {
   id: string;
   name: string;
   base_currency: string;
-  source: "manual" | "ibkr_flex";
+  source: string;
+  can_add_holdings?: boolean;
 };
 
 export async function listInvestmentAccounts(): Promise<InvestmentAccount[]> {
@@ -145,17 +163,19 @@ export async function listInvestmentAccounts(): Promise<InvestmentAccount[]> {
   return portfolio.accounts.map((a) => ({
     id: a.id,
     name: a.name,
-    base_currency: portfolio.currency,
-    source: "manual",
+    base_currency: a.currency ?? portfolio.currency,
+    source: a.source ?? (a.type === "investment_manual" ? "manual" : "connected"),
+    can_add_holdings: a.can_add_holdings ?? a.type === "investment_manual",
   }));
 }
 
 export async function getPortfolioHistory(
   from: string,
   to: string,
+  personIds?: string,
 ): Promise<ValuationPoint[]> {
   const resp = await signedFetch("GET", "/api/investments/portfolio/history", {
-    query: { from, to },
+    query: { from, to, person_ids: personIds },
   });
   return readJsonOrThrow<ValuationPoint[]>(resp);
 }
@@ -164,11 +184,12 @@ export async function getHoldingHistory(
   holdingId: string,
   from: string,
   to: string,
+  personIds?: string,
 ): Promise<ValuationPoint[]> {
   const resp = await signedFetch(
     "GET",
     `/api/investments/holdings/${holdingId}/history`,
-    { query: { from, to } },
+    { query: { from, to, person_ids: personIds } },
   );
   return readJsonOrThrow<ValuationPoint[]>(resp);
 }
@@ -245,6 +266,9 @@ export type CgtFinancialYearSummary = {
   discounted_gains_aud: string;
   net_capital_gain_before_losses_aud: string;
   allocation_count: number;
+  disposal_count: number;
+  allocation_result_aud: string;
+  coverage_warnings: string[];
   missing_fx_allocation_count: number;
   assumptions: string[];
 };
@@ -270,9 +294,9 @@ export async function getHoldingCgtAllocations(holdingId: string): Promise<CgtAl
   return readJsonOrThrow<CgtAllocation[]>(resp);
 }
 
-export async function getCgtFinancialYearSummary(financialYearStart: number): Promise<CgtFinancialYearSummary> {
+export async function getCgtFinancialYearSummary(financialYearStart: number, personIds?: string): Promise<CgtFinancialYearSummary> {
   const resp = await signedFetch("GET", "/api/investments/cgt/summary", {
-    query: { financial_year_start: String(financialYearStart) },
+    query: { financial_year_start: String(financialYearStart), person_ids: personIds },
   });
   return readJsonOrThrow<CgtFinancialYearSummary>(resp);
 }
@@ -350,11 +374,15 @@ export async function listAccountIncomeEvents(accountId: string): Promise<Invest
 export async function getInvestmentIncomeSummary(
   financialYearStart: number,
   holdingId?: string,
+  trailing = false,
+  personIds?: string,
 ): Promise<InvestmentIncomeSummary[]> {
   const resp = await signedFetch("GET", "/api/investments/income-events/summary", {
     query: {
       financial_year_start: String(financialYearStart),
       holding_id: holdingId,
+      person_ids: personIds,
+      trailing: trailing ? "true" : undefined,
     },
   });
   return readJsonOrThrow<InvestmentIncomeSummary[]>(resp);
@@ -555,10 +583,11 @@ export async function disconnectBrokerConnection(connectionId: string): Promise<
 export async function createManualAccount(
   name: string,
   base_currency: string,
+  creationKey?: string,
 ): Promise<{ account_id: string }> {
   await assertNotDemoRestricted();
   const resp = await signedFetch("POST", "/api/investments/manual-accounts", {
-    body: { name, base_currency },
+    body: { name, base_currency, ...(creationKey ? { creation_key: creationKey } : {}) },
   });
   return readJsonOrThrow<{ account_id: string }>(resp);
 }
@@ -567,8 +596,9 @@ export async function addManualHolding(
   accountId: string,
   payload: {
     symbol: string;
+    name?: string;
     quantity: string;
-    instrument_type: "equity" | "etf" | "cash";
+    instrument_type: "equity" | "etf" | "fund" | "crypto" | "cash";
     currency: string;
     as_of_date?: string;
     avg_cost?: string;
@@ -589,19 +619,22 @@ export async function deleteHolding(holdingId: string): Promise<void> {
   if (isDemoRestrictedUserEmail(session.user.email)) {
     throw new Error(DEMO_RESTRICTED_ACTION_ERROR);
   }
-  await signedFetch("DELETE", `/api/investments/holdings/${holdingId}`);
+  const resp = await signedFetch("DELETE", `/api/investments/holdings/${holdingId}`);
+  if (!resp.ok) throw new Error((await resp.json()).detail ?? "Delete failed");
 }
 
-export async function syncAllInvestments(): Promise<{ count: number }> {
+export async function syncAllInvestments(): Promise<{ count: number; account_ids?: string[] }> {
   await assertNotDemoRestricted();
   const resp = await signedFetch("POST", "/api/investments/sync-all");
-  return readJsonOrThrow<{ count: number }>(resp);
+  return readJsonOrThrow<{ count: number; account_ids?: string[] }>(resp);
 }
 
 export async function updateHolding(
   holdingId: string,
   payload: {
     symbol?: string;
+    currency?: string;
+    instrument_type?: "equity" | "etf" | "fund" | "crypto" | "cash";
     quantity?: string;
     avg_cost?: string | null;
     as_of_date?: string | null;
@@ -680,7 +713,7 @@ export type InvestmentImportRequest = {
   mapping: InvestmentImportMapping;
   date_format: "AUTO" | "DD-MM-YYYY" | "MM-DD-YYYY";
   amount_format: "AUTO" | "DOT_DECIMAL" | "COMMA_DECIMAL";
-  default_asset_type: "equity" | "fund" | "crypto" | "cash" | "option" | "bond" | "other";
+  default_asset_type: "equity" | "fund" | "managed_fund" | "crypto" | "cash" | "option" | "bond" | "other";
   default_currency?: string | null;
   default_activity_type?: string | null;
   activity_type_aliases?: Record<string, string>;
@@ -936,4 +969,34 @@ export async function resolveInvestmentReconciliationItem(
   await assertNotDemoRestricted();
   const resp = await signedFetch("POST", `/api/investments/reconciliation-items/${itemId}/resolve`, { body: payload });
   return readJsonOrThrow(resp);
+}
+
+export async function archiveHolding(holdingId: string): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", `/api/investments/holdings/${holdingId}/archive`);
+  if (!resp.ok) throw new Error((await resp.json()).detail ?? "Archive failed");
+}
+
+export async function saveManualPrice(holdingId: string, payload: {
+  date: string; price: string; currency: string; source: string;
+}): Promise<void> {
+  await assertNotDemoRestricted();
+  const resp = await signedFetch("POST", `/api/investments/holdings/${holdingId}/prices`, { body: payload });
+  await readJsonOrThrow(resp);
+}
+
+export async function getInvestmentReportingYears(): Promise<number[]> {
+  const resp = await signedFetch("GET", "/api/investments/reporting-years");
+  return readJsonOrThrow<number[]>(resp);
+}
+
+export type InvestmentSyncState = { account_id: string; name: string; status: "idle" | "queued" | "running" | "completed" | "partial" | "failed"; error?: string | null; completed_at?: string | null };
+export async function getInvestmentSyncStatus(): Promise<InvestmentSyncState[]> {
+  const resp = await signedFetch("GET", "/api/investments/sync-status");
+  return readJsonOrThrow(resp);
+}
+
+export async function resolveInvestmentSymbol(symbol: string): Promise<SymbolSearchResult> {
+  const response = await signedFetch("GET", "/api/investments/symbols/resolve", { query: { symbol } });
+  return readJsonOrThrow(response);
 }

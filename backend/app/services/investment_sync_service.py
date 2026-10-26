@@ -4,18 +4,19 @@ import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Callable
-from uuid import UUID
+from uuid import UUID, uuid4
 import logging
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.models import (
     Account, BrokerConnection, Holding, BrokerTrade, PriceSnapshot, InvestmentActivity,
-    InvestmentIngestionRun,
+    InvestmentIngestionRun, HoldingValuation,
 )
 from app.services.credentials_crypto import decrypt
 from app.services.holding_valuation_service import HoldingValuationService, FxConverter
-from app.services.price_service import PriceService
+from app.services.investment_lock_service import account_sync_lock
+from app.services.price_service import PriceService, holding_price_lookup
 from app.integrations.ibkr_flex_adapter import (
     IBKRFlexAdapter, FlexAuthError, FlexStatementNotReady, FlexTransientError, FlexError,
 )
@@ -110,14 +111,53 @@ class InvestmentSyncService:
         self.valuation_service = valuation_service or HoldingValuationService(db=db, fx=fx, price_service=self.price_service)
 
     def sync_account(self, account_id: UUID, on: date | None = None) -> None:
+        with account_sync_lock(self.db, account_id):
+            self.db.expire_all()
+            self._sync_account_locked(account_id, on)
+
+    def _sync_account_locked(self, account_id: UUID, on: date | None = None) -> None:
         on = on or date.today()
         account = self.db.query(Account).filter_by(id=account_id).one()
-        if account.account_type == "investment_brokerage":
-            self._sync_brokerage(account, on)
-        elif account.account_type == "investment_manual":
-            self._sync_manual(account, on)
-        else:
-            raise ValueError(f"Account {account_id} is not an investment account")
+        started = datetime.utcnow().isoformat()
+        previous = account.investment_sync_state or {}
+        request_id = previous.get("request_id") if previous.get("status") == "queued" else None
+        request_id = request_id or str(uuid4())
+        account.investment_sync_state = {"request_id": request_id, "status": "running", "started_at": started, "completed_at": None, "error": None}
+        self.db.commit()
+        try:
+            if account.account_type == "investment_brokerage":
+                self._sync_brokerage(account, on)
+            elif account.account_type == "investment_manual":
+                self._sync_manual(account, on)
+            else:
+                raise ValueError(f"Account {account_id} is not an investment account")
+            errors = [h.last_price_error for h in self.db.query(Holding).filter_by(account_id=account_id).all() if h.last_price_error and not h.archived_at]
+            connection = self.db.query(BrokerConnection).filter_by(account_id=account_id).one_or_none()
+            stale = self.db.query(HoldingValuation.id).join(Holding, Holding.id == HoldingValuation.holding_id).filter(Holding.account_id == account_id, HoldingValuation.date == on, HoldingValuation.is_stale.is_(True), Holding.archived_at.is_(None)).first() is not None
+            provider_partial = stale or (connection is not None and connection.last_sync_status in {"partial", "error", "needs_reauth"})
+            self.db.refresh(account, ["investment_sync_state"])
+            if (account.investment_sync_state or {}).get("request_id") != request_id:
+                return  # a newer queued correction owns the visible status
+            account.investment_sync_state = {
+                "request_id": request_id,
+                "status": "partial" if errors or provider_partial else "completed",
+                "started_at": started, "completed_at": datetime.utcnow().isoformat(),
+                "error": "Some prices, conversions or provider history require review" if errors or provider_partial else None,
+            }
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            account = self.db.query(Account).filter_by(id=account_id).one()
+            if (account.investment_sync_state or {}).get("request_id") != request_id:
+                raise
+            account.investment_sync_state = {
+                "request_id": request_id,
+                "status": "failed", "started_at": started,
+                "completed_at": datetime.utcnow().isoformat(),
+                "error": "Investment refresh failed. Review connection diagnostics or retry.",
+            }
+            self.db.commit()
+            raise
 
     def _sync_brokerage(self, account: Account, on: date) -> None:
         conn = self.db.query(BrokerConnection).filter_by(account_id=account.id).one()
@@ -173,7 +213,7 @@ class InvestmentSyncService:
 
         statement = adapter.parse_positions_xml(positions_xml)
         self._upsert_positions(account, statement.positions)
-        self._upsert_cash(account, statement.cash)
+        self._upsert_cash(account, statement.cash, getattr(statement, "report_date", None))
         # Persist positions immediately so a later trades-fetch failure
         # doesn't roll back the work we already did.
         self.db.commit()
@@ -200,7 +240,15 @@ class InvestmentSyncService:
             ref_trades = adapter.request_statement(creds["query_id_trades"])
             trades_xml = adapter.fetch_statement(ref_trades)
             trades = adapter.parse_trades_xml(trades_xml)
-            self._upsert_trades(account, trades)
+            incomplete = self._upsert_trades(account, trades)
+            mismatches = self._ibkr_position_mismatches(account)
+            if incomplete or mismatches:
+                reasons = []
+                if incomplete:
+                    reasons.append(f"{incomplete} trade input(s) have missing commission, fee FX or supportable opening-lot history")
+                if mismatches:
+                    reasons.append("Recorded trade quantities differ from broker positions for: " + ", ".join(mismatches))
+                trades_error = "; ".join(reasons)
         except FlexAuthError as e:
             trades_error = f"trades auth failed: {e}"
             logger.warning("IBKR trades sync failed (auth) for %s: %s", account.id, e)
@@ -800,7 +848,7 @@ class InvestmentSyncService:
                 holding.source = source
                 holding.provider_symbol = getattr(item, "provider_symbol", None)
             if instrument_type != "cash" and item.aud_rate > 0:
-                snapshot = self.db.query(PriceSnapshot).filter_by(symbol=symbol, date=on).one_or_none()
+                snapshot = self.db.query(PriceSnapshot).filter_by(symbol=symbol, date=on, provider=price_provider).one_or_none()
                 if snapshot is None:
                     self.db.add(PriceSnapshot(
                         symbol=symbol,
@@ -817,66 +865,105 @@ class InvestmentSyncService:
 
     def _sync_manual(self, account: Account, on: date) -> None:
         holdings = self.db.query(Holding).filter_by(account_id=account.id).all()
-        symbols = sorted({h.symbol for h in holdings if h.instrument_type != "cash"})
+        market_provider = self.price_service.provider.name
+        lookups = [holding_price_lookup(h, market_provider) for h in holdings if h.instrument_type != "cash" and not h.archived_at and (h.instrument_type != "fund" or h.provider_symbol)]
+        symbols = sorted({symbol for symbol, provider in lookups if provider == market_provider})
         if symbols:
             self.price_service.get_or_fetch(symbols, on)
         self.valuation_service.compute(account_id=account.id, on=on)
-        account.last_synced_at = datetime.utcnow()
         self.db.commit()
 
     def _upsert_positions(self, account: Account, positions) -> None:
         seen = set()
-        for p in positions:
-            seen.add((p.symbol, p.instrument_type))
-            row = self.db.query(Holding).filter_by(
-                account_id=account.id, symbol=p.symbol, instrument_type=p.instrument_type
-            ).one_or_none()
+        for position in positions:
+            seen.add((position.symbol, position.instrument_type))
+            row = self.db.query(Holding).filter_by(account_id=account.id, symbol=position.symbol, instrument_type=position.instrument_type).one_or_none()
             if row is None:
-                row = Holding(
-                    user_id=account.user_id, account_id=account.id, symbol=p.symbol,
-                    name=p.name, currency=p.currency, instrument_type=p.instrument_type,
-                    quantity=p.quantity, avg_cost=p.avg_cost, source="ibkr_flex",
-                )
+                row = Holding(user_id=account.user_id, account_id=account.id, symbol=position.symbol, source="ibkr_flex")
                 self.db.add(row)
-            else:
-                row.quantity = p.quantity
-                row.avg_cost = p.avg_cost
-                row.name = p.name
-                row.currency = p.currency
-        for h in list(self.db.query(Holding).filter_by(account_id=account.id, source="ibkr_flex").all()):
-            if (h.symbol, h.instrument_type) not in seen and h.instrument_type != "cash":
-                self.db.delete(h)
+            row.source = "ibkr_flex"
+            row.name = position.name
+            row.currency = position.currency
+            row.instrument_type = position.instrument_type
+            row.quantity = position.quantity
+            row.avg_cost = position.avg_cost
+            row.as_of_date = position.quote_date
+            row.archived_at = None
+            self.db.flush()
+            row.provider_symbol = f"ibkr:{row.id.hex}"
+            if position.mark_price is not None and position.quote_date is not None:
+                snapshot = self.db.query(PriceSnapshot).filter_by(symbol=row.provider_symbol, date=position.quote_date, provider="ibkr_flex").one_or_none()
+                if snapshot is None:
+                    snapshot = PriceSnapshot(symbol=row.provider_symbol, date=position.quote_date, provider="ibkr_flex")
+                    self.db.add(snapshot)
+                snapshot.currency = position.currency
+                snapshot.close = position.mark_price
+                snapshot.source_label = "IBKR statement"
+        for holding in self.db.query(Holding).filter_by(account_id=account.id, source="ibkr_flex").all():
+            if (holding.symbol, holding.instrument_type) not in seen and holding.instrument_type != "cash":
+                # A sold position still owns income, valuations and tax history.
+                holding.quantity = Decimal(0)
+                holding.avg_cost = None
 
-    def _upsert_cash(self, account: Account, cash) -> None:
+    def _upsert_cash(self, account: Account, cash, report_date=None) -> None:
         seen = set()
-        for c in cash:
-            seen.add(c.currency)
-            row = self.db.query(Holding).filter_by(
-                account_id=account.id, symbol=c.currency, instrument_type="cash"
-            ).one_or_none()
+        for item in cash:
+            seen.add(item.currency)
+            row = self.db.query(Holding).filter_by(account_id=account.id, symbol=item.currency, instrument_type="cash").one_or_none()
             if row is None:
-                row = Holding(
-                    user_id=account.user_id, account_id=account.id, symbol=c.currency,
-                    name=f"Cash ({c.currency})", currency=c.currency,
-                    instrument_type="cash", quantity=c.balance, source="ibkr_flex",
-                )
+                row = Holding(user_id=account.user_id, account_id=account.id, symbol=item.currency, name=f"Cash ({item.currency})", currency=item.currency, instrument_type="cash", source="ibkr_flex")
                 self.db.add(row)
-            else:
-                row.quantity = c.balance
-        for h in self.db.query(Holding).filter_by(account_id=account.id, source="ibkr_flex", instrument_type="cash").all():
-            if h.symbol not in seen:
-                self.db.delete(h)
+            row.source = "ibkr_flex"
+            row.quantity = item.balance
+            row.as_of_date = report_date
+        for holding in self.db.query(Holding).filter_by(account_id=account.id, source="ibkr_flex", instrument_type="cash").all():
+            if holding.symbol not in seen:
+                holding.quantity = Decimal(0)
+                holding.as_of_date = report_date
 
-    def _upsert_trades(self, account: Account, trades) -> None:
-        existing = {
-            t.external_id for t in
-            self.db.query(BrokerTrade.external_id).filter_by(account_id=account.id).all()
-        }
-        for t in trades:
-            if t.external_id in existing:
-                continue
-            self.db.add(BrokerTrade(
-                account_id=account.id, symbol=t.symbol, trade_date=t.trade_date,
-                side=t.side, quantity=t.quantity, price=t.price,
-                currency=t.currency, external_id=t.external_id,
-            ))
+    def _ibkr_position_mismatches(self, account):
+        from collections import defaultdict
+        expected = defaultdict(Decimal)
+        for trade in self.db.query(BrokerTrade).filter_by(account_id=account.id).all():
+            expected[(trade.symbol, trade.instrument_type)] += Decimal(trade.quantity) * (1 if trade.side == "buy" else -1)
+        observed = {(holding.symbol, holding.instrument_type): Decimal(holding.quantity) for holding in self.db.query(Holding).filter_by(account_id=account.id, source="ibkr_flex").all() if holding.instrument_type != "cash"}
+        return sorted({symbol for symbol, kind in set(expected) | set(observed) if expected.get((symbol, kind), Decimal(0)) != observed.get((symbol, kind), Decimal(0))})
+
+    def _upsert_trades(self, account: Account, trades) -> int:
+        from app.services.exchange_rate_service import ExchangeRateService
+        from app.services.broker_trade_service import rebuild_recorded_cgt
+        existing = {row.external_id: row for row in self.db.query(BrokerTrade).filter_by(account_id=account.id).all()}
+        keys = set()
+        incomplete = 0
+        fx = ExchangeRateService(db=self.db)
+        for trade in trades:
+            row = existing.get(trade.external_id)
+            if row is None:
+                row = BrokerTrade(account_id=account.id, symbol=trade.symbol, trade_date=trade.trade_date, side=trade.side, quantity=trade.quantity, price=trade.price, currency=trade.currency, external_id=trade.external_id)
+                self.db.add(row)
+                existing[trade.external_id] = row
+            elif any((row.symbol != trade.symbol, row.trade_date != trade.trade_date, row.side != trade.side, row.quantity != trade.quantity, row.price != trade.price, row.currency != trade.currency)):
+                raise FlexError("A repeated IBKR trade conflicts with its recorded economic values")
+            if row.instrument_type and row.instrument_type != trade.instrument_type:
+                keys.add((row.symbol, row.instrument_type))
+            row.instrument_type = trade.instrument_type
+            fees = trade.fees
+            assumptions = []
+            if fees is None:
+                assumptions.append("IBKR commission was not supplied; include ibCommission in the Trades query.")
+            elif fees and trade.fee_currency != trade.currency:
+                rate = fx.get_exchange_rate(trade.fee_currency, trade.currency, trade.trade_date)
+                if rate is None:
+                    assumptions.append("IBKR commission currency differs from trade currency and historical fee FX is missing.")
+                    fees = None
+                else:
+                    assumptions.append(f"Commission {fees} {trade.fee_currency} converted using recorded {trade.trade_date} FX.")
+                    fees *= Decimal(rate)
+            row.fees = fees if fees is not None else Decimal(0)
+            row.valuation_missing = fees is None
+            row.assumptions = assumptions
+            incomplete += fees is None
+            keys.add((trade.symbol, trade.instrument_type))
+        self.db.flush()
+        incomplete += rebuild_recorded_cgt(self.db, account, keys)
+        return incomplete

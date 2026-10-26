@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -16,16 +15,18 @@ from app.services.holding_valuation_service import HoldingValuationService
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite:///:memory:")
-    # Create only tables we need — Base.metadata.create_all chokes on JSONB elsewhere.
-    User.__table__.create(bind=engine)
-    Account.__table__.create(bind=engine)
-    Holding.__table__.create(bind=engine)
-    PriceSnapshot.__table__.create(bind=engine)
-    HoldingValuation.__table__.create(bind=engine)
-    AccountBalance.__table__.create(bind=engine)
-    with Session(engine) as session:
+    from app.database import Base, engine
+    Base.metadata.create_all(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
+    finally:
+        session.close()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
 
 
 def _make_user(db, currency="EUR"):
@@ -49,7 +50,7 @@ def test_computes_valuation_for_equity_in_user_currency(db):
                 quantity=Decimal("10"), source="manual")
     db.add(h)
     db.add(PriceSnapshot(symbol="AAPL", currency="USD", date=date(2026, 4, 18),
-                         close=Decimal("234.56"), provider="yahoo"))
+                         close=Decimal("234.56"), provider="yahoo-v2"))
     db.commit()
 
     fx = MagicMock()
@@ -94,7 +95,7 @@ def test_does_not_mark_stale_within_freshness_window(db):
     db.add(h)
     # Snapshot 3 days before `on` — on the boundary, still fresh.
     db.add(PriceSnapshot(symbol="AAPL", currency="USD", date=date(2026, 4, 15),
-                         close=Decimal("230.00"), provider="yahoo"))
+                         close=Decimal("230.00"), provider="yahoo-v2"))
     db.commit()
     fx = MagicMock(); fx.convert.return_value = Decimal("2100.00")
     HoldingValuationService(db=db, fx=fx).compute(account_id=acc.id, on=date(2026, 4, 18))
@@ -112,7 +113,7 @@ def test_marks_stale_when_snapshot_older_than_window(db):
     db.add(h)
     # Snapshot 4 days before `on` — outside the freshness window.
     db.add(PriceSnapshot(symbol="AAPL", currency="USD", date=date(2026, 4, 14),
-                         close=Decimal("230.00"), provider="yahoo"))
+                         close=Decimal("230.00"), provider="yahoo-v2"))
     db.commit()
     fx = MagicMock(); fx.convert.return_value = Decimal("2100.00")
     HoldingValuationService(db=db, fx=fx).compute(account_id=acc.id, on=date(2026, 4, 18))

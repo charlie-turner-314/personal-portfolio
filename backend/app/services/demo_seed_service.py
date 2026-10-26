@@ -1132,6 +1132,7 @@ class DemoSeedService:
                         quantity=h_spec.quantity,
                         price=price,
                         value_user_currency=value_user,
+                        value_currency="EUR", quote_currency=h_spec.currency, quote_date=day, quote_source="demo",
                         is_stale=False,
                     ))
                     valuations += 1
@@ -1140,6 +1141,7 @@ class DemoSeedService:
                 self.db.add(AccountBalance(
                     account_id=account.id,
                     date=day,
+                    account_currency=account.currency,
                     balance_in_account_currency=total_acct,
                     balance_in_functional_currency=total_user,
                 ))
@@ -1212,6 +1214,7 @@ class DemoSeedService:
                     quantity=h.quantity,
                     price=price,
                     value_user_currency=value_user,
+                    value_currency="EUR", quote_currency=h.currency, quote_date=day, quote_source="demo",
                     is_stale=False,
                 ))
                 valuations += 1
@@ -1220,6 +1223,7 @@ class DemoSeedService:
             self.db.add(AccountBalance(
                 account_id=account.id,
                 date=day,
+                account_currency=account.currency,
                 balance_in_account_currency=total_acct,
                 balance_in_functional_currency=total_user,
             ))

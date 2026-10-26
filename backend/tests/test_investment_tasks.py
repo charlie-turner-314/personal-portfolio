@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models import Account, BrokerConnection, User
@@ -11,11 +10,18 @@ from app.models import Account, BrokerConnection, User
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite:///:memory:")
-    for model in (User, Account, BrokerConnection):
-        model.__table__.create(bind=engine)
-    with Session(engine) as session:
+    from app.database import Base, engine
+    Base.metadata.create_all(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
+    finally:
+        session.close()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
 
 
 def test_daily_sync_enumerates_active_accounts_and_fans_out(db, monkeypatch):
@@ -29,13 +35,14 @@ def test_daily_sync_enumerates_active_accounts_and_fans_out(db, monkeypatch):
                             credentials_encrypted="x", last_sync_status="ok"))
     db.commit()
 
+    expected_ids = sorted([str(a1.id), str(a2.id)])
     enqueued: list[str] = []
     with patch("tasks.investment_tasks.SessionLocal", return_value=db), \
          patch("tasks.investment_tasks.sync_investment_account.delay", side_effect=lambda aid: enqueued.append(str(aid))):
         from tasks.investment_tasks import daily_investment_sync_all
         daily_investment_sync_all.run()
 
-    assert sorted(enqueued) == sorted([str(a1.id), str(a2.id)])
+    assert sorted(enqueued) == expected_ids
 
 
 def test_sync_investment_account_calls_service(db, monkeypatch):

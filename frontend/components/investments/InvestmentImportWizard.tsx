@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RiAlertLine, RiCheckLine, RiDeleteBinLine, RiLoader4Line } from "@remixicon/react";
 import { toast } from "sonner";
@@ -38,6 +39,7 @@ import {
   reconcileSavedInvestmentMapping,
   suggestInvestmentImportMapping,
 } from "@/lib/investment-import/mapping";
+import { CreateInvestmentAccount } from "./CreateInvestmentAccount";
 import { CsvUploadDropzone } from "@/components/transactions/csv-upload-dropzone";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,7 +55,15 @@ function formattedDate(value: string): string {
   return new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
-export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccount[] }) {
+export function InvestmentImportWizard({ accounts: initialAccounts, defaultCurrency: reportingCurrency = "AUD" }: { accounts: InvestmentAccount[]; defaultCurrency?: string }) {
+  const [accounts, setAccounts] = useState(initialAccounts);
+  const [creatingAccount, setCreatingAccount] = useState(initialAccounts.length === 0);
+  const accountCreator = <CreateInvestmentAccount defaultCurrency={reportingCurrency} onCreated={(created) => {
+    setAccounts((items) => [...items, created]);
+    setAccountId(created.id);
+    setDefaultCurrency(created.base_currency);
+    setCreatingAccount(false);
+  }} />;
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
   const [provider, setProvider] = useState("generic");
   const [fileName, setFileName] = useState("");
@@ -232,7 +242,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
       });
       setCompletedMessage(
         `Imported ${result.inserted_activities} activit${result.inserted_activities === 1 ? "y" : "ies"}. ` +
-        `${result.skipped_duplicate_records} duplicate source record${result.skipped_duplicate_records === 1 ? " was" : "s were"} skipped.`,
+        `${result.skipped_duplicate_records} duplicate source record${result.skipped_duplicate_records === 1 ? " was" : "s were"} skipped. Portfolio valuation refresh queued.`,
       );
       toast.success("Investment import completed");
       setPreview(await previewInvestmentImport(requestPayload()));
@@ -314,7 +324,7 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
     return (
       <Card className="rounded-none">
         <CardContent className="p-6 text-sm text-muted-foreground">
-          Create a manual investment account first, then return here to import its broker or exchange statement.
+          {accountCreator}
         </CardContent>
       </Card>
     );
@@ -322,6 +332,9 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
 
   return (
     <div className="space-y-5">
+      {completedMessage && <Link className="inline-block text-sm underline" href="/investments">View portfolio</Link>}
+      <Button variant="outline" onClick={() => setCreatingAccount((value) => !value)}>Create another investment account</Button>
+      {creatingAccount && accountCreator}
       <Card className="rounded-none">
         <CardHeader><CardTitle className="text-base">1. Source and account</CardTitle></CardHeader>
         <CardContent className="space-y-5">
@@ -485,7 +498,8 @@ export function InvestmentImportWizard({ accounts }: { accounts: InvestmentAccou
                   <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="equity">Equity</SelectItem>
-                    <SelectItem value="fund">Fund / ETF</SelectItem>
+                    <SelectItem value="fund">Listed fund / ETF</SelectItem>
+                    <SelectItem value="managed_fund">Unlisted managed fund</SelectItem>
                     <SelectItem value="crypto">Crypto</SelectItem>
                     <SelectItem value="cash">Cash</SelectItem>
                     <SelectItem value="option">Option</SelectItem>

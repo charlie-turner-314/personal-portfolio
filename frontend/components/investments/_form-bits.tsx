@@ -10,14 +10,16 @@ export function Field({
   label,
   children,
   className,
+  htmlFor,
 }: {
   label: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  htmlFor?: string;
 }) {
   return (
     <div className={`space-y-2 ${className ?? ""}`}>
-      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <Label htmlFor={htmlFor} className="text-[10px] uppercase tracking-wider text-muted-foreground">
         {label}
       </Label>
       {children}

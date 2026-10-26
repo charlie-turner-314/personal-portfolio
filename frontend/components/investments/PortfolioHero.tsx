@@ -27,7 +27,7 @@ export function PortfolioHero({
   staleCount,
   headerAction,
 }: {
-  totalValue: number;
+  totalValue: number | null;
   currency: string;
   absChange: number;
   pctChange: number;
@@ -53,11 +53,7 @@ export function PortfolioHero({
         </div>
         <div className="flex items-baseline gap-3 flex-wrap">
           <span className="text-4xl font-bold tabular-nums">
-            {sym}{" "}
-            {totalValue.toLocaleString("en", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+            {totalValue == null ? "Unavailable" : `${sym} ${totalValue.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           </span>
           <span className={`text-sm font-medium tabular-nums ${changeClass}`}>
             {positive ? "▲" : "▼"} {positive ? "+" : "-"}
@@ -70,7 +66,7 @@ export function PortfolioHero({
             {pctChange.toFixed(2)}%)
           </span>
           <span className="text-xs text-muted-foreground">
-            {RANGE_LABEL[range]}
+            value change {RANGE_LABEL[range]}
           </span>
           {asOf && (
             <span className="text-xs text-muted-foreground">· as of {asOf}</span>
