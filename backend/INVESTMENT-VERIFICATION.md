@@ -36,6 +36,7 @@ Additional reviewed risks are addressed in `INVESTMENTS.md`: provider-qualified 
 - Australian investment Playwright journey: **1 passed** on the runtime candidate above, including an intentionally delayed symbol search while saving a manual fund.
 - TypeScript and changed-file ESLint checks passed.
 - Release-lab helper suite: **7 passed**.
+- Release-lab account preparation and cookie-authenticated smoke passed for both the populated demo and fresh synthetic account, including authenticated investment rendering.
 - Production source build and both migration passes succeeded. All **18 preservation comparisons passed**, including populated holdings (12), trades (5), holding valuations (10), account balances, price snapshots (10), income events (9), canonical activities (5), source records (5), and ingestion runs (5).
 - Desktop and 390px mobile screenshots inspected; mobile type labels fit without overlap. Test results/traces are private under `.release-lab/`.
 
