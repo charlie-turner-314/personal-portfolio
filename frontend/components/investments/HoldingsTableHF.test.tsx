@@ -110,35 +110,35 @@ describe("HoldingsTableHF row navigation", () => {
     const triggers = screen.getAllByRole("button", { name: "Row actions" });
     fireEvent.click(triggers[0]);
     expect(mockPush).not.toHaveBeenCalled();
-    // Menu should render Edit/Delete for manual rows
+    // Menu should render Edit/Archive for manual rows
     expect(await screen.findByText("Edit")).toBeTruthy();
   });
 
-  it("calls onDelete with id when Delete menu item then confirm clicked", async () => {
-    const onDelete = vi.fn();
+  it("calls onArchive with id when Archive menu item then confirm clicked", async () => {
+    const onArchive = vi.fn();
     render(
       <HoldingsTableHF
         holdings={H}
         accountNames={{ a: "Acct" }}
         accountsCount={1}
         portfolioCurrencySymbol="€"
-        onDelete={onDelete}
+        onArchive={onArchive}
       />,
     );
     // Holdings are grouped by type, so the ETF row (VUAA, id "1") appears
     // before the equity row regardless of its lower value.
     const triggers = screen.getAllByRole("button", { name: "Row actions" });
     fireEvent.click(triggers[0]);
-    const deleteItem = await screen.findByText("Delete");
+    const deleteItem = await screen.findByText("Archive");
     fireEvent.click(deleteItem);
-    // AlertDialog "Delete" button confirms
-    const confirmBtn = await screen.findByRole("button", { name: "Delete" });
+    // AlertDialog "Archive" button confirms
+    const confirmBtn = await screen.findByRole("button", { name: "Archive" });
     fireEvent.click(confirmBtn);
-    expect(onDelete).toHaveBeenCalledWith("1");
+    expect(onArchive).toHaveBeenCalledWith("1");
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it("shows only View details (no Edit/Delete) for non-manual rows", async () => {
+  it("shows only View details (no Edit/Archive) for non-manual rows", async () => {
     render(
       <HoldingsTableHF
         holdings={[BROKER_HOLDING]}
@@ -151,6 +151,6 @@ describe("HoldingsTableHF row navigation", () => {
     fireEvent.click(trigger);
     expect(await screen.findByText("View details")).toBeTruthy();
     expect(screen.queryByText("Edit")).toBeNull();
-    expect(screen.queryByText("Delete")).toBeNull();
+    expect(screen.queryByText("Archive")).toBeNull();
   });
 });

@@ -27,6 +27,8 @@ export function EditHoldingDialog({
 }) {
   const router = useRouter();
   const [symbol, setSymbol] = useState(holding.symbol);
+  const [currency, setCurrency] = useState(holding.currency);
+  const [instrumentType, setInstrumentType] = useState(holding.instrument_type);
   const [qty, setQty] = useState(holding.quantity);
   const [avgCost, setAvgCost] = useState(holding.avg_cost ?? "");
   const [asOfDate, setAsOfDate] = useState(holding.as_of_date ?? "");
@@ -42,6 +44,8 @@ export function EditHoldingDialog({
       await updateHolding(holding.id, {
         ...(symbol !== holding.symbol ? { symbol } : {}),
         quantity: qty,
+        ...(currency !== holding.currency ? { currency } : {}),
+        ...(instrumentType !== holding.instrument_type ? { instrument_type: instrumentType as "equity" | "etf" | "fund" | "crypto" | "cash" } : {}),
         avg_cost: avgCost === "" ? null : avgCost,
         as_of_date: asOfDate === "" ? null : asOfDate,
         provider_symbol: providerSymbol === "" ? null : providerSymbol,
@@ -61,7 +65,7 @@ export function EditHoldingDialog({
         <DialogHeader>
           <DialogTitle>Edit holding · {holding.symbol}</DialogTitle>
           <DialogDescription>
-            Manual holdings only. Connected-broker positions sync automatically.
+            Manual and disconnected-broker positions can be corrected here. Original transaction records remain unchanged.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
@@ -77,11 +81,17 @@ export function EditHoldingDialog({
               Changing the symbol triggers an automatic re-pricing on save.
             </p>
           </div>
+          {holding.source === "manual" && <div className="grid grid-cols-2 gap-3">
+            <div><Label htmlFor="holding-currency">Holding currency</Label><Input id="holding-currency" value={currency} maxLength={3} pattern="[A-Z]{3}" onChange={(e) => setCurrency(e.target.value.toUpperCase())} required /></div>
+            <div><Label htmlFor="holding-type">Instrument type</Label><select id="holding-type" className="block border bg-background p-2" value={instrumentType} onChange={(e) => setInstrumentType(e.target.value as Holding["instrument_type"])}>{["equity", "etf", "fund", "crypto", "cash"].map((type) => <option key={type} value={type}>{type === "fund" ? "Managed fund" : type}</option>)}</select></div>
+          </div>}
           <div className="space-y-2">
             <Label htmlFor="qty">Quantity</Label>
             <Input
               id="qty"
               type="number"
+              min="0"
+              step="any"
               value={qty}
               onChange={(e) => setQty(e.target.value)}
               required
@@ -94,6 +104,8 @@ export function EditHoldingDialog({
             <Input
               id="avg-cost"
               type="number"
+              min="0"
+              step="any"
               value={avgCost}
               onChange={(e) => setAvgCost(e.target.value)}
               placeholder="—"
@@ -120,11 +132,10 @@ export function EditHoldingDialog({
               value={providerSymbol}
               onChange={setProviderSymbol}
               onSelect={(r: SymbolSearchResult) => setProviderSymbol(r.symbol)}
-              placeholder={`e.g. ${holding.symbol}.LON or ${holding.symbol}.AS`}
+              placeholder="e.g. VAS.AX or AAPL"
             />
             <p className="text-xs text-muted-foreground">
-              Override the ticker used for price lookups. Useful for European ETFs
-              that need an exchange suffix (e.g. VUAA → VUAA.LON).
+              Override the ticker used for price lookups. Use an exchange-specific ticker, such as VAS.AX for an ASX listing.
             </p>
           </div>
           {err && <p className="text-sm text-destructive">{err}</p>}

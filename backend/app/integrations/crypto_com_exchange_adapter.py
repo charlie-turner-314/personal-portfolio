@@ -8,6 +8,7 @@ record the user's confirmation that the key has its default Can Read-only settin
 from __future__ import annotations
 
 import hashlib
+import calendar
 import json
 import time
 from dataclasses import dataclass
@@ -680,7 +681,16 @@ class CryptoComExchangeAdapter:
         if start > end:
             raise ValueError("Crypto.com Exchange history start must not be after end")
         records, pending, calls, failures = self._capital_records(start, end)
-        trade_records, used, unsupported_trades = self._trade_records(start, end)
+        # The provider documents a six-month transaction-history retention.
+        # Keep the requested range visible as a coverage gap instead of
+        # presenting the available suffix as a complete historical import.
+        month_index = end.year * 12 + end.month - 1 - 6
+        year, month_zero = divmod(month_index, 12)
+        retention_start = date(year, month_zero + 1, min(end.day, calendar.monthrange(year, month_zero + 1)[1]))
+        trade_start = max(start, retention_start)
+        if start < retention_start:
+            failures.append(f"Crypto.com Exchange trade history is limited to six months; obtain older records from provider support or import statements. Available trade window starts {retention_start.isoformat()}.")
+        trade_records, used, unsupported_trades = self._trade_records(trade_start, end)
         records.extend(trade_records)
         calls += used
         reward_records, used, reward_failures = self._reward_records(start, end)

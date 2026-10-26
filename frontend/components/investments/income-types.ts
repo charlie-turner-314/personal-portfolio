@@ -17,7 +17,7 @@ export type InvestmentIncomeTotals = {
 
 export type PortfolioIncomeSummary = InvestmentIncomeTotals & {
   financial_year_start_year: number;
-  trailing_cash_received: string;
+  trailing_cash_received: string | null;
   trailing_yield_pct: string | null;
   yield_denominator: string | null;
 };

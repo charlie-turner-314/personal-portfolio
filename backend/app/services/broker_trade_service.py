@@ -536,6 +536,26 @@ def _recompute_cgt_allocations(
         ))
 
 
+def rebuild_recorded_cgt(db: Session, account: Account, keys) -> int:
+    """Rebuild tax projections without replacing broker-reported positions."""
+    from app.services.pnl_service import CostBaseAdjustmentError, OverSellError
+    incomplete = 0
+    for symbol, instrument_type in keys:
+        trades = db.query(BrokerTrade).filter_by(account_id=account.id, symbol=symbol, instrument_type=instrument_type).order_by(BrokerTrade.trade_date, BrokerTrade.id).all()
+        holding = db.query(Holding).filter_by(account_id=account.id, symbol=symbol, instrument_type=instrument_type).one_or_none()
+        adjustments = db.query(InvestmentCostBaseAdjustment).filter_by(holding_id=holding.id).all() if holding else []
+        try:
+            _recompute_cgt_allocations(db, account, symbol, instrument_type, trades, [CostBaseAdjustment(symbol=symbol, effective_date=item.effective_date, amount=Decimal(item.amount_native), currency=item.currency, adjustment_id=str(item.id), sort_key=str(item.id)) for item in adjustments])
+        except (OverSellError, CostBaseAdjustmentError):
+            # Missing opening lots or unsupported short/corporate-action history
+            # must not erase the broker source or break portfolio reads.
+            incomplete += len(trades)
+            for trade in trades:
+                trade.valuation_missing = True
+                trade.assumptions = [*(trade.assumptions or []), "Recorded history cannot support long-only FIFO; supply opening lots or review unsupported actions."]
+    return incomplete
+
+
 def remove_trade(
     db: Session,
     user_id: str,
@@ -595,6 +615,17 @@ def backfill_history(
     account_currency = (account.currency or user_currency).upper()
     today = date.today()
 
+    rates = {}
+    def rate_for(source, target, day):
+        if source == target:
+            return Decimal(1)
+        key = (source, target, day)
+        if key not in rates:
+            value = fx_service.get_exchange_rate(source, target, day)
+            value = Decimal(value) if value is not None else None
+            rates[key] = value if value is not None and value.is_finite() and value > 0 else None
+        return rates[key]
+
     val_count = 0
     # Per-day aggregation across all touched holdings, in BOTH the user
     # functional currency and the account currency.
@@ -619,12 +650,16 @@ def backfill_history(
             .filter(
                 Holding.account_id == account.id,
                 Holding.symbol == sym,
-                Holding.instrument_type == "equity",
+                Holding.instrument_type.in_({trade.instrument_type for trade in trades}),
             )
             .first()
         )
-        if holding is None:
+        if holding is None or len({trade.instrument_type for trade in trades}) != 1:
             continue
+        from app.services.price_service import holding_price_lookup
+        lookup, lookup_provider = holding_price_lookup(holding, price_provider.name)
+        if lookup_provider != price_provider.name:
+            continue  # private statement/NAV prices require their own source history
 
         earliest = trades[0].trade_date
         if earliest_overall is None or earliest < earliest_overall:
@@ -635,7 +670,7 @@ def backfill_history(
         # Fetch the full price range (best-effort).
         try:
             quotes = price_provider.get_daily_closes_range(
-                holding.provider_symbol or sym, earliest, today
+                lookup, earliest, today
             )
         except Exception as e:
             logger.warning(
@@ -647,7 +682,10 @@ def backfill_history(
         # and build the forward-fill source.
         price_by_date: dict[date, Decimal] = {}
         if quotes:
-            quote_ccy = (quotes[0].currency or native_ccy).upper()
+            currencies = {q.currency.upper() for q in quotes if q.currency}
+            if len(currencies) != 1 or any(not q.currency or not Decimal(q.close).is_finite() or Decimal(q.close) < 0 for q in quotes):
+                continue
+            quote_ccy = next(iter(currencies))
             rows_to_insert = [
                 {
                     "symbol": q.symbol,
@@ -662,7 +700,7 @@ def backfill_history(
                 stmt = (
                     pg_insert(PriceSnapshot)
                     .values(rows_to_insert)
-                    .on_conflict_do_nothing(index_elements=["symbol", "date"])
+                    .on_conflict_do_nothing(index_elements=["symbol", "date", "provider"])
                 )
                 db.execute(stmt)
             for q in quotes:
@@ -687,17 +725,17 @@ def backfill_history(
 
         # Walk day-by-day, forward-filling price.
         last_price: Decimal | None = None
+        last_quote_date = None
         val_rows: list[dict] = []
         cur = earliest
         while cur <= today:
             if cur in price_by_date:
                 last_price = price_by_date[cur]
+                last_quote_date = cur
             qty = qty_series.get(cur, Decimal("0"))
-            if last_price is not None and qty > 0:
-                value_native = (qty * last_price).quantize(Decimal("0.00000001"))
-                rate_user = fx_service.get_exchange_rate_with_fallback(
-                    quote_ccy, user_currency, cur
-                )
+            if qty >= 0 and (last_price is not None or qty == 0):
+                value_native = (qty * (last_price or Decimal(0))).quantize(Decimal("0.00000001"))
+                rate_user = Decimal(1) if not value_native else rate_for(quote_ccy, user_currency, cur)
                 if rate_user is None:
                     cur += timedelta(days=1)
                     continue
@@ -707,9 +745,7 @@ def backfill_history(
                 rate_acct = (
                     Decimal("1")
                     if quote_ccy == account_currency
-                    else fx_service.get_exchange_rate_with_fallback(
-                        quote_ccy, account_currency, cur
-                    )
+                    else Decimal(1) if not value_native else rate_for(quote_ccy, account_currency, cur)
                 )
                 if rate_acct is None:
                     cur += timedelta(days=1)
@@ -722,9 +758,13 @@ def backfill_history(
                     "holding_id": holding.id,
                     "date": cur,
                     "quantity": qty,
-                    "price": last_price,
+                    "price": last_price or Decimal(0),
                     "value_user_currency": value_user,
-                    "is_stale": False,
+                    "value_currency": user_currency,
+                    "quote_currency": quote_ccy if last_price is not None else None,
+                    "quote_date": last_quote_date,
+                    "quote_source": price_provider.name if last_quote_date else None,
+                    "is_stale": bool(qty and last_quote_date and (cur - last_quote_date).days > 3),
                 })
                 daily_user_total[cur] = daily_user_total.get(cur, Decimal("0")) + value_user
                 daily_acct_total[cur] = daily_acct_total.get(cur, Decimal("0")) + value_acct
@@ -743,6 +783,10 @@ def backfill_history(
                         "price": stmt.excluded.price,
                         "value_user_currency": stmt.excluded.value_user_currency,
                         "is_stale": stmt.excluded.is_stale,
+                        "value_currency": stmt.excluded.value_currency,
+                        "quote_currency": stmt.excluded.quote_currency,
+                        "quote_date": stmt.excluded.quote_date,
+                        "quote_source": stmt.excluded.quote_source,
                     },
                 )
                 db.execute(stmt)
@@ -758,58 +802,40 @@ def backfill_history(
     # balances and silently lose other holdings' contributions.
     bal_count = 0
     if daily_user_total:
-        from sqlalchemy import func as _sa_func
-        affected_dates = sorted(daily_user_total.keys())
-
-        account_holding_ids = [
-            row[0]
-            for row in db.query(Holding.id)
-            .filter(Holding.account_id == account.id)
-            .all()
-        ]
-        full_user_total: dict[date, Decimal] = {}
-        if account_holding_ids:
-            rows = (
-                db.query(
-                    HoldingValuation.date,
-                    _sa_func.sum(HoldingValuation.value_user_currency).label("total"),
-                )
-                .filter(
-                    HoldingValuation.holding_id.in_(account_holding_ids),
-                    HoldingValuation.date.in_(affected_dates),
-                )
-                .group_by(HoldingValuation.date)
-                .all()
-            )
-            for d, total in rows:
-                # SQLAlchemy may return DateTime here — normalize to date.
-                d_norm = d.date() if hasattr(d, "date") else d
-                full_user_total[d_norm] = Decimal(total or 0)
-
-        bal_rows: list[dict] = []
-        for d in affected_dates:
-            functional_total = full_user_total.get(d, daily_user_total[d])
-            # Derive account-currency total from functional via FX. Only the
-            # rows we just backfilled contributed account-currency data, so
-            # falling back to FX-conversion of the functional total keeps
-            # other holdings' contributions reflected (they were originally
-            # written via HoldingValuationService using FX too).
-            if account_currency == user_currency:
-                acct_total = functional_total
-            else:
-                rate = fx_service.get_exchange_rate_with_fallback(
-                    user_currency, account_currency, d
-                )
-                acct_total = (
-                    (functional_total * Decimal(rate)).quantize(Decimal("0.01"))
-                    if rate is not None
-                    else daily_acct_total.get(d, Decimal("0"))
-                )
+        affected_dates = sorted(daily_user_total)
+        holdings = db.query(Holding).filter_by(account_id=account.id).all()
+        rows = db.query(HoldingValuation).filter(HoldingValuation.holding_id.in_([h.id for h in holdings]), HoldingValuation.date.in_(affected_dates)).all()
+        by_day = defaultdict(dict)
+        for row in rows:
+            by_day[row.date][row.holding_id] = row
+        bal_rows = []
+        for day in affected_dates:
+            total_user = Decimal(0)
+            total_account = Decimal(0)
+            complete = True
+            for holding in holdings:
+                valuation = by_day[day].get(holding.id)
+                if valuation is None and holding.as_of_date and holding.as_of_date > day:
+                    continue
+                if holding.archived_at and holding.archived_at.date() <= day:
+                    continue
+                if valuation is None or not valuation.value_currency:
+                    complete = False
+                    break
+                source = valuation.value_currency
+                user_rate = rate_for(source, user_currency, day)
+                account_rate = rate_for(source, account_currency, day)
+                if user_rate is None or account_rate is None:
+                    complete = False
+                    break
+                total_user += Decimal(valuation.value_user_currency) * user_rate
+                total_account += Decimal(valuation.value_user_currency) * account_rate
+            if not complete:
+                continue  # retain prior complete balances instead of writing a subtotal
             bal_rows.append({
-                "account_id": account.id,
-                "date": d,
-                "balance_in_account_currency": acct_total,
-                "balance_in_functional_currency": functional_total,
+                "account_id": account.id, "date": day, "account_currency": account_currency,
+                "balance_in_account_currency": total_account.quantize(Decimal("0.01")),
+                "balance_in_functional_currency": total_user.quantize(Decimal("0.01")),
             })
 
         CHUNK = 500
@@ -819,6 +845,7 @@ def backfill_history(
             stmt = stmt.on_conflict_do_update(
                 index_elements=["account_id", "date"],
                 set_={
+                    "account_currency": stmt.excluded.account_currency,
                     "balance_in_account_currency": stmt.excluded.balance_in_account_currency,
                     "balance_in_functional_currency": stmt.excluded.balance_in_functional_currency,
                 },

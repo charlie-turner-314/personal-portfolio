@@ -129,7 +129,7 @@ describe("HoldingDetailView", () => {
     );
     expect(screen.getByText(/Current price/i)).toBeTruthy();
     expect(screen.getByText(/Market value/i)).toBeTruthy();
-    expect(screen.getByText(/Total return/i)).toBeTruthy();
+    expect(screen.getByText(/Unrealised return on recorded cost/i)).toBeTruthy();
     expect(screen.getByText(/Avg cost \/ share/i)).toBeTruthy();
     expect(screen.getByText(/Portfolio weight/i)).toBeTruthy();
   });

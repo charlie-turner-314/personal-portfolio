@@ -134,3 +134,19 @@ def test_request_statement_raises_after_exhausting_retries_on_1001():
         with pytest.raises(FlexTransientError):
             adapter.request_statement("qp")
     assert sleeps == [1.0, 3.0]
+
+
+def test_position_identity_collision_is_rejected_instead_of_combining_currencies():
+    from app.integrations.ibkr_flex_adapter import FlexError
+    adapter = IBKRFlexAdapter(token="t", query_id_positions="p", query_id_trades="t")
+    with pytest.raises(FlexError, match="Ambiguous instrument"):
+        adapter.parse_positions_xml('<FlexStatement toDate="20261026"><OpenPosition symbol="BHP" assetCategory="STK" currency="AUD" position="1"/><OpenPosition symbol="BHP" assetCategory="STK" currency="USD" position="1"/></FlexStatement>')
+
+
+def test_trade_type_signed_quantity_and_commission_are_preserved():
+    adapter = IBKRFlexAdapter(token="t", query_id_positions="p", query_id_trades="t")
+    trade = adapter.parse_trades_xml('<Trades><Trade tradeID="sale" symbol="VAS" assetCategory="ETF" currency="AUD" tradeDate="20261026" buySell="SELL" quantity="-2.5" tradePrice="100" ibCommission="-3" ibCommissionCurrency="AUD"/></Trades>')[0]
+    assert trade.instrument_type == "etf"
+    assert trade.quantity == Decimal("2.5")
+    assert trade.fees == 3
+    assert trade.fee_currency == "AUD"

@@ -149,7 +149,11 @@ def sql(container, query):
 
 def snapshot(container):
     result = {}
-    for table in ['users', 'auth_accounts', 'accounts', 'transactions', 'holdings', 'broker_trades']:
+    for table in ['users', 'auth_accounts', 'accounts', 'transactions', 'holdings', 'broker_trades',
+                  'holding_valuations', 'account_balances', 'price_snapshots', 'investment_income_events',
+                  'investment_activities', 'investment_source_records', 'investment_ingestion_runs',
+                  'investment_cost_base_adjustments', 'investment_income_enrichments', 'cgt_allocations',
+                  'investment_crypto_transfers', 'investment_crypto_transfer_lots']:
         cols = sql(container, "SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) "
                    f"FROM information_schema.columns WHERE table_schema='public' AND table_name='{table}'")
         if cols:

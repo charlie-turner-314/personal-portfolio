@@ -161,7 +161,8 @@ _ASSET_TYPE_ALIASES = {
     "shares": "equity",
     "equity": "equity",
     "etf": "fund",
-    "managed fund": "fund",
+    "managed fund": "managed_fund",
+    "unlisted fund": "managed_fund",
     "fund": "fund",
     "crypto": "crypto",
     "cryptocurrency": "crypto",
@@ -947,7 +948,7 @@ def preview_investment_csv(
         item["idempotency_key"] = key
         activity_type = item["normalized"]["activity_type"]
         canonical_asset_type = item["normalized"]["asset_type"]
-        instrument_type = "etf" if canonical_asset_type == "fund" else canonical_asset_type
+        instrument_type = "etf" if canonical_asset_type == "fund" else "fund" if canonical_asset_type == "managed_fund" else canonical_asset_type
         holding_source = holding_sources.get((symbol, instrument_type))
         if (
             activity_type in {"buy", "sell", "drp"}

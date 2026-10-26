@@ -27,3 +27,11 @@ describe("PortfolioIncomeSummary", () => {
     expect(screen.getByText(/Trailing yield 3.25%/i)).toBeTruthy();
   });
 });
+
+it("shows every native currency for the same financial year", () => {
+  const year = CURRENT_FY;
+  const base = { financial_year_start_year: year, cash_received: "100", franking_credits: "0", foreign_income: "0", foreign_tax_paid: "0", trailing_cash_received: "120", trailing_yield_pct: null, yield_denominator: null };
+  render(<PortfolioIncomeSummary summaries={[{ ...base, currency: "AUD" }, { ...base, currency: "USD", cash_received: "250" }]} />);
+  expect(screen.getByText("AUD")).toBeTruthy(); expect(screen.getByText("USD")).toBeTruthy();
+  expect(screen.getByText("A$ 100.00")).toBeTruthy(); expect(screen.getByText("$ 250.00")).toBeTruthy();
+});

@@ -244,3 +244,14 @@ def test_full_trade_page_paginates_backwards_by_nanosecond_without_orders():
     assert calls[1][1]["end_time"] == str(1767261600000 * 1_000_000)
     assert sleeps == [1.0]
     assert {method for method, _params in calls} == {"private/get-trades"}
+
+
+@pytest.mark.parametrize("end,expected_start", [(date(2026, 10, 26), date(2026, 4, 26)), (date(2026, 8, 31), date(2026, 2, 28))])
+def test_trade_retention_window_is_calendar_based_and_remains_a_coverage_gap(end, expected_start):
+    from unittest.mock import MagicMock, patch
+    adapter = CryptoComExchangeAdapter(MagicMock())
+    with patch.object(adapter, "_capital_records", return_value=([], 0, 0, [])), patch.object(adapter, "_trade_records", return_value=([], 0, 0)) as trades, patch.object(adapter, "_reward_records", return_value=([], 0, [])):
+        result = adapter.fetch_history(start=date(2024, 1, 1), end=end)
+    trades.assert_called_once_with(expected_start, end)
+    assert any("six months" in warning and expected_start.isoformat() in warning for warning in result.partial_product_failures)
+    assert result.batch.warnings

@@ -59,6 +59,7 @@ class ParsedPosition:
     instrument_type: str
     avg_cost: Decimal | None
     mark_price: Decimal | None
+    quote_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class ParsedCash:
 class ParsedStatement:
     positions: list[ParsedPosition]
     cash: list[ParsedCash]
+    report_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,9 @@ class ParsedTrade:
     price: Decimal
     currency: str
     trade_date: date
+    instrument_type: str = "equity"
+    fees: Decimal | None = None
+    fee_currency: str | None = None
 
 
 class IBKRFlexAdapter:
@@ -154,6 +159,19 @@ class IBKRFlexAdapter:
         # holdings_account_symbol_type_uq unique constraint. quantity is
         # summed; avg_cost is a quantity-weighted average over lots that
         # report a costBasisPrice; mark_price takes the first non-null.
+        def flex_date(value):
+            if not value:
+                return None
+            for fmt in ("%Y%m%d", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(value.split(";")[0], fmt).date()
+                except ValueError:
+                    pass
+            raise FlexError("IBKR statement date is invalid")
+        statements = list(root.iter("FlexStatement"))
+        statement_dates = [flex_date(item.get("toDate")) for item in statements]
+        report_date = min(statement_dates) if statement_dates and all(statement_dates) else None
+        position_dates = {id(op): flex_date(statement.get("toDate")) for statement in statements for op in statement.iter("OpenPosition")}
         aggregates: dict[tuple[str, str], dict] = {}
         for op in root.iter("OpenPosition"):
             asset = (op.get("assetCategory") or "").upper()
@@ -163,7 +181,14 @@ class IBKRFlexAdapter:
             symbol = op.get("symbol", "").strip()
             if not symbol:
                 continue
+            currency = (op.get("currency") or "").strip().upper()
+            if len(currency) != 3:
+                raise FlexError(f"Quote currency is missing for {symbol}")
+            identity = op.get("conid") or op.get("conidEx")
+            quote_date = flex_date(op.get("reportDate")) or position_dates.get(id(op))
             qty = Decimal(op.get("position", "0"))
+            if not qty.is_finite():
+                raise FlexError("IBKR position quantity is not finite")
             avg_cost = _dec(op.get("costBasisPrice"))
             mark = _dec(op.get("markPrice"))
             key = (symbol, instrument_type)
@@ -171,13 +196,18 @@ class IBKRFlexAdapter:
             if acc is None:
                 aggregates[key] = {
                     "name": op.get("description", "").strip(),
-                    "currency": op.get("currency", "USD").strip().upper(),
+                    "currency": currency,
+                    "identity": identity, "quote_date": quote_date,
                     "quantity": qty,
                     "cost_total": (qty * avg_cost) if avg_cost is not None else Decimal(0),
                     "cost_qty": qty if avg_cost is not None else Decimal(0),
                     "mark_price": mark,
                 }
             else:
+                if acc["currency"] != currency or (identity and acc["identity"] and identity != acc["identity"]):
+                    raise FlexError(f"Ambiguous instrument identity for {symbol}; use separate or unambiguous Flex queries")
+                if quote_date != acc["quote_date"]:
+                    raise FlexError(f"Inconsistent position dates for {symbol}")
                 acc["quantity"] += qty
                 if avg_cost is not None:
                     acc["cost_total"] += qty * avg_cost
@@ -196,14 +226,16 @@ class IBKRFlexAdapter:
                 instrument_type=instrument_type,
                 avg_cost=avg,
                 mark_price=acc["mark_price"],
+                quote_date=acc["quote_date"],
             ))
-        cash: list[ParsedCash] = []
+        cash_totals = {}
         for c in root.iter("CashReportCurrency"):
             cur = (c.get("currency") or "").upper()
             if not cur or cur == "BASE_SUMMARY":
                 continue
-            cash.append(ParsedCash(currency=cur, balance=Decimal(c.get("endingCash", "0"))))
-        return ParsedStatement(positions=positions, cash=cash)
+            cash_totals[cur] = cash_totals.get(cur, Decimal(0)) + Decimal(c.get("endingCash", "0"))
+        cash = [ParsedCash(currency=currency, balance=balance) for currency, balance in cash_totals.items()]
+        return ParsedStatement(positions=positions, cash=cash, report_date=report_date)
 
     def parse_trades_xml(self, xml: str) -> list[ParsedTrade]:
         root = ET.fromstring(xml)
@@ -212,14 +244,23 @@ class IBKRFlexAdapter:
             asset = (t.get("assetCategory") or "").upper()
             if asset not in _ASSET_CATEGORY_MAP:
                 continue
+            currency = (t.get("currency") or "").strip().upper()
+            if len(currency) != 3 or not t.get("tradeID") or not t.get("symbol"):
+                raise FlexError("IBKR trade identity or currency is missing")
+            side = (t.get("buySell") or "").upper()
+            if side not in {"BUY", "SELL"}:
+                raise FlexError("IBKR trade side is unsupported")
             trades.append(ParsedTrade(
                 external_id=t.get("tradeID", "").strip(),
                 symbol=t.get("symbol", "").strip(),
-                side="buy" if t.get("buySell", "BUY").upper() == "BUY" else "sell",
-                quantity=Decimal(t.get("quantity", "0")),
+                side=side.lower(),
+                quantity=abs(Decimal(t.get("quantity", "0"))),
                 price=Decimal(t.get("tradePrice", "0")),
-                currency=t.get("currency", "USD").strip().upper(),
+                currency=currency,
                 trade_date=datetime.strptime(t.get("tradeDate", ""), "%Y%m%d").date(),
+                instrument_type=_ASSET_CATEGORY_MAP[asset],
+                fees=abs(_dec(t.get("ibCommission"))) if _dec(t.get("ibCommission")) is not None else None,
+                fee_currency=(t.get("ibCommissionCurrency") or currency).strip().upper(),
             ))
         return trades
 
@@ -228,6 +269,7 @@ def _dec(value: str | None) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(value)
+        number = Decimal(value)
+        return number if number.is_finite() else None
     except Exception:
         return None

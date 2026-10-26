@@ -43,6 +43,8 @@ class Account(Base):
     institution = Column(String(255))
     logo_id = Column(UUID(as_uuid=True), ForeignKey("company_logos.id", ondelete="SET NULL"), nullable=True)
     currency = Column(String(3), default="EUR")
+    investment_sync_state = Column(JSONB, nullable=True)
+    investment_creation_key = Column(String(64), nullable=True)
     provider = Column(String(50), nullable=True)  # gocardless, manual
     external_id = Column(String(255), nullable=True)  # Provider's account ID
     external_id_ciphertext = Column(Text, nullable=True)
@@ -95,6 +97,7 @@ class Account(Base):
     # Indexes and constraints
     __table_args__ = (
         Index("idx_accounts_user", "user_id"),
+        Index("accounts_user_investment_creation_key_uq", "user_id", "investment_creation_key", unique=True, postgresql_where=text("investment_creation_key IS NOT NULL")),
         UniqueConstraint("user_id", "provider", "external_id", name="accounts_user_provider_external_id"),
         Index(
             "accounts_user_provider_external_id_hash_uq",
@@ -728,6 +731,7 @@ class AccountBalance(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(DateTime, nullable=False, index=True)  # Date of the balance snapshot
+    account_currency = Column(String(3), nullable=True)
     balance_in_account_currency = Column(Numeric(15, 2), nullable=False)  # Balance in account's currency
     balance_in_functional_currency = Column(Numeric(15, 2), nullable=False)  # Balance converted to functional currency
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -1199,6 +1203,7 @@ class Holding(Base):
     as_of_date = Column(Date, nullable=True)
     source = Column(String(20), nullable=False)
     last_price_error = Column(Text, nullable=True)
+    archived_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1692,9 +1697,10 @@ class PriceSnapshot(Base):
     date = Column(Date, nullable=False)
     close = Column(Numeric(28, 8), nullable=False)
     provider = Column(String(20), nullable=False)
+    source_label = Column(String(64), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("symbol", "date", name="price_snapshots_symbol_date_uq"),
+        UniqueConstraint("symbol", "date", "provider", name="price_snapshots_symbol_date_uq"),
     )
 
 
@@ -1708,6 +1714,10 @@ class HoldingValuation(Base):
     price = Column(Numeric(28, 8), nullable=False)
     value_user_currency = Column(Numeric(15, 2), nullable=False)
     is_stale = Column(Boolean, default=False)
+    value_currency = Column(String(3), nullable=True)
+    quote_currency = Column(String(3), nullable=True)
+    quote_date = Column(Date, nullable=True)
+    quote_source = Column(String(64), nullable=True)
 
     holding = relationship("Holding", back_populates="valuations")
 

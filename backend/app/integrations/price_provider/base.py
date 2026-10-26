@@ -19,6 +19,7 @@ class SymbolMatch:
     name: str
     exchange: str | None
     currency: str | None
+    instrument_type: str | None = None
 
 
 class PriceProvider(Protocol):
@@ -30,3 +31,4 @@ class PriceProvider(Protocol):
         self, symbol: str, start: date, end: date
     ) -> list[PriceQuote]: ...
     def search_symbols(self, query: str) -> list[SymbolMatch]: ...
+    def resolve_symbol(self, symbol: str) -> SymbolMatch: ...
