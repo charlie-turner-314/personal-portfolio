@@ -11,9 +11,17 @@ CREATE TEMP TABLE household_memberships(member_user_id text,owner_user_id text);
 CREATE TEMP TABLE household_account_shares(account_id text,member_user_id text,granted_by_user_id text);
 CREATE TEMP TABLE account_balances(account_id text,date timestamp,balance_in_functional_currency numeric);
 INSERT INTO accounts VALUES ('shared','owner','checking',true,NULL),('own','owner','savings',true,NULL),('missing','owner','checking',true,NULL),('private','other','checking',true,NULL),('loan','owner','mortgage',true,NULL);
+ALTER TABLE accounts ADD COLUMN currency text DEFAULT 'AUD';
+ALTER TABLE accounts ADD COLUMN name text;
+ALTER TABLE accounts ADD COLUMN institution text;
+UPDATE accounts SET name=id;
+CREATE TEMP TABLE users(id text,functional_currency text);
+INSERT INTO users VALUES('owner','AUD'),('other','AUD');
 INSERT INTO people VALUES ('self','owner','self','owner'),('partner','owner','member','other');
 INSERT INTO account_ownership_allocations VALUES ('shared','self','1900-01-01',0.5),('shared','partner','1900-01-01',0.5);
 INSERT INTO account_balances VALUES ('shared','2026-09-30',1000),('shared','2026-10-30',1400),('own','2026-09-30',500),('own','2026-10-30',700),('missing','2026-09-29',900),('missing','2026-10-30',1000),('private','2026-09-30',100000),('private','2026-10-30',200000);
+ALTER TABLE account_balances ADD COLUMN balance_in_account_currency numeric;
+UPDATE account_balances SET balance_in_account_currency=balance_in_functional_currency;
 `;
 vi.mock("@/lib/db", async () => {
   const { drizzle } = await import("drizzle-orm/pg-proxy");
@@ -22,7 +30,8 @@ vi.mock("@/lib/db", async () => {
       const value = params[Number(n) - 1];
       return value === null ? "NULL" : typeof value === "boolean" ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
     });
-    const wrapped = `SELECT COALESCE(json_agg(json_build_array(n,missing,change)),'[]') FROM (${literal}) rows(n,missing,change);`;
+    const fields=query.includes('order by "accounts"."name"')?"id,name,institution,account_type,currency,is_active":"n,missing,change";
+    const wrapped = `SELECT COALESCE(json_agg(json_build_array(${fields})),'[]') FROM (${literal}) rows(${fields});`;
     const output = execFileSync("docker", ["exec","-i",process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER!,"psql","-U","postgres","-d","postgres","-qAt","-v","ON_ERROR_STOP=1"],{input:fixture+wrapped+"ROLLBACK;",encoding:"utf8"});
     return { rows: JSON.parse(output.trim()) };
   }) };
@@ -35,7 +44,8 @@ import { getRecordedCashChange } from "./dashboard";
 const from = new Date("2026-10-01"), to = new Date("2026-10-30T23:59:59Z");
 describe.skipIf(!container)("recorded cash boundary balances",()=>{
   it("uses dated ownership and exact cash snapshots, excluding private accounts and debt",async()=>{
-    expect(await getRecordedCashChange(from,to,["shared","own","private","loan"])).toEqual({recordedChange:400,missingAccounts:0});
+    await expect(getRecordedCashChange(from,to,["shared","own","private","loan"])).rejects.toThrow("no longer available");
+    expect(await getRecordedCashChange(from,to,["shared","own","loan"])).toEqual({recordedChange:400,missingAccounts:0});
     expect(await getRecordedCashChange(from,to,["shared"],"all")).toEqual({recordedChange:400,missingAccounts:0});
   },20_000);
   it("does not substitute an older snapshot or zero for a missing opening balance",async()=>{

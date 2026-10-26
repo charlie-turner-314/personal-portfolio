@@ -47,7 +47,8 @@ export const fontStack =
  * Amounts arrive as strings (Decimal is not JSON-native); an unparseable value
  * is passed through rather than rendered as "NaN".
  */
-export function fmtMoney(value: string, currency: string): string {
+export function fmtMoney(value: string | null, currency: string): string {
+  if(value===null)return "Unavailable";
   const n = Number(value);
   if (value.trim() === "" || Number.isNaN(n)) return `${value} ${currency}`;
   return `${n.toLocaleString("en-IE", {

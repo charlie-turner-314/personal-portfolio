@@ -1,22 +1,23 @@
 "use server";
+import { requireReportingCoverage } from "@/lib/reporting/coverage";
 
+import { fetchFinancialActivity } from "@/lib/reporting/activity-query";
+import { convertReportingAmount, reportingCurrencyForUser, snapshotBalanceInReportingCurrency } from "@/lib/household/reporting-currency";
 import { reconcileCashMovement } from "@/lib/dashboard/cash-flow";
 
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, transactionLinks, superAccounts } from "@/lib/db/schema";
+import { accounts, transactions, users, properties, vehicles, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { getCachedUserAccounts } from "@/lib/data/cached";
-import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
+import { eq, sql, and, desc, inArray } from "drizzle-orm";
 import { summarizeActivity, activitySankey, cashFlowMetrics } from "@/lib/dashboard/activity";
 import {
   buildIncomeExpenseBuckets,
   resolveIncomeExpenseGrouping,
   type IncomeExpenseGrouping,
 } from "@/lib/dashboard/income-expense-buckets";
-import { ownershipShareSql, propertyOwnershipShareSql } from "@/lib/people/ownership-sql";
-import { getOwnersForEntities } from "@/lib/people/queries";
-import { attributeAmount } from "@/lib/people/attribution";
+import { ownershipShareSql, propertyOwnershipShareSql, vehicleOwnershipShareSql } from "@/lib/people/ownership-sql";
 import { getPortfolio } from "@/lib/api/investments";
 import { getUpcomingPlannedExpenses } from "@/lib/actions/planned-expenses";
 import {
@@ -43,9 +44,6 @@ function normalizeAccountIds(accountIds?: string[]): string[] | undefined {
   const uniqueIds = Array.from(new Set(accountIds.map((id) => id.trim()).filter(Boolean)));
   return uniqueIds.length > 0 ? uniqueIds : undefined;
 }
-
-const t2AccountId = sql.raw("t2.account_id");
-const t2BookedAt = sql.raw("t2.booked_at");
 
 async function getLatestTransactionDate(userId: string, accountIds?: string[]): Promise<Date> {
   const normalizedAccountIds = normalizeAccountIds(accountIds);
@@ -105,6 +103,7 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return { total: 0, currency: "EUR" };
 
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
   const ownershipScope = personId === "all" ? undefined : personId ?? {
     userId: session.user.id, householdPersonId: session.householdPersonId,
   };
@@ -119,23 +118,25 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
   // New manual accounts may not have daily snapshots yet. Their current
   // functional balance is authoritative until a snapshot is available.
   const balance = sql`COALESCE((
-    SELECT ab.balance_in_functional_currency FROM account_balances ab
+    SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab
     WHERE ab.account_id = ${accounts.id} AND ab.date::date <= CURRENT_DATE
     ORDER BY ab.date DESC LIMIT 1
-  ), ${accounts.functionalBalance}, 0)`;
+  ), ${convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrencyForUser(session.user.id),sql`CURRENT_DATE`)})`;
   const share = ownershipShareSql(ownershipScope, accounts.id, sql`CURRENT_DATE`);
   const [result, currency] = await Promise.all([
-    db.select({ total: sql<string>`COALESCE(SUM(${balance} * ${share}), 0)` })
+    db.select({ total: sql<string | null>`CASE WHEN count(*) FILTER(WHERE (${share})>0 AND (${balance}) IS NULL)>0 THEN NULL
+      ELSE COALESCE(SUM(CASE WHEN (${share})=0 THEN 0 ELSE (${balance})*(${share}) END),0) END` })
       .from(accounts).where(and(...conditions)),
     getUserCurrency(session.user.id),
   ]);
-  return { total: parseFloat(result[0]?.total || "0"), currency };
+  return { total: result[0]?.total == null ? null : Number(result[0].total), currency };
 }
 
 export async function getBalanceHistory(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return [];
 
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
   const ownershipScope = personId === "all" ? undefined : personId ?? {
     userId: session.user.id, householdPersonId: session.householdPersonId,
   };
@@ -152,28 +153,31 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   // Carry each account's latest known balance forward independently, so an
   // account without a snapshot on a particular day does not disappear. Never
   // mix whole-portfolio net-worth snapshots into this cash-only series.
+  const currentBalance = convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrencyForUser(session.user.id),day);
+  const value = sql`coalesce(cash_balance.value,CASE WHEN ${day}::date=CURRENT_DATE THEN ${currentBalance} END)`;
   const result = await db.select({
     date: sql<string>`TO_CHAR(${day}, 'YYYY-MM-DD')`,
-    value: sql<string>`SUM(COALESCE(cash_balance.value,
-      CASE WHEN ${day}::date = CURRENT_DATE THEN ${accounts.functionalBalance} END, 0) * ${share})`,
+    value: sql<string | null>`CASE WHEN count(*) FILTER(WHERE (${share})>0 AND (${value}) IS NULL)>0 THEN NULL
+      ELSE sum(CASE WHEN (${share})=0 THEN 0 ELSE (${value})*(${share}) END) END`,
   }).from(accounts)
     .innerJoin(sql`generate_series(${startDate.toISOString()}::date,
       LEAST(${endDate.toISOString()}::date, CURRENT_DATE), interval '1 day') AS cash_days(day)`, sql`true`)
     .leftJoin(sql`LATERAL (
-      SELECT ab.balance_in_functional_currency AS value FROM account_balances ab
+      SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} AS value FROM account_balances ab
       WHERE ab.account_id = ${accounts.id} AND ab.date::date <= ${day}::date
       ORDER BY ab.date DESC LIMIT 1
     ) AS cash_balance`, sql`true`)
-    .where(and(...conditions, sql`(cash_balance.value IS NOT NULL OR ${day}::date = CURRENT_DATE)`))
+    .where(and(...conditions))
     .groupBy(day).orderBy(day);
 
-  return result.map(row => ({ date: row.date, value: parseFloat(row.value || "0") }));
+  return result.map(row => ({ date: row.date, value: row.value == null ? null : Number(row.value) }));
 }
 
 /** Exact recorded boundary snapshots only; missing data must never become zero. */
 export async function getRecordedCashChange(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return { recordedChange: null, missingAccounts: 0 };
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
   const scope = personId === "all" ? undefined : personId ?? { userId: session.user.id, householdPersonId: session.householdPersonId };
   const from = startDate.toISOString().slice(0, 10), to = endDate.toISOString().slice(0, 10);
   const openingShare = ownershipShareSql(scope, accounts.id, sql`${from}::date - 1`);
@@ -187,9 +191,9 @@ export async function getRecordedCashChange(startDate: Date, endDate: Date, acco
     missing: sql<number>`count(*) FILTER (WHERE (${openingShare} > 0 AND boundary.opening IS NULL) OR (${closingShare} > 0 AND boundary.closing IS NULL))::int`,
     change: sql<string>`sum(COALESCE(boundary.closing,0) * ${closingShare} - COALESCE(boundary.opening,0) * ${openingShare})`,
   }).from(accounts).leftJoin(sql`LATERAL (
-    SELECT (SELECT balance_in_functional_currency FROM account_balances ab WHERE ab.account_id = ${accounts.id}
+    SELECT (SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab WHERE ab.account_id = ${accounts.id}
       AND ab.date::date = ${from}::date - 1 ORDER BY ab.date DESC LIMIT 1) opening,
-    (SELECT balance_in_functional_currency FROM account_balances ab WHERE ab.account_id = ${accounts.id}
+    (SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab WHERE ab.account_id = ${accounts.id}
       AND ab.date::date = ${to}::date ORDER BY ab.date DESC LIMIT 1) closing
   ) boundary`, sql`true`).where(and(...conditions));
   return { recordedChange: !row?.count || row.missing ? null : Number(row.change), missingAccounts: row?.missing ?? 0 };
@@ -197,77 +201,10 @@ export async function getRecordedCashChange(startDate: Date, endDate: Date, acco
 
 // All activity widgets share classification and linked-transaction semantics.
 // A LEFT JOIN is essential: categorization enriches activity, never gates it.
-async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
-  const session = await getAuthenticatedSession();
-  if (!session?.user?.id) return summarizeActivity([]);
-  const ownershipScope = personId === "all" ? undefined : personId ?? {
-    userId: session.user.id, householdPersonId: session.householdPersonId,
-  };
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-  const conditions = [
-    accountAccess(transactions.accountId, session.user.id),
-    eq(transactions.includeInAnalytics, true),
-    isNull(transactions.internalTransferId),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-  if (normalizedAccountIds?.length) conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  const userCurrency = sql`COALESCE((SELECT functional_currency FROM ${users} WHERE id = ${session.user.id}), 'EUR')`;
-  const amountInCurrency = sql`COALESCE(${transactions.functionalAmount}, CASE WHEN ${transactions.currency} = ${userCurrency} THEN ${transactions.amount} END)`;
-  const linkedAmountInCurrency = sql`COALESCE(t2.functional_amount, CASE WHEN t2.currency = ${userCurrency} THEN t2.amount END)`;
-  const rows = await db.select({
-    date: sql<string>`DATE(${transactions.bookedAt})`,
-    cashFlowKind: sql<string | null>`COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind})`,
-    cashFlowParts: transactions.cashFlowParts,
-    nativeAmount: transactions.amount,
-    transferGroupId: sql<string | null>`CASE WHEN NOT EXISTS (
-      SELECT 1 FROM ${transactionLinks} transfer_peer
-      JOIN ${transactions} peer ON peer.id = transfer_peer.transaction_id
-      LEFT JOIN ${categories} peer_category ON peer_category.id = COALESCE(peer.category_id, peer.category_system_id)
-      WHERE transfer_peer.group_id = ${transactionLinks.groupId}
-        AND ${accountAccess(sql.raw("peer.account_id"), session.user.id)}
-        AND (peer_category.category_type IS DISTINCT FROM 'transfer'
-          OR peer.cash_flow_parts IS NOT NULL
-          OR COALESCE(peer.cash_flow_kind, peer_category.cash_flow_kind) IS NOT NULL)
-    ) THEN ${transactionLinks.groupId} END`,
-    transferAmount: sql<string | null>`${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}`,
-    categoryId: categories.id,
-    categoryName: categories.name,
-    categoryType: categories.categoryType,
-    icon: categories.icon,
-    color: categories.color,
-    // A group containing an explicit allocation is reported per leg, so a
-    // linked ordinary expense is neither swallowed nor counted twice.
-    amount: sql<string | null>`CASE
-      WHEN ${transactions.cashFlowParts} IS NOT NULL OR COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind}) IN ('investment', 'loan_principal')
-        OR EXISTS (
-          SELECT 1 FROM ${transactionLinks} allocation_link
-          JOIN ${transactions} allocation_peer ON allocation_peer.id = allocation_link.transaction_id
-          LEFT JOIN ${categories} allocation_category ON allocation_category.id = COALESCE(allocation_peer.category_id, allocation_peer.category_system_id)
-          WHERE allocation_link.group_id = ${transactionLinks.groupId}
-            AND ${accountAccess(sql.raw("allocation_peer.account_id"), session.user.id)}
-            AND (allocation_peer.cash_flow_parts IS NOT NULL OR COALESCE(allocation_peer.cash_flow_kind, allocation_category.cash_flow_kind) IN ('investment', 'loan_principal'))
-        )
-        THEN ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
-      WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-        (
-          SELECT CASE WHEN COUNT(*) FILTER (WHERE ${linkedAmountInCurrency} IS NULL) > 0 THEN NULL
-            ELSE SUM(${linkedAmountInCurrency} * ${ownershipShareSql(ownershipScope, t2AccountId, t2BookedAt)}) END
-          FROM ${transactions} t2
-          JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-          WHERE tl2.group_id = ${transactionLinks.groupId}
-            AND ${accountAccess(t2AccountId, session.user.id)}
-            AND t2.include_in_analytics = true
-            AND t2.internal_transfer_id IS NULL
-        )
-      WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-      ELSE ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
-    END`,
-  }).from(transactions)
-    .leftJoin(categories, sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`)
-    .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))
-    .where(and(...conditions));
-  return summarizeActivity(rows);
+async function getActivitySummary(startDate:Date,endDate:Date,accountIds?:string[],personId?:string) {
+  const session=await getAuthenticatedSession();
+  if(!session?.user?.id) return summarizeActivity([]);
+  return fetchFinancialActivity(session.user.id,{startDate,endDate,accountIds,personId});
 }
 
 export async function getPeriodSpending(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
@@ -318,6 +255,13 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
     return emptyNetWorthOverview();
   }
 
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
+  const ownershipScope = personId === "all" ? undefined : personId ?? {
+    userId: session.user.id, householdPersonId: session.householdPersonId,
+  };
+
+  const reportingCurrency = reportingCurrencyForUser(session.user.id);
+
   const [userAccounts, userProperties, userVehicles, currency, portfolio] = await Promise.all([
     db
       .select({
@@ -325,12 +269,14 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         name: accounts.name,
         accountType: accounts.accountType,
         institution: accounts.institution,
-        functionalBalance: accounts.functionalBalance,
-        startingBalance: accounts.startingBalance,
+        functionalBalance: convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrency,sql`CURRENT_DATE`),
+        hasHoldings: sql<boolean>`EXISTS(SELECT 1 FROM holdings WHERE holdings.account_id=accounts.id)`,
+        startingBalance: sql<string | null>`CASE WHEN NOT EXISTS(SELECT 1 FROM transactions balance_record WHERE balance_record.account_id=accounts.id)
+          THEN ${convertReportingAmount(sql`accounts.starting_balance`,sql`accounts.currency`,reportingCurrency,sql`CURRENT_DATE`)} ELSE NULL END`,
         currency: accounts.currency,
         superAccountId: superAccounts.id,
         includeSuperInNetWorth: superAccounts.includeInNetWorth,
-        ownershipShare: ownershipShareSql(personId, accounts.id, sql`CURRENT_DATE`),
+        ownershipShare: ownershipShareSql(ownershipScope, accounts.id, sql`CURRENT_DATE`),
       })
       .from(accounts)
       .leftJoin(
@@ -347,9 +293,9 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         name: properties.name,
         propertyType: properties.propertyType,
         address: properties.address,
-        currentValue: properties.currentValue,
+        currentValue: convertReportingAmount(sql`properties.current_value`,sql`coalesce(properties.currency,${reportingCurrencyForUser(sql`properties.user_id`)})`,reportingCurrency,sql`CURRENT_DATE`),
         currency: properties.currency,
-        ownershipShare: propertyOwnershipShareSql(personId, properties.id),
+        ownershipShare: propertyOwnershipShareSql(ownershipScope, properties.id),
       })
       .from(properties)
       .where(and(propertyAccess(properties.id, session.user.id), eq(properties.isActive, true))),
@@ -361,7 +307,8 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         make: vehicles.make,
         model: vehicles.model,
         year: vehicles.year,
-        currentValue: vehicles.currentValue,
+        currentValue: convertReportingAmount(sql`vehicles.current_value`,sql`coalesce(vehicles.currency,${reportingCurrencyForUser(sql`vehicles.user_id`)})`,reportingCurrency,sql`CURRENT_DATE`),
+        ownershipShare: vehicleOwnershipShareSql(ownershipScope, vehicles.id),
         currency: vehicles.currency,
       })
       .from(vehicles)
@@ -370,10 +317,6 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
     getPortfolio().catch(() => null),
   ]);
 
-  const [propertyOwners, vehicleOwners] = personId ? await Promise.all([
-    getOwnersForEntities("property", userProperties.map((property) => property.id)),
-    getOwnersForEntities("vehicle", userVehicles.map((vehicle) => vehicle.id)),
-  ]) : [new Map(), new Map()];
   const selectedIds = normalizeAccountIds(accountIds);
   const portfolioById = new Map((portfolio?.accounts || []).map((account) => [account.id, account]));
   const entries: NetWorthEntry[] = [
@@ -384,7 +327,12 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         name: account.name,
         institution: account.institution,
         // Portfolio holdings replace, rather than duplicate, the same account balance.
-        value: Number(portfolioById.get(account.id)?.value ?? account.functionalBalance ?? 0) * Number(account.ownershipShare),
+        value: Number(account.ownershipShare) === 0 ? 0 : (() => {
+          const investment = portfolioById.get(account.id);
+          const recorded = investment ? portfolio?.currency === currency ? investment.value : null
+            : account.hasHoldings ? null : account.functionalBalance ?? account.startingBalance;
+          return recorded == null ? null : Number(recorded)*Number(account.ownershipShare);
+        })(),
         currency,
         source: "account" as const,
         accountType: account.accountType,
@@ -395,26 +343,26 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
       id: property.id,
       name: property.name,
       institution: property.address,
-      value: property.ownershipShare === undefined
-        ? attributeAmount(Number(property.currentValue || 0), propertyOwners.get(property.id) || [], personId || null)
-        : Number(property.currentValue || 0) * Number(property.ownershipShare),
-      currency: property.currency || currency,
+      value: Number(property.ownershipShare) === 0 ? 0 : property.currentValue == null ? null : Number(property.currentValue)*Number(property.ownershipShare),
+      currency,
       source: "property" as const,
     }))),
     ...(selectedIds ? [] : userVehicles.map((vehicle) => ({
       id: vehicle.id,
       name: vehicle.name,
       institution: [vehicle.make, vehicle.model].filter(Boolean).join(" ") || null,
-      value: attributeAmount(Number(vehicle.currentValue || 0), vehicleOwners.get(vehicle.id) || [], personId || null),
-      currency: vehicle.currency || currency,
+      value: Number(vehicle.ownershipShare) === 0 ? 0 : vehicle.currentValue == null ? null : Number(vehicle.currentValue)*Number(vehicle.ownershipShare),
+      currency,
       source: "vehicle" as const,
     }))),
   ];
 
   return {
     ...calculateNetWorthOverview(entries, currency),
-    scope: personId ? "Selected person’s share of visible accounts" : "Your visible finances",
+    scope: personId === "all" ? "Household view · permitted accounts counted once"
+      : personId ? "Selected person’s share of permitted records" : "My view · economic share of permitted records",
     accountFiltered: Boolean(selectedIds),
+    coveredAccounts: userAccounts.filter(account=>!selectedIds || selectedIds.includes(account.id)).map(account=>({id:account.id,name:account.name})),
   };
 }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { useState, useCallback, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { RiLoader4Line } from "@remixicon/react";
@@ -270,9 +271,10 @@ export function TransactionsClient({
     setIsAddDialogOpen(true);
   }, []);
 
-  const handleExportCSV = useCallback(() => {
-    exportTransactionsToCSV(transactions);
-  }, [transactions]);
+  const handleExportCSV = useCallback(async () => {
+    try {await exportTransactionsToCSV(transactions,undefined,initialQueryState.personId);}
+    catch {toast.error("Some records are unavailable. Refresh before exporting.");}
+  }, [transactions,initialQueryState.personId]);
 
   const handleImportCsv = useCallback(() => {
     router.push("/transactions/import");

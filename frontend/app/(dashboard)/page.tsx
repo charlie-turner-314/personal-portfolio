@@ -1,3 +1,4 @@
+import { hasUnavailableAccountSelection,ReportingSelectionNotice } from "@/components/reporting/selection-notice";
 import { cache, Suspense } from "react";
 import { formatCurrency } from "@/lib/utils";
 import { Header } from "@/components/layout/header";
@@ -36,7 +37,7 @@ async function LiabilitiesKpi({ accountIds, personId }: { accountIds?: string[];
   const data = await getDashboardAssets(accountIds, personId);
   return <KpiSparkCard
     title="Total Liabilities"
-    value={-Math.abs(data.totalLiabilities)}
+    value={data.totalLiabilities === null ? null : -Math.abs(data.totalLiabilities)}
     currency={data.currency}
     subtitle="Balance owed · included in net worth"
     sparkData={[]}
@@ -104,11 +105,16 @@ async function DashboardContent({
 
   filters.horizon = horizonValue;
 
-  // Fetch data in parallel
-  const [data, accounts] = await Promise.all([
-    getDashboardData(filters),
-    getUserAccounts(),
-  ]);
+  const accounts=await getUserAccounts();
+  if(hasUnavailableAccountSelection(accounts,accountIds)) {
+    const clear=new URLSearchParams();
+    if(personId)clear.set("person",personId);
+    if(dateFromParam)clear.set("from",dateFromParam);
+    if(dateToParam)clear.set("to",dateToParam);
+    if(horizonValue)clear.set("horizon",String(horizonValue));
+    return <ReportingSelectionNotice clearHref={`/?${clear}`} />;
+  }
+  const data=await getDashboardData(filters);
 
   const accountSubtitle = !accountIds?.length
     ? "Bank and cash accounts · net of overdrafts"
@@ -144,7 +150,7 @@ async function DashboardContent({
           />
           </div>
           <Suspense fallback={<CardLoading label="Loading liabilities" height="h-32" />}>
-            <LiabilitiesKpi accountIds={accountIds} personId={personId === "all" ? undefined : personId} />
+            <LiabilitiesKpi accountIds={accountIds} personId={personId} />
           </Suspense>
           <div data-walkthrough="walkthrough-spending">
           <KpiSparkCard
@@ -227,7 +233,7 @@ async function DashboardContent({
             <NetWorthTotals />
           </Suspense>
           <Suspense fallback={<CardLoading label="Loading assets overview" height="h-64" />}>
-            <AssetsOverviewSection accountIds={accountIds} personId={personId === "all" ? undefined : personId} />
+            <AssetsOverviewSection accountIds={accountIds} personId={personId} />
           </Suspense>
         </div>
 

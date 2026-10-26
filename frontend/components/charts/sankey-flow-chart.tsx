@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Sankey, Tooltip, Rectangle, ResponsiveContainer } from "recharts";
-import { useRouter } from "next/navigation";
+import { useRouter,useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
@@ -265,12 +265,14 @@ export function SankeyFlowChart({
   horizon,
 }: SankeyFlowChartProps) {
   const router = useRouter();
+  const personId=useSearchParams().get("person")??undefined;
   const [selectedCategory, setSelectedCategory] = React.useState<SelectedCategory | null>(null);
 
   const navigateToTransactions = React.useCallback(
     (categoryId?: string | null) => {
       if (!categoryId) return;
       const query = buildTransactionsDrilldownQuery({
+        personId,
         categoryId,
         accountIds,
         dateFrom,
@@ -279,7 +281,7 @@ export function SankeyFlowChart({
       });
       router.push(`/transactions?${query}`);
     },
-    [accountIds, dateFrom, dateTo, horizon, router]
+    [accountIds, dateFrom, dateTo, horizon, personId, router]
   );
 
   const selectedNode = selectedCategory?.key
@@ -357,7 +359,7 @@ export function SankeyFlowChart({
         </CardHeader>
         <CardContent className="flex h-[400px] items-center justify-center">
           <p className="text-muted-foreground text-sm">
-            No included income or expenses in this period
+            No included financial movements in this period
           </p>
         </CardContent>
       </Card>
@@ -371,7 +373,7 @@ export function SankeyFlowChart({
         {subtitle && (
           <p className="text-xs text-muted-foreground">{subtitle}</p>
         )}
-        <p className="text-xs text-muted-foreground">Connections distribute totals proportionally; they do not trace deposits to payments.</p>
+        <p className="text-xs text-muted-foreground">Connections distribute included movements proportionally; they do not trace deposits to payments. Calculated net inflow or outflow is the difference between these movements, not a recorded balance change.</p>
         {selectedNode && selectedTotal !== null && (
           <p className="text-xs text-muted-foreground mt-1">
             <span className="font-medium text-foreground">

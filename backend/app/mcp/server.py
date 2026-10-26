@@ -539,26 +539,22 @@ def get_spending_by_category(
     include_uncategorized: bool = False,
     user_id: str | None = None,
     person_ids: list[str] | None = None,
+    scope: str = "my",
 ) -> list[dict]:
-    """
-    Get spending breakdown by category.
+    """Consumption by stable category, including refunds. Investments and loan principal are capital, not spending.
 
-    Args:
-        from_date: Start date in ISO format YYYY-MM-DD (optional)
-        to_date: End date in ISO format YYYY-MM-DD (optional)
-        account_id: Filter by account ID (optional)
-        include_uncategorized: If True, include an "Uncategorized" bucket for
-            transactions with no category assigned (default: False)
-        user_id: The user's ID (optional, defaults to configured user)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions from accounts owned by any of those people.
-
-    Returns:
-        List of categories with total spending amount, transaction count, and
-        merchant_count
+    scope="my" uses dated economic shares; scope="household" counts each
+    permitted record once. person_ids selects summed dated shares instead.
+    Neither household membership nor ownership grants private account access.
     """
     return analytics.get_spending_by_category(
-        get_mcp_user_id(user_id), from_date, to_date, account_id, include_uncategorized, person_ids
+        get_mcp_user_id(user_id),
+        from_date,
+        to_date,
+        account_id,
+        include_uncategorized,
+        person_ids,
+        scope,
     )
 
 
@@ -569,23 +565,16 @@ def get_income_by_category(
     account_id: str | None = None,
     user_id: str | None = None,
     person_ids: list[str] | None = None,
+    scope: str = "my",
 ) -> list[dict]:
-    """
-    Get income breakdown by category.
+    """Income by stable category, excluding ownership and boundary transfers.
 
-    Args:
-        from_date: Start date in ISO format YYYY-MM-DD (optional)
-        to_date: End date in ISO format YYYY-MM-DD (optional)
-        account_id: Filter by account ID (optional)
-        user_id: The user's ID (optional, defaults to configured user)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions from accounts owned by any of those people.
-
-    Returns:
-        List of categories with total income amount and transaction count
+    scope="my" uses dated economic shares; scope="household" counts each
+    permitted record once. person_ids selects summed dated shares instead.
+    Neither household membership nor ownership grants private account access.
     """
     return analytics.get_income_by_category(
-        get_mcp_user_id(user_id), from_date, to_date, account_id, person_ids
+        get_mcp_user_id(user_id), from_date, to_date, account_id, person_ids, scope
     )
 
 
@@ -595,21 +584,17 @@ def get_monthly_cashflow(
     to_date: str | None = None,
     user_id: str | None = None,
     person_ids: list[str] | None = None,
+    scope: str = "my",
 ) -> list[dict]:
-    """
-    Get monthly income vs expenses breakdown.
+    """Monthly income minus consumption (saving before capital and transfers). Unknown conversion is unavailable.
 
-    Args:
-        from_date: Start date in ISO format YYYY-MM-DD (optional)
-        to_date: End date in ISO format YYYY-MM-DD (optional)
-        user_id: The user's ID (optional, defaults to configured user)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions from accounts owned by any of those people.
-
-    Returns:
-        List of monthly data with income, expenses, and net for each month
+    scope="my" uses dated economic shares; scope="household" counts each
+    permitted record once. person_ids selects summed dated shares instead.
+    Neither household membership nor ownership grants private account access.
     """
-    return analytics.get_monthly_cashflow(get_mcp_user_id(user_id), from_date, to_date, person_ids)
+    return analytics.get_monthly_cashflow(
+        get_mcp_user_id(user_id), from_date, to_date, person_ids, scope
+    )
 
 
 @mcp.tool
@@ -618,24 +603,17 @@ def get_financial_summary(
     to_date: str | None = None,
     user_id: str | None = None,
     person_ids: list[str] | None = None,
+    scope: str = "my",
 ) -> dict:
-    """
-    Get a financial summary with totals, account balances, and net worth.
+    """Separate income/consumption, capital, boundary movements, independent cash reconciliation and current net worth. Account coverage is explicit.
 
-    Args:
-        from_date: Start date in ISO format YYYY-MM-DD (optional)
-        to_date: End date in ISO format YYYY-MM-DD (optional)
-        user_id: The user's ID (optional, defaults to configured user)
-        person_ids: Optional list of person UUIDs. When provided, only includes
-            transactions and balances from accounts owned by any of those people.
-            When exactly one person_id is given, account balances are
-            share-weighted to that person's ownership fraction.
-
-    Returns:
-        Summary with total income, expenses, net cashflow, savings rate,
-        account balances, gross assets, total liabilities, and net worth.
+    scope="my" uses dated economic shares; scope="household" counts each
+    permitted record once. person_ids selects summed dated shares instead.
+    Neither household membership nor ownership grants private account access.
     """
-    return analytics.get_financial_summary(get_mcp_user_id(user_id), from_date, to_date, person_ids)
+    return analytics.get_financial_summary(
+        get_mcp_user_id(user_id), from_date, to_date, person_ids, scope
+    )
 
 
 @mcp.tool
@@ -646,25 +624,24 @@ def get_top_merchants(
     category_id: str | None = None,
     uncategorized: bool = False,
     user_id: str | None = None,
+    person_ids: list[str] | None = None,
+    scope: str = "my",
 ) -> list[dict]:
-    """
-    Get top merchants by total spending.
+    """Permitted consumption by merchant, including refunds; unknown conversion remains unavailable.
 
-    Args:
-        from_date: Start date in ISO format YYYY-MM-DD (optional)
-        to_date: End date in ISO format YYYY-MM-DD (optional)
-        limit: Max number of merchants (default: 10, max: 50)
-        category_id: Filter to transactions in this category (optional).
-            Mutually exclusive with uncategorized.
-        uncategorized: If True, return only transactions with no category.
-            Mutually exclusive with category_id.
-        user_id: The user's ID (optional, defaults to configured user)
-
-    Returns:
-        List of merchants with total spending and transaction count
+    scope="my" uses dated economic shares; scope="household" counts each
+    permitted record once. person_ids selects summed dated shares instead.
+    Neither household membership nor ownership grants private account access.
     """
     return analytics.get_top_merchants(
-        get_mcp_user_id(user_id), from_date, to_date, limit, category_id, uncategorized
+        get_mcp_user_id(user_id),
+        from_date,
+        to_date,
+        limit,
+        category_id,
+        uncategorized,
+        person_ids,
+        scope,
     )
 
 

@@ -10,6 +10,8 @@ export type ReportNewsletterProps = {
   reportName: string;
   generatedAt: string;
   periodLabel: string;
+  scopeLabel?:string;
+  coverageNote?:string;
   totalBalance: string | null;
   totalCurrency: string;
   accounts: BalanceItem[];
@@ -46,6 +48,8 @@ export default function ReportNewsletter({
   reportName,
   generatedAt,
   periodLabel,
+  scopeLabel,
+  coverageNote,
   totalBalance,
   totalCurrency,
   accounts,
@@ -74,7 +78,7 @@ export default function ReportNewsletter({
               border: `1px solid ${light.border}`,
             }}
           >
-            <ReportHeader reportName={reportName} periodLabel={periodLabel} generatedAt={generatedAt} />
+            <ReportHeader reportName={reportName} periodLabel={periodLabel} generatedAt={generatedAt} scopeLabel={scopeLabel} coverageNote={coverageNote} />
             <TotalBalance amount={totalBalance} currency={totalCurrency} />
             <BalancesSection accounts={accounts} />
             <TransactionsSection modeLabel={transactionsModeLabel} items={transactions} />

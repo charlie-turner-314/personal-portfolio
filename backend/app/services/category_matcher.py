@@ -14,6 +14,8 @@ import json
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 
+from app.services.financial_access import category_access, category_definition_for_actor, category_definitions_for_actor
+from collections import Counter
 from app.models import Category, Transaction
 from app.db_helpers import get_user_id
 from app.services.categorization_context import CategorizationContext, EmbeddingRanker, direction, clean, account_metadata
@@ -188,11 +190,7 @@ class CategoryMatcher:
         """
         instructions = []
         try:
-            categories = self.db.query(Category).filter(
-                Category.user_id == self.user_id,
-                Category.categorization_instructions.isnot(None),
-                Category.categorization_instructions != ""
-            ).all()
+            categories = self._load_categories().values()
 
             for cat in categories:
                 if cat.categorization_instructions and cat.categorization_instructions.strip():
@@ -213,28 +211,15 @@ class CategoryMatcher:
         """
         if self._category_cache is None:
             logger.debug(f"[CATEGORY_MATCHER] Loading categories for user_id: {self.user_id}")
-            categories = self.db.query(Category).filter(Category.user_id == self.user_id).all()
-            logger.debug(f"[CATEGORY_MATCHER] Found {len(categories)} categories for user_id: {self.user_id}")
-            
-            if not categories:
-                # Debug: Check if there are any categories in the database at all
-                all_categories_count = self.db.query(Category).count()
-                # Get distinct user_ids from categories table to see what's actually stored
-                distinct_user_ids = self.db.query(Category.user_id).distinct().all()
-                user_ids_list = [str(uid[0]) for uid in distinct_user_ids] if distinct_user_ids else []
-                
-                logger.warning(
-                    f"[CATEGORY_MATCHER] No categories found for user_id '{self.user_id}'. "
-                    f"Total categories in database: {all_categories_count}. "
-                    f"User IDs with categories: {user_ids_list}. "
-                    f"This may indicate categories weren't saved during onboarding or user_id mismatch."
-                )
-                # Return empty dict if no categories exist
-                self._category_cache = {}
-            else:
-                category_names = [cat.name for cat in categories]
-                logger.debug(f"[CATEGORY_MATCHER] Loaded categories: {', '.join(category_names)}")
-                self._category_cache = {cat.name.lower(): cat for cat in categories}
+            categories = category_definitions_for_actor(self.db, self.user_id, selectable_only=True)
+            counts = Counter(category.name.strip().casefold() for category in categories)
+            # Never overwrite a same-name definition in a name-keyed AI cache.
+            # Disambiguate prompt labels without modifying persistent definitions.
+            for category in categories:
+                if counts[category.name.strip().casefold()] > 1:
+                    category.name = (f"{category.name} [{category.category_type}; "
+                                     f"{category.cash_flow_kind or 'activity'}; {category.id}]")
+            self._category_cache = {category.name.lower(): category for category in categories}
         return self._category_cache
     
     def get_overridden_transactions(self, account_id: Optional[str] = None) -> List[Transaction]:

@@ -12,6 +12,8 @@ from typing import Optional, Literal
 from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import joinedload
 
+from app.services.transaction_projection import safe_description,safe_merchant,private_transaction_fields,transaction_description_sql,transaction_merchant_sql
+from app.services.financial_access import category_access
 from app.services.financial_access import account_access
 from app.mcp.dependencies import get_db, validate_uuid, validate_date
 from app.models import Transaction, Account, Category
@@ -146,7 +148,7 @@ def list_transactions(
         query = (
             db.query(Transaction)
             .filter(account_access(Transaction.account_id, user_id))
-            .options(joinedload(Transaction.account), joinedload(Transaction.category))
+            .options(joinedload(Transaction.account), joinedload(Transaction.category),joinedload(Transaction.category_system))
         )
         if account_uuid:
             query = query.filter(Transaction.account_id == account_uuid)
@@ -178,8 +180,8 @@ def list_transactions(
             search_term = f"%{search[:500]}%"
             query = query.filter(
                 or_(
-                    Transaction.description.ilike(search_term),
-                    Transaction.merchant.ilike(search_term),
+                    transaction_description_sql().ilike(search_term),
+                    transaction_merchant_sql().ilike(search_term),
                 )
             )
 
@@ -204,16 +206,16 @@ def list_transactions(
                     "account_name": txn.account.name if txn.account else None,
                     "amount": float(txn.amount),
                     "currency": txn.currency,
-                    "description": txn.description,
-                    "merchant": txn.merchant,
+                    "description": safe_description(txn),
+                    "merchant": safe_merchant(txn),
                     "category_id": str(txn.category_id) if txn.category_id else None,
                     "category_system_id": str(txn.category_system_id) if txn.category_system_id else None,
-                    "category_name": txn.category.name if txn.category else None,
+                    "category_name": (txn.category or txn.category_system).name if (txn.category or txn.category_system) else None,
                     "booked_at": txn.booked_at.isoformat() if txn.booked_at else None,
                     "pending": txn.pending,
                     "transaction_type": txn.transaction_type,
                     "include_in_analytics": txn.include_in_analytics,
-                    "recurring_transaction_id": str(txn.recurring_transaction_id) if txn.recurring_transaction_id else None,
+                    "recurring_transaction_id": private_transaction_fields(txn,user_id)["recurring_transaction_id"],
                 }
                 for txn in transactions_rows
             ],
@@ -245,7 +247,7 @@ def get_transaction(user_id: str, transaction_id: str) -> dict | None:
                 Transaction.id == txn_uuid,
                 account_access(Transaction.account_id, user_id)
             )
-            .options(joinedload(Transaction.account), joinedload(Transaction.category))
+            .options(joinedload(Transaction.account), joinedload(Transaction.category),joinedload(Transaction.category_system))
             .first()
         )
 
@@ -256,22 +258,22 @@ def get_transaction(user_id: str, transaction_id: str) -> dict | None:
             "id": str(txn.id),
             "account_id": str(txn.account_id),
             "account_name": txn.account.name if txn.account else None,
-            "external_id": txn.external_id,
+            "external_id": private_transaction_fields(txn,user_id)["external_id"],
             "transaction_type": txn.transaction_type,
             "amount": float(txn.amount),
             "currency": txn.currency,
             "functional_amount": float(txn.functional_amount) if txn.functional_amount else None,
-            "description": txn.description,
-            "merchant": txn.merchant,
+            "description": safe_description(txn),
+            "merchant": safe_merchant(txn),
             "category_id": str(txn.category_id) if txn.category_id else None,
             "category_system_id": str(txn.category_system_id) if txn.category_system_id else None,
-            "category_name": txn.category.name if txn.category else None,
+            "category_name": (txn.category or txn.category_system).name if (txn.category or txn.category_system) else None,
             "booked_at": txn.booked_at.isoformat() if txn.booked_at else None,
             "pending": txn.pending,
-            "categorization_instructions": txn.categorization_instructions,
-            "enrichment_data": txn.enrichment_data,
+            "categorization_instructions": private_transaction_fields(txn,user_id)["categorization_instructions"],
+            "enrichment_data": private_transaction_fields(txn,user_id)["enrichment_data"],
             "include_in_analytics": txn.include_in_analytics,
-            "recurring_transaction_id": str(txn.recurring_transaction_id) if txn.recurring_transaction_id else None,
+            "recurring_transaction_id": private_transaction_fields(txn,user_id)["recurring_transaction_id"],
             "created_at": txn.created_at.isoformat() if txn.created_at else None,
             "updated_at": txn.updated_at.isoformat() if txn.updated_at else None,
         }
@@ -291,8 +293,8 @@ def _build_search_filter(query_str: str, match_mode: MatchMode):
     if match_mode == "starts_with":
         pattern = f"{query_str}%"
         return or_(
-            Transaction.description.ilike(pattern),
-            Transaction.merchant.ilike(pattern),
+            transaction_description_sql().ilike(pattern),
+            transaction_merchant_sql().ilike(pattern),
         )
     elif match_mode == "word":
         # Word boundary matching - match whole words only
@@ -308,14 +310,14 @@ def _build_search_filter(query_str: str, match_mode: MatchMode):
             f"{query_str}.%",         # Word before period
             f"%.{query_str}",         # Word after period
         ]
-        description_conditions = [Transaction.description.ilike(p) for p in patterns]
-        merchant_conditions = [Transaction.merchant.ilike(p) for p in patterns]
+        description_conditions = [transaction_description_sql().ilike(p) for p in patterns]
+        merchant_conditions = [transaction_merchant_sql().ilike(p) for p in patterns]
         return or_(*description_conditions, *merchant_conditions)
     else:  # contains (default)
         pattern = f"%{query_str}%"
         return or_(
-            Transaction.description.ilike(pattern),
-            Transaction.merchant.ilike(pattern),
+            transaction_description_sql().ilike(pattern),
+            transaction_merchant_sql().ilike(pattern),
         )
 
 
@@ -441,10 +443,10 @@ def search_transactions(
                     "account_name": txn.account.name if txn.account else None,
                     "amount": float(txn.amount),
                     "currency": txn.currency,
-                    "description": txn.description,
-                    "merchant": txn.merchant,
+                    "description": safe_description(txn),
+                    "merchant": safe_merchant(txn),
                     "category_id": str(txn.category_id) if txn.category_id else None,
-                    "category_name": txn.category.name if txn.category else None,
+                    "category_name": (txn.category or txn.category_system).name if (txn.category or txn.category_system) else None,
                     "booked_at": txn.booked_at.isoformat() if txn.booked_at else None,
                 }
                 for txn in rows
@@ -604,10 +606,10 @@ def search_transactions_multi(
                     "account_name": txn.account.name if txn.account else None,
                     "amount": float(txn.amount),
                     "currency": txn.currency,
-                    "description": txn.description,
-                    "merchant": txn.merchant,
+                    "description": safe_description(txn),
+                    "merchant": safe_merchant(txn),
                     "category_id": str(txn.category_id) if txn.category_id else None,
-                    "category_name": txn.category.name if txn.category else None,
+                    "category_name": (txn.category or txn.category_system).name if (txn.category or txn.category_system) else None,
                     "booked_at": txn.booked_at.isoformat() if txn.booked_at else None,
                 }
                 for txn in transactions_rows
@@ -657,7 +659,7 @@ def update_transaction_category(
         # Verify category belongs to user
         category = db.query(Category).filter(
             Category.id == cat_uuid,
-            Category.user_id == user_id
+            category_access(user_id)
         ).first()
 
         if not category:
@@ -679,8 +681,8 @@ def update_transaction_category(
                 "id": str(txn.id),
                 "category_id": str(txn.category_id),
                 "category_name": category.name,
-                "description": txn.description,
-                "merchant": txn.merchant,
+                "description": safe_description(txn),
+                "merchant": safe_merchant(txn),
                 "amount": float(txn.amount),
             }
         }
@@ -724,7 +726,7 @@ def bulk_update_transaction_categories(
         # Verify category belongs to user
         category = db.query(Category).filter(
             Category.id == cat_uuid,
-            Category.user_id == user_id,
+            category_access(user_id),
         ).first()
 
         if not category:
@@ -745,7 +747,7 @@ def bulk_update_transaction_categories(
                 account_access(Transaction.account_id, user_id),
                 Transaction.id.in_(valid_uuids),
             )
-            .options(joinedload(Transaction.category))
+            .options(joinedload(Transaction.category),joinedload(Transaction.category_system))
             .all()
         ) if valid_uuids else []
 
@@ -763,8 +765,8 @@ def bulk_update_transaction_categories(
         sample_changes = [
             {
                 "id": str(t.id),
-                "description": t.description,
-                "merchant": t.merchant,
+                "description": safe_description(t),
+                "merchant": safe_merchant(t),
                 "amount": float(t.amount),
                 "previous_category_name": t.category.name if t.category else None,
             }

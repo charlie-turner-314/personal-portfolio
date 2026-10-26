@@ -6,11 +6,12 @@ import { type CategoryInput } from "@/lib/actions/categories";
 
 interface CategoryRowProps {
   category: CategoryInput;
+  readOnly?: boolean;
   onEdit: () => void;
   onDelete: () => void;
 }
 
-export function CategoryRow({ category, onEdit, onDelete }: CategoryRowProps) {
+export function CategoryRow({ category, onEdit, onDelete, readOnly = false }: CategoryRowProps) {
   const isSystem = category.isSystem ?? false;
 
   return (
@@ -39,7 +40,7 @@ export function CategoryRow({ category, onEdit, onDelete }: CategoryRowProps) {
       </div>
 
       {/* Action buttons */}
-      <div className="flex items-center gap-1 shrink-0">
+      {!readOnly && <div className="flex items-center gap-1 shrink-0">
         <Button
           type="button"
           variant="ghost"
@@ -57,12 +58,12 @@ export function CategoryRow({ category, onEdit, onDelete }: CategoryRowProps) {
             size="icon"
             className="h-8 w-8 text-destructive hover:text-destructive"
             onClick={onDelete}
-            title="Delete category"
+            title="Retire category"
           >
             <RiDeleteBinLine className="h-4 w-4" />
           </Button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

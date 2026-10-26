@@ -117,7 +117,7 @@ def list_accounts(
                 else:
                     full_balance = 0.0
                 row["attributed_balance"] = attribute_amount(
-                    full_balance, owners, person_ids[0]
+                    full_balance, owners, person_ids[0], db=db
                 )
             results.append(row)
 

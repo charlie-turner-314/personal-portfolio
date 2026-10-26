@@ -8,9 +8,9 @@ it("offers an explicit whole-account scope even for a single-person list", async
   const onChange = vi.fn();
   render(<PersonFilter value={[]} onChange={onChange} single personalDefault />);
   await screen.findByRole("button", { name: "Jessica" });
-  expect(screen.getByRole("button", { name: "My share" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Whole accounts" }));
+  expect(screen.getByRole("button", { name: "My view" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Household view" }));
   expect(onChange).toHaveBeenLastCalledWith(["all"]);
-  fireEvent.click(screen.getByRole("button", { name: "My share" }));
+  fireEvent.click(screen.getByRole("button", { name: "My view" }));
   expect(onChange).toHaveBeenLastCalledWith([]);
 });

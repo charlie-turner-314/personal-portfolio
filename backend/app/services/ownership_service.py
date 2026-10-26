@@ -13,16 +13,19 @@ from datetime import date
 from typing import Iterable, Literal
 from uuid import UUID
 
-from sqlalchemy import func, inspect
+from sqlalchemy import func, inspect, or_, and_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     Account,
     AccountOwner,
     AccountOwnershipAllocation,
+    PropertyOwnershipAllocation,
+    VehicleOwnershipAllocation,
     Property,
     PropertyOwner,
     Person,
+    HouseholdMembership,
     Vehicle,
     VehicleOwner,
 )
@@ -36,7 +39,7 @@ _ASSOC = {
 }
 
 
-def _allocation_table_is_available(db: Session) -> bool:
+def _allocation_table_is_available(db: Session, entity: EntityType = "account") -> bool:
     """Allow a rolling deploy to keep legacy reporting alive before migration.
 
     Normal deployments run Drizzle migrations before the API starts.  The
@@ -44,7 +47,7 @@ def _allocation_table_is_available(db: Session) -> bool:
     explicit fallback below; it can be removed once all supported databases
     have passed the SYL-42 migration.
     """
-    return inspect(db.bind).has_table("account_ownership_allocations")
+    return inspect(db.bind).has_table(f"{entity}_ownership_allocations")
 
 
 def resolve_shares(owners: list[dict]) -> dict[str, float]:
@@ -62,10 +65,28 @@ def resolve_shares(owners: list[dict]) -> dict[str, float]:
     return {str(o["person_id"]): float(o["share"]) for o in owners}
 
 
-def attribute_amount(amount: float, owners: list[dict], person_id: str | None) -> float:
+def identity_person_ids(db: Session, person_ids: Iterable[UUID | str]) -> list[UUID]:
+    """Economic aliases survive membership removal; never use as authorization."""
+    ids = {UUID(str(value)) for value in person_ids}
+    if not ids:
+        return []
+    selected = db.query(Person).filter(Person.id.in_(ids)).all()
+    logins = {person.user_id if person.kind == "self" else person.linked_user_id for person in selected}
+    logins.discard(None)
+    logins.update(row[0] for row in db.query(HouseholdMembership.member_user_id)
+                  .filter(HouseholdMembership.person_id.in_(ids)).all())
+    if logins:
+        ids.update(row[0] for row in db.query(Person.id).filter(or_(
+            Person.linked_user_id.in_(logins), and_(Person.kind == "self", Person.user_id.in_(logins)))).all())
+    return list(ids)
+
+
+def attribute_amount(amount: float, owners: list[dict], person_id: str | None, *, db: Session | None = None) -> float:
     if person_id is None:
         return amount
-    return amount * resolve_shares(owners).get(str(person_id), 0.0)
+    identities = {str(value) for value in identity_person_ids(db, [person_id])} if db is not None else {str(person_id)}
+    shares = resolve_shares(owners)
+    return amount * sum(share for owner_id, share in shares.items() if owner_id in identities)
 
 
 def get_owners(
@@ -79,26 +100,28 @@ def get_owners(
     Account allocations became effective-dated in SYL-42.  The legacy
     ``account_owners`` rows remain a fallback for databases/accounts that have
     not yet been backfilled, so legacy reporting data is not silently hidden.
-    Property and vehicle ownership remains timeless.
+    Properties and vehicles resolve the same dated complete-set rule.
     """
-    if entity == "account" and _allocation_table_is_available(db):
+    Allocation = {"account": AccountOwnershipAllocation, "property": PropertyOwnershipAllocation, "vehicle": VehicleOwnershipAllocation}[entity]
+    allocation_fk = getattr(Allocation, f"{entity}_id")
+    if _allocation_table_is_available(db, entity):
         as_of = as_of or date.today()
         effective_from = (
-            db.query(AccountOwnershipAllocation.effective_from)
+            db.query(Allocation.effective_from)
             .filter(
-                AccountOwnershipAllocation.account_id == entity_id,
-                AccountOwnershipAllocation.effective_from <= as_of,
+                allocation_fk == entity_id,
+                Allocation.effective_from <= as_of,
             )
-            .order_by(AccountOwnershipAllocation.effective_from.desc())
+            .order_by(Allocation.effective_from.desc())
             .limit(1)
             .scalar()
         )
         if effective_from is not None:
             rows = (
-                db.query(AccountOwnershipAllocation)
+                db.query(Allocation)
                 .filter(
-                    AccountOwnershipAllocation.account_id == entity_id,
-                    AccountOwnershipAllocation.effective_from == effective_from,
+                    allocation_fk == entity_id,
+                    Allocation.effective_from == effective_from,
                 )
                 .all()
             )
@@ -108,8 +131,8 @@ def get_owners(
         # resurrect the legacy timeless owners.  A future-dated complete set
         # intentionally means the account has no allocation before that date.
         has_allocation_history = (
-            db.query(AccountOwnershipAllocation.id)
-            .filter(AccountOwnershipAllocation.account_id == entity_id)
+            db.query(Allocation.id)
+            .filter(allocation_fk == entity_id)
             .first()
             is not None
         )
@@ -122,12 +145,13 @@ def get_owners(
         {"person_id": str(r.person_id), "share": float(r.share) if r.share is not None else None}
         for r in rows
     ]
-    if entity == "account" and not owners:
+    if not owners:
         # Accounts created by a non-UI importer may predate their allocation
         # row. Treat the household's authenticated user as the safe default
         # until the account is explicitly split; this keeps personal reports
         # complete without inventing ownership for placeholders.
-        account = db.query(Account).filter(Account.id == entity_id).first()
+        Resource = {"account": Account, "property": Property, "vehicle": Vehicle}[entity]
+        account = db.query(Resource).filter(Resource.id == entity_id).first()
         if account is not None:
             self_person = (
                 db.query(Person)
@@ -145,74 +169,31 @@ def entity_ids_for_people(
     person_ids: Iterable[UUID | str],
     as_of: date | None = None,
 ) -> list[UUID]:
-    pids = list(person_ids)
+    pids = identity_person_ids(db, person_ids)
     if not pids:
         return []
-    if entity == "account" and _allocation_table_is_available(db):
-        as_of = as_of or date.today()
-        # Resolve the latest effective date per account first, then join back
-        # to the complete set. This avoids relying on a correlated subquery
-        # whose outer query does not otherwise include the accounts table.
-        latest_for_account = (
-            db.query(
-                AccountOwnershipAllocation.account_id.label("account_id"),
-                func.max(AccountOwnershipAllocation.effective_from).label("effective_from"),
-            )
-            .filter(AccountOwnershipAllocation.effective_from <= as_of)
-            .group_by(AccountOwnershipAllocation.account_id)
-            .subquery()
-        )
-        rows = (
-            db.query(AccountOwnershipAllocation.account_id)
-            .filter(
-                AccountOwnershipAllocation.person_id.in_(pids),
-            )
-            .join(
-                latest_for_account,
-                (AccountOwnershipAllocation.account_id == latest_for_account.c.account_id)
-                & (AccountOwnershipAllocation.effective_from == latest_for_account.c.effective_from),
-            )
-            .distinct()
-            .all()
-        )
-        # During/after backfill, only use legacy ownership for accounts with
-        # no allocation history at all.  In particular, do *not* resurrect a
-        # person removed by a newer complete allocation set.
-        legacy_has_allocation = (
-            db.query(AccountOwnershipAllocation.id)
-            .filter(AccountOwnershipAllocation.account_id == AccountOwner.account_id)
-            .exists()
-        )
-        legacy_rows = (
-            db.query(AccountOwner.account_id)
-            .filter(
-                AccountOwner.person_id.in_(pids),
-                ~legacy_has_allocation,
-            )
-            .distinct()
-            .all()
-        )
-        unallocated_self_rows = (
-            db.query(Account.id)
-            .join(Person, Person.user_id == Account.user_id)
-            .filter(
-                Person.id.in_(pids),
-                Person.kind == "self",
-                ~db.query(AccountOwner.account_id)
-                .filter(AccountOwner.account_id == Account.id)
-                .exists(),
-                ~db.query(AccountOwnershipAllocation.id)
-                .filter(AccountOwnershipAllocation.account_id == Account.id)
-                .exists(),
-            )
-            .distinct()
-            .all()
-        )
-        return list(dict.fromkeys(
-            [r[0] for r in rows]
-            + [r[0] for r in legacy_rows]
-            + [r[0] for r in unallocated_self_rows]
-        ))
     Assoc, fk = _ASSOC[entity]
-    rows = db.query(getattr(Assoc, fk)).filter(Assoc.person_id.in_(pids)).distinct().all()
-    return [r[0] for r in rows]
+    Resource = {"account": Account, "property": Property, "vehicle": Vehicle}[entity]
+    Allocation = {"account": AccountOwnershipAllocation, "property": PropertyOwnershipAllocation, "vehicle": VehicleOwnershipAllocation}[entity]
+    association_fk = getattr(Assoc, fk)
+    allocation_fk = getattr(Allocation, fk)
+    available = _allocation_table_is_available(db, entity)
+    result = []
+    if available:
+        latest = db.query(allocation_fk.label("entity_id"), func.max(Allocation.effective_from).label("effective_from"))\
+            .filter(Allocation.effective_from <= (as_of or date.today())).group_by(allocation_fk).subquery()
+        result.extend(row[0] for row in db.query(allocation_fk).join(latest,
+            and_(allocation_fk == latest.c.entity_id, Allocation.effective_from == latest.c.effective_from))
+            .filter(Allocation.person_id.in_(pids), Allocation.share > 0).distinct().all())
+    legacy = db.query(association_fk).filter(Assoc.person_id.in_(pids))
+    if available:
+        legacy = legacy.filter(~db.query(Allocation.id).filter(allocation_fk == association_fk).exists())
+    result.extend(row[0] for row in legacy.distinct().all())
+    logins = select(Person.user_id).where(Person.id.in_(pids), Person.kind == "self").union(
+        select(Person.linked_user_id).where(Person.id.in_(pids), Person.linked_user_id.isnot(None)))
+    defaults = db.query(Resource.id).filter(Resource.user_id.in_(logins),
+        ~db.query(association_fk).filter(association_fk == Resource.id).exists())
+    if available:
+        defaults = defaults.filter(~db.query(Allocation.id).filter(allocation_fk == Resource.id).exists())
+    result.extend(row[0] for row in defaults.all())
+    return list(dict.fromkeys(result))

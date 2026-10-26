@@ -85,10 +85,10 @@ def test_list_holdings_resolves_person_share_at_valuation_date(db, monkeypatch):
 
     def owners_at_date(_db, _entity, _account_id, *, as_of=None):
         observed_dates.append(as_of)
-        return [{"person_id": "p1", "share": 0.5}]
+        return [{"person_id": "00000000-0000-4000-8000-000000000001", "share": 0.5}]
 
     monkeypatch.setattr(inv_tools, "get_owners", owners_at_date)
-    out = inv_tools.list_holdings_impl(db, "u1", person_ids=["p1"])
+    out = inv_tools.list_holdings_impl(db, "u1", person_ids=["00000000-0000-4000-8000-000000000001"])
 
     assert observed_dates == [valuation_date]
     assert Decimal(out[0]["current_value_user_currency"]) == Decimal("50.0")
@@ -113,10 +113,10 @@ def test_portfolio_history_resolves_person_share_at_balance_date(db, monkeypatch
 
     def owners_at_date(_db, _entity, _account_id, *, as_of=None):
         observed_dates.append(as_of)
-        return [{"person_id": "p1", "share": 0.5}]
+        return [{"person_id": "00000000-0000-4000-8000-000000000001", "share": 0.5}]
 
     monkeypatch.setattr(inv_tools, "get_owners", owners_at_date)
-    out = inv_tools.get_portfolio_history_impl(db, "u1", person_ids=["p1"])
+    out = inv_tools.get_portfolio_history_impl(db, "u1", person_ids=["00000000-0000-4000-8000-000000000001"])
 
     assert observed_dates == [balance_date]
     assert Decimal(out[0]["value_user_currency"]) == Decimal("50.0")

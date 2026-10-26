@@ -5,6 +5,7 @@ import {
 } from "@/lib/dashboard/query-params";
 
 interface DrilldownQueryOptions {
+  personId?:string;
   categoryId?: string | null;
   accountIds?: string[];
   dateFrom?: string;
@@ -13,6 +14,7 @@ interface DrilldownQueryOptions {
 }
 
 export function buildTransactionsDrilldownQuery({
+  personId,
   categoryId,
   accountIds,
   dateFrom,
@@ -20,6 +22,7 @@ export function buildTransactionsDrilldownQuery({
   horizon,
 }: DrilldownQueryOptions): string {
   const params = new URLSearchParams();
+  if(personId)params.set("person",personId);
 
   if (categoryId) {
     params.set("category", categoryId);

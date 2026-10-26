@@ -1,5 +1,6 @@
 "use server";
 
+import { categoryAccess } from "@/lib/household/category-access";
 import { revalidatePath } from "next/cache";
 import {
   and,
@@ -250,7 +251,7 @@ async function validateOwnedAccountAndCategory(
       .where(
         and(
           eq(categories.id, categoryId),
-          eq(categories.userId, userId),
+          categoryAccess(userId),
           eq(categories.categoryType, "expense"),
           or(eq(categories.hideFromSelection, false), isNull(categories.hideFromSelection))
         )
@@ -280,7 +281,7 @@ export async function getPlannedExpenseFormOptions(): Promise<PlannedExpenseForm
       .from(categories)
       .where(
         and(
-          eq(categories.userId, userId),
+          categoryAccess(userId),
           eq(categories.categoryType, "expense"),
           or(eq(categories.hideFromSelection, false), isNull(categories.hideFromSelection))
         )

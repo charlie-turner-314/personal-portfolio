@@ -1,7 +1,8 @@
 "use server";
 
+import { categoryAccess, categorySelectionHidden } from "@/lib/household/category-access";
 import { revalidatePath } from "next/cache";
-import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { budgetLimits, categories, users } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/household/financial-auth";
@@ -23,11 +24,13 @@ export interface BudgetLine {
   categoryColor: string | null;
   categoryIcon: string | null;
   plannedAmount: number;
-  actualAmount: number;
-  previousMonthActualAmount: number;
-  remainingAmount: number;
-  varianceAmount: number;
-  usedPct: number;
+  consumptionAmount?:number|null;
+  capitalAmount?:number|null;
+  actualAmount: number | null;
+  previousMonthActualAmount: number | null;
+  remainingAmount: number | null;
+  varianceAmount: number | null;
+  usedPct: number | null;
   notes: string | null;
   insight: BudgetCategoryInsight | null;
 }
@@ -37,13 +40,14 @@ export interface BudgetData {
   currency: string;
   accountIds: string[];
   personId?: string;
+  unclassifiedActuals?:{amount:number|null;consumptionAmount:number|null;capitalAmount:number|null};
   totals: {
     plannedAmount: number;
-    actualAmount: number;
-    remainingAmount: number;
-    varianceAmount: number;
-    usedPct: number;
-    categoriesOverBudget: number;
+    actualAmount: number | null;
+    remainingAmount: number | null;
+    varianceAmount: number | null;
+    usedPct: number | null;
+    categoriesOverBudget: number | null;
   };
   lines: BudgetLine[];
 }
@@ -207,9 +211,9 @@ export async function getBudgetData(
       .from(categories)
       .where(
         and(
-          eq(categories.userId, userId),
-          eq(categories.categoryType, "expense"),
-          or(eq(categories.hideFromSelection, false), isNull(categories.hideFromSelection))
+          categoryAccess(userId),
+          or(eq(categories.categoryType, "expense"),sql`EXISTS(SELECT 1 FROM budget_limits personal_plan WHERE personal_plan.category_id=categories.id AND personal_plan.user_id=${userId})`),
+          or(sql`${categorySelectionHidden(userId)}=false`,sql`EXISTS(SELECT 1 FROM budget_limits personal_plan WHERE personal_plan.category_id=categories.id AND personal_plan.user_id=${userId})`)
         )
       )
       .orderBy(asc(categories.name)),
@@ -226,14 +230,14 @@ export async function getBudgetData(
       endDate: end,
       accountIds,
       personId,
-      includeUncategorized: false,
+      includeUncategorized: true,
     }),
     fetchCategoryActualAmounts(userId, {
       startDate: previousStart,
       endDate: previousEnd,
       accountIds,
       personId,
-      includeUncategorized: false,
+      includeUncategorized: true,
     }),
     getUserCurrency(userId),
   ]);
@@ -248,72 +252,52 @@ export async function getBudgetData(
     ])
   );
   const actualByCategory = new Map(
-    actualRows.map((row) => [row.id, parseMoney(row.amount)])
+    actualRows.map((row) => [row.id, row.amount===null?null:parseMoney(row.amount)])
   );
   const previousActualByCategory = new Map(
-    previousActualRows.map((row) => [row.id, parseMoney(row.amount)])
+    previousActualRows.map((row) => [row.id, row.amount===null?null:parseMoney(row.amount)])
   );
 
-  const lines = expenseCategories.map((category) => {
-    const budget = budgetByCategory.get(category.id);
-    const plannedAmount = budget?.plannedAmount ?? 0;
-    const actualAmount = roundMoney(actualByCategory.get(category.id) ?? 0);
-    const remainingAmount = roundMoney(plannedAmount - actualAmount);
-    const usedPct = plannedAmount > 0 ? Math.round((actualAmount / plannedAmount) * 100) : 0;
-
+  const actualDetails=new Map(actualRows.map(row=>[row.id,row]));
+  const planningIds=new Set(expenseCategories.map(category=>category.id));
+  const planningCategories=[...expenseCategories,...actualRows.filter(row=>row.id!=="uncategorized"&&!planningIds.has(row.id)&&typeof row.name==="string")];
+  const known=(map:Map<string,number|null>,id:string)=>map.has(id)?map.get(id)!:0;
+  const lines = planningCategories.map(category=>{
+    const budget=budgetByCategory.get(category.id);
+    const plannedAmount=budget?.plannedAmount??0;
+    const observed=known(actualByCategory,category.id);
+    const actualAmount=observed===null?null:roundMoney(observed);
+    const prior=known(previousActualByCategory,category.id);
+    const detail=actualDetails.get(category.id);
     return {
-      categoryId: category.id,
-      categoryName: category.name,
-      categoryColor: category.color,
-      categoryIcon: category.icon,
-      plannedAmount,
-      actualAmount,
-      previousMonthActualAmount: roundMoney(previousActualByCategory.get(category.id) ?? 0),
-      remainingAmount,
-      varianceAmount: roundMoney(actualAmount - plannedAmount),
-      usedPct,
-      notes: budget?.notes ?? null,
-      insight: null,
+      categoryId:category.id,categoryName:category.name,categoryColor:category.color,categoryIcon:category.icon,
+      plannedAmount,actualAmount,
+      consumptionAmount:detail?.consumptionAmount===undefined?actualAmount:detail.consumptionAmount,
+      capitalAmount:detail?.capitalAmount===undefined?0:detail.capitalAmount,
+      previousMonthActualAmount:prior===null?null:roundMoney(prior),
+      remainingAmount:actualAmount===null?null:roundMoney(plannedAmount-actualAmount),
+      varianceAmount:actualAmount===null?null:roundMoney(actualAmount-plannedAmount),
+      usedPct:actualAmount===null?null:plannedAmount>0?Math.round(actualAmount/plannedAmount*100):0,
+      notes:budget?.notes??null,insight:null,
     };
   });
-
-  const totals = lines.reduce(
-    (acc, line) => {
-      acc.plannedAmount += line.plannedAmount;
-      acc.actualAmount += line.actualAmount;
-      if (line.plannedAmount > 0 && line.actualAmount > line.plannedAmount) {
-        acc.categoriesOverBudget += 1;
-      }
-      return acc;
-    },
-    {
-      plannedAmount: 0,
-      actualAmount: 0,
-      remainingAmount: 0,
-      varianceAmount: 0,
-      usedPct: 0,
-      categoriesOverBudget: 0,
-    }
-  );
-
-  totals.plannedAmount = roundMoney(totals.plannedAmount);
-  totals.actualAmount = roundMoney(totals.actualAmount);
-  totals.remainingAmount = roundMoney(totals.plannedAmount - totals.actualAmount);
-  totals.varianceAmount = roundMoney(totals.actualAmount - totals.plannedAmount);
-  totals.usedPct =
-    totals.plannedAmount > 0
-      ? Math.round((totals.actualAmount / totals.plannedAmount) * 100)
-      : 0;
-
-  const overBudgetCategories = lines
-    .filter((line) => line.plannedAmount > 0 && line.actualAmount > line.plannedAmount)
-    .map((line) => ({
-      categoryId: line.categoryId,
-      categoryName: line.categoryName,
-      plannedAmount: line.plannedAmount,
-      actualAmount: line.actualAmount,
-      overspendAmount: line.varianceAmount,
-    }));
+  const unclassified=actualDetails.get("uncategorized");
+  const unclassifiedActuals={amount:unclassified?.amount===null?null:unclassified?.amount??0,
+    consumptionAmount:unclassified?.consumptionAmount===null?null:unclassified?.consumptionAmount??unclassified?.amount??0,
+    capitalAmount:unclassified?.capitalAmount===null?null:unclassified?.capitalAmount??0};
+  const complete=lines.every(line=>line.actualAmount!==null)&&unclassifiedActuals.amount!==null;
+  const plannedAmount=roundMoney(lines.reduce((sum,line)=>sum+line.plannedAmount,0));
+  const actualAmount=complete?roundMoney(lines.reduce((sum,line)=>sum+(line.actualAmount??0),unclassifiedActuals.amount??0)):null;
+  const totals={plannedAmount,actualAmount,
+    remainingAmount:actualAmount===null?null:roundMoney(plannedAmount-actualAmount),
+    varianceAmount:actualAmount===null?null:roundMoney(actualAmount-plannedAmount),
+    usedPct:actualAmount===null?null:plannedAmount>0?Math.round(actualAmount/plannedAmount*100):0,
+    categoriesOverBudget:complete?lines.filter(line=>line.actualAmount!==null&&line.plannedAmount>0&&line.actualAmount>line.plannedAmount).length:null};
+  const overBudgetCategories=lines.flatMap(line=>line.actualAmount!==null&&line.varianceAmount!==null
+    &&line.capitalAmount===0&&line.plannedAmount>0&&line.actualAmount>line.plannedAmount?[{
+      categoryId:line.categoryId,categoryName:line.categoryName,plannedAmount:line.plannedAmount,
+      actualAmount:line.actualAmount,overspendAmount:line.varianceAmount,
+    }]:[]);
 
   const insights = await fetchBudgetInsights(userId, {
     monthKey,
@@ -321,6 +305,7 @@ export async function getBudgetData(
     endDate: end,
     accountIds,
     categories: overBudgetCategories,
+    personId,
   });
   const insightsByCategory = new Map(
     insights.map((insight) => [insight.categoryId, insight])
@@ -332,6 +317,7 @@ export async function getBudgetData(
     accountIds,
     personId,
     totals,
+    unclassifiedActuals,
     lines: lines.map((line) => ({
       ...line,
       insight: insightsByCategory.get(line.categoryId) ?? null,
@@ -367,8 +353,7 @@ export async function saveBudgetLines(
     .from(categories)
     .where(
       and(
-        eq(categories.userId, userId),
-        eq(categories.categoryType, "expense"),
+        categoryAccess(userId),
         inArray(categories.id, categoryIds)
       )
     );
@@ -504,9 +489,8 @@ export async function applyBudgetToFutureMonths(
       .from(categories)
       .where(
         and(
-          eq(categories.userId, userId),
-          eq(categories.categoryType, "expense"),
-          inArray(categories.id, categoryIds)
+          categoryAccess(userId),
+            inArray(categories.id, categoryIds)
         )
       );
     if (ownedCategories.length !== categoryIds.length) {

@@ -43,10 +43,13 @@ export interface AssetLiability {
 export interface AssetsOverviewData {
   scope?: string;
   accountFiltered?: boolean;
-  total: number;
-  grossAssets: number;
-  totalLiabilities: number;
-  netWorth: number;
+  missingValues?: string[];
+  knownGrossAssets?: number;
+  coveredAccounts?: { id:string; name:string }[];
+  total: number | null;
+  grossAssets: number | null;
+  totalLiabilities: number | null;
+  netWorth: number | null;
   currency: string;
   categories: AssetCategory[];
   liabilities: AssetLiability[];

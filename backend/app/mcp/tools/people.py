@@ -92,7 +92,7 @@ def get_household_summary(
                 if pid not in {o["person_id"] for o in owners}:
                     continue
                 balance = float(a.functional_balance or 0)
-                amt = attribute_amount(balance, owners, pid)
+                amt = attribute_amount(balance, owners, pid, db=db)
                 classified = classify_account_amount(amt, a.account_type)
                 total_liabilities += classified.liability_amount
                 if classified.liability_amount:
@@ -106,14 +106,14 @@ def get_household_summary(
                 owners = property_owners[str(pr.id)]
                 if pid not in {o["person_id"] for o in owners}:
                     continue
-                attributed_value = attribute_amount(float(pr.current_value or 0), owners, pid)
+                attributed_value = attribute_amount(float(pr.current_value or 0), owners, pid, db=db)
                 properties_total += attributed_value
 
             for v in vehicles:
                 owners = vehicle_owners[str(v.id)]
                 if pid not in {o["person_id"] for o in owners}:
                     continue
-                vehicles_total += attribute_amount(float(v.current_value or 0), owners, pid)
+                vehicles_total += attribute_amount(float(v.current_value or 0), owners, pid, db=db)
 
             gross_assets = cash + investments + properties_total + vehicles_total
             net_worth = calculate_net_worth(gross_assets, total_liabilities)

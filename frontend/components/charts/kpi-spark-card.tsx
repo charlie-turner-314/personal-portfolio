@@ -8,12 +8,12 @@ import { cn, formatCurrency } from "@/lib/utils";
 
 interface SparkDataPoint {
   date: string;
-  value: number;
+  value: number | null;
 }
 
 interface KpiSparkCardProps {
   title: string;
-  value: number;
+  value: number | null;
   currency: string;
   subtitle: string;
   sparkData: SparkDataPoint[];
@@ -63,7 +63,7 @@ export function KpiSparkCard({
     return <KpiSparkCardSkeleton />;
   }
 
-  const formattedValue = valueFormat === "percentage" ? `${value.toFixed(1)}%` : formatCurrency(value, currency, { showSign });
+  const formattedValue = value === null ? "Unavailable" : valueFormat === "percentage" ? `${value.toFixed(1)}%` : formatCurrency(value, currency, { showSign });
 
   return (
     <Card>
@@ -77,7 +77,7 @@ export function KpiSparkCard({
               {title}
             </p>
           </div>
-          <p className={cn("font-mono text-2xl font-semibold tracking-tight", valueTone === "liability" && value !== 0 && "text-red-600 dark:text-red-400")}>
+          <p className={cn("font-mono text-2xl font-semibold tracking-tight", valueTone === "liability" && value !== null && value !== 0 && "text-red-600 dark:text-red-400")}>
             {formattedValue}
           </p>
           <div className="flex items-center gap-2">

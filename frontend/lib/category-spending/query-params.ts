@@ -21,6 +21,7 @@ export type CategorySpendingSortField =
 export type CategorySpendingSortOrder = "asc" | "desc";
 
 export interface ParsedCategorySpendingQueryParams {
+  personId?:string;
   accountIds?: string[];
   dateFrom?: string;
   dateTo?: string;
@@ -36,6 +37,7 @@ export interface ParsedCategorySpendingQueryParams {
 interface CategorySpendingQueryOptions {
   categoryIds?: string[];
   categoryId?: string | null;
+  personId?:string;
   accountIds?: string[];
   dateFrom?: string;
   dateTo?: string;
@@ -136,6 +138,7 @@ export function parseCategorySpendingSearchParams(
   const order = parseSortOrder(searchParams.get("order"));
 
   return {
+    personId:searchParams.get("person")?.trim()||undefined,
     accountIds: accountIds.length > 0 ? accountIds : undefined,
     dateFrom,
     dateTo,
@@ -150,6 +153,7 @@ export function parseCategorySpendingSearchParams(
 }
 
 export function buildCategorySpendingQuery({
+  personId,
   categoryIds,
   categoryId,
   accountIds,
@@ -162,6 +166,7 @@ export function buildCategorySpendingQuery({
   order,
 }: CategorySpendingQueryOptions): string {
   const params = new URLSearchParams();
+  if(personId)params.set("person",personId);
 
   const normalizedCategoryIds = Array.from(
     new Set(

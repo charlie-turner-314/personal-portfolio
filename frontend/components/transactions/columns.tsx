@@ -85,6 +85,7 @@ function CategoryCell({
           event.stopPropagation();
           const globalFilters = parseGlobalFiltersFromSearchParams(searchParams);
           const query = buildCategorySpendingQuery({
+            personId:searchParams.get("person")??undefined,
             categoryId: displayCategory.id,
             accountIds: globalFilters.accountIds,
             dateFrom: globalFilters.from,
@@ -287,7 +288,7 @@ export const transactionColumns: ColumnDef<TransactionWithRelations>[] = [
           className="flex cursor-pointer items-center justify-center gap-1"
           onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
         >
-          Amount
+          Attributed amount
           {sorted === "asc" ? (
             <RiArrowUpLine className="h-4 w-4" />
           ) : sorted === "desc" ? (
@@ -297,17 +298,15 @@ export const transactionColumns: ColumnDef<TransactionWithRelations>[] = [
       );
     },
     cell: ({ row }) => {
-      const amount = row.getValue("amount") as number;
-      const type = row.original.transactionType;
-      const isCredit = type === "credit";
-      return (
-        <span className="block whitespace-nowrap text-center font-mono">
-          {isCredit ? "+" : "-"}
-          {Math.abs(amount).toFixed(2)}
-        </span>
-      );
+      const tx=row.original;
+      const attributed=tx.attributedAmount===undefined?tx.amount:tx.attributedAmount;
+      const currency=tx.reportingCurrency??tx.currency??"EUR";
+      return <div className="text-center font-mono text-xs">
+        <span className="block whitespace-nowrap">{attributed===null?"Unavailable":`${attributed>0?"+":""}${attributed.toFixed(2)} ${currency}`}</span>
+        <span className="block text-[10px] text-muted-foreground">Bank {tx.amount.toFixed(2)} {tx.currency??"EUR"}</span>
+      </div>;
     },
-    size: 110,
+    size: 170,
     filterFn: (row, id, filterValue) => {
       if (!filterValue || (!filterValue.min && !filterValue.max)) return true;
       const amount = Math.abs(row.getValue("amount") as number);

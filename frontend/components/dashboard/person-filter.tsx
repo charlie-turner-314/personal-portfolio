@@ -41,12 +41,12 @@ export function PersonFilter(props: {
         variant={props.value.length === 0 ? "default" : "outline"}
         onClick={() => props.onChange([])}
       >
-        {props.personalDefault ? "My share" : "All"}
+        {props.personalDefault ? "My view" : "All"}
       </Button>
       {props.personalDefault && (
         <Button size="sm" variant={props.value[0] === "all" ? "default" : "outline"}
           onClick={() => props.onChange(["all"])}>
-          Whole accounts
+          Household view
         </Button>
       )}
       {people.map((p) => (

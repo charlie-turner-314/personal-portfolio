@@ -60,7 +60,7 @@ export function DeleteCategoryDialog({
 
   const isConfirmValid = confirmText === category.name;
   const hasTransactions = transactionCount > 0;
-  const availableCategories = sameTypeCategories.filter((c) => c.id !== category.id);
+  const availableCategories = sameTypeCategories.filter((c) => c.id !== category.id && c.cashFlowKind === category.cashFlowKind);
 
   const handleConfirm = async () => {
     const targetCategoryId = reassignOption === "reassign" ? reassignCategoryId : null;
@@ -75,15 +75,15 @@ export function DeleteCategoryDialog({
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/10">
               <RiAlertLine className="h-5 w-5 text-destructive" />
             </div>
-            <AlertDialogTitle>Delete "{category.name}"?</AlertDialogTitle>
+            <AlertDialogTitle>Retire "{category.name}"?</AlertDialogTitle>
           </div>
           <AlertDialogDescription>
             {hasTransactions ? (
               <>
-                This category has <span className="font-semibold text-foreground">{transactionCount} transaction{transactionCount !== 1 ? "s" : ""}</span> assigned to it.
+                Your permitted records include <span className="font-semibold text-foreground">{transactionCount} transaction{transactionCount !== 1 ? "s" : ""}</span> assigned to this category. Other people’s private usage is excluded.
               </>
             ) : (
-              <>This category has no transactions. It will be permanently deleted.</>
+              <>No permitted transactions are assigned. Stored references and private records are retained.</>
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -99,7 +99,7 @@ export function DeleteCategoryDialog({
                 className="flex-1"
                 onClick={() => setReassignOption("uncategorized")}
               >
-                Leave uncategorized
+                Keep classifications
               </Button>
               <Button
                 type="button"
@@ -156,6 +156,7 @@ export function DeleteCategoryDialog({
           </div>
         )}
 
+        <p className="text-sm text-muted-foreground">This definition is removed from new selection. Existing classifications, AI provenance, budgets and rules remain readable. Optional reassignment affects only records you can currently access.</p>
         <div className="space-y-2">
           <Label htmlFor="confirm-name">
             Type <span className="font-semibold text-foreground">{category.name}</span> to confirm
@@ -180,7 +181,7 @@ export function DeleteCategoryDialog({
             }
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {isLoading ? "Deleting..." : "Delete Category"}
+            {isLoading ? "Retiring..." : "Retire Category"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -1,3 +1,4 @@
+import { hasUnavailableAccountSelection,ReportingSelectionNotice } from "@/components/reporting/selection-notice";
 import { Suspense } from "react";
 import { Header } from "@/components/layout/header";
 import { BudgetClient } from "@/components/budget/budget-client";
@@ -65,14 +66,19 @@ async function BudgetSection({
   personId?: string;
 }) {
   let data;
-  let accounts;
+  const accounts=await getUserAccounts();
+  if(hasUnavailableAccountSelection(accounts,accountIds)) {
+    const clear=new URLSearchParams();
+    if(month)clear.set("month",month);
+    if(personId)clear.set("person",personId);
+    return <ReportingSelectionNotice clearHref={`/budget?${clear}`} />;
+  }
   let plannedExpenses;
   let plannedExpenseOptions;
 
   try {
-    [data, accounts, plannedExpenses, plannedExpenseOptions] = await Promise.all([
+    [data, plannedExpenses, plannedExpenseOptions] = await Promise.all([
       getBudgetData(month, { accountIds, personId }),
-      getUserAccounts(),
       getBudgetPlannedExpenseSummary(month, { accountIds }),
       getPlannedExpenseFormOptions(),
     ]);

@@ -1,0 +1,176 @@
+# Household implementation progress
+
+- [x] Read objective and delivery governance; preserve dirty primary checkout.
+- [x] Isolated worktree from develop 36ccf6e263f115f5e064de22f6099a4fe68b02d7.
+- [x] Inspect initial access, category, ownership and lifecycle consumers.
+- [x] Decision record before schema changes.
+- [ ] Complete consumer inventory and implement canonical safe vocabulary.
+  Initial central definition predicate and sanitized projection implemented in both runtimes; transaction/budget/planned/forecast/subscription selection now uses it. Remaining: persistent vocabulary lifecycle, management, AI consumers and migration.
+  Exact category-ID grouping/filtering replaces automatic name equivalence.
+- [ ] Central permissions for category application, metadata and management.
+- [ ] Transactional data mapping, dry run, idempotency, failure and recovery tests.
+- [ ] Explicit account and membership transition previews, stale-plan checks, audit.
+- [ ] Household creation, join, share, withdraw, leave/remove, move, dissolution UI.
+- [ ] Effective-dated ownership for assets/liabilities and all reporting surfaces.
+- [ ] Explicit reporting scopes/coverage, boundary transfers, balance/FX gaps.
+- [ ] Replace misleading saving/funding surfaces and superseded logic.
+  Saving summary heading and Sankey balancing labels corrected; boundary attribution still needs full audit.
+- [ ] Acceptance matrix, regression fixtures, API/export/cache/job revocation.
+- [ ] Protected release-lab upgrade/recovery rehearsals.
+- [ ] Critical browser journeys; appropriate build/test gates.
+- [ ] Reviewable develop PR with evidence, tradeoffs and UAT instructions.
+
+## Current verification (intermediate, not delivery evidence)
+
+- TypeScript no-emit check passed after initial category access changes.
+- 51 frontend tests passed in nine files, including real PostgreSQL temporary-table tests for definition access, household exit, outsider isolation and exact-ID filters.
+- Protected source identity: Compose project syllogic-develop-uat, database volume syllogic-develop-uat_postgres_data, app upload volume syllogic-develop-uat_uploads_data. Runtime revision is unverified.
+- release-lab prepare succeeded in this worktree, port 8128. No candidate application build or upgrade has run yet. Its backup/configuration remains in ignored .release-lab/.
+- Synthetic-only Postgres container syllogic-household-model-test was created for tests; no host port is published.
+- Primary checkout's unrelated changes remain untouched.
+
+## Vocabulary and lifecycle checkpoint
+
+- Added stable-ID category vocabulary entries; current membership selects one set. Definitions imported on join are retained on both sides before exit/dissolution. No name-based merge, financial rewrite, credential transfer or account grant is performed by migration.
+- Join/share/withdraw/leave/remove/dissolve now have server previews, actor-bound HMAC confirmation, live state recheck under the existing household lock, atomic mutation/audit, and matching review UI. Property and aggregate access effects are included without private totals.
+- Added read-only lab inventory script: protected restore has 42 definitions, 21 duplicate labels retained and 11 category-reference columns. Detailed mappings stay in ignored mode-600 lab state.
+- Added synthetic lifecycle tests for stale consent, injected failure, post-write recovery, repeated migration, entry/exit/move/dissolution and preserved ownership. They pass; full browser and delivery review remain outstanding.
+- AI category lookup now preserves ambiguous definitions and strips partner guidance. Suggestion reads/reviews check current account access, including after inference. Category removal retires definitions instead of deleting historical/planning references; onboarding preserves existing references too.
+- Backend focused category/context/suggestion/MCP suite: 64 tests passed using candidate app/tasks mounted in a cached runtime with test dependencies added only to the ephemeral container. This is not a candidate image build.
+- Known remaining major work: effective-dated property/vehicle attribution; complete scope/coverage and boundary-transfer audit; queued jobs/exports/cache matrix; UI/browser validation; full candidate build; exact-revision rehearsal and recovery receipt; reviewable PR/UAT delivery. Goal remains active.
+
+## Ownership checkpoint (2026-10-26)
+
+- Dated complete sets added for properties and vehicles, with legacy-row preservation and exact equal-share totals. Generic owner API/UI writes dated sets for all three resource kinds and records provenance.
+- A single TypeScript resolver and corresponding Python resolver handle effective sets and stable login/person aliases across household changes. Both keep access separate.
+- Asset overview now defaults to My view economic shares; explicit Household view passes its scope through without falling back to My view. Scope labels are explicit. Broader transaction/budget/report coverage audit remains outstanding.
+- Retirement is now vocabulary-scoped; types/default financial purposes are fixed after creation. Retained foreign definitions stay selectable without foreign private guidance.
+- Latest focused validation: 71 frontend tests in 14 files; 95 backend tests; TypeScript no-emit check passed. Backend used current app/tasks mounted into a cached runtime with ephemeral pytest/pypdf dependencies. Four existing deprecation/SQLAlchemy warnings remain.
+- Asset migration passed twice on synthetic fixtures and the protected restored source, with six core-table hashes unchanged. These are intermediate dirty-source rehearsals, not the final recorded-revision evidence. Do not reuse them as candidate image acceptance.
+
+### Next audit priorities
+
+1. Currency conversion: dashboard activity currently trusts source-user functional_amount as actor currency. Fix with actor/date-aware conversion, test shared cross-currency/missing rates. Net-worth calculation currently sums differently denominated property/vehicle values and coerces missing values to zero; fix coverage/unavailability.
+2. Transfer/report boundaries: audit internal_transfer_id exclusions, invisible or filtered/date-straddling peers, and distinction between boundary movement and proven ownership redistribution. Existing 70,000 contribution fixtures exist in dashboard.ownership.integration.test.ts, dashboard/activity.test.ts and e2e/cash-flow-contributions.spec.ts; expand ratios and privacy coverage. Avoid claiming traced funding.
+3. Superseded Python analytics routes group categories by name, join manual/AI IDs with OR (duplicate rows), and classify sign-only income/spending. Replace with coherent scope/purpose logic or simplify the misleading surface. Audit report_data_service and MCP analytics too.
+4. Transactions/budgets/category reports must use consistent My/Household scopes and visible account coverage, dated attribution per record, no inference of inaccessible zero balances.
+5. Permission revocation matrix: direct API/export/search/queued jobs/caches/attachments/private transfer metadata; run existing scripts/test-household-privacy.py after a candidate app build. It expects an isolated app/backend lab; currently this worktree lab has only DB/Redis from migration-only rehearsal.
+6. Complete acceptance matrix; full source image build with release-lab up; exact committed-revision upgrades twice; protected backup/recovery evidence including post-write forward repair; browser critical journeys and UAT instructions; reviewable develop PR with checks. Never promote/deploy main/Pi under this authorization.
+
+### Runtime and command notes
+
+- Worktree: /Users/charlieturner/Documents/Codex/2026-10-26/work-in-goal-mode-implement-and/work/syllogic
+- Frontend node_modules is an ignored symlink to the primary checkout’s installed dependencies. Run tsc/vitest with cwd frontend; paths for file mutations should use repository root (earlier cwd mistakes were corrected).
+- Synthetic test Postgres: syllogic-household-model-test; host 127.0.0.1:55483; DB household_model_test; local synthetic trust auth, no real data. Tests require HOUSEHOLD_TEST_ISOLATED=yes and HOUSEHOLD_MODEL_TEST_DATABASE_URL=postgresql://postgres@localhost:55483/household_model_test. Pure SQL fixture tests use OWNERSHIP_TEST_POSTGRES_CONTAINER=syllogic-household-model-test and the separate postgres DB, temporary tables only.
+- Protected release-lab project syllogic-release-lab-9ea1348b04, port8128 configured. Source containers syllogic-app/syllogic-postgres, existing volume syllogic-develop-uat_postgres_data. All backup/auth keys and detailed mapping reports stay ignored under .release-lab/. Never print decrypted config or credentials. Keep source containers available for state decryption.
+- Backend focused tests run in an ephemeral syllogic-backend:local image with --network container:syllogic-household-model-test, candidate backend/app, backend/tasks and backend/tests mounted read-only at /app/app, /app/tasks, /app/tests. Install pytest, pytest-asyncio,pypdf only under /tmp/household-test-deps. Cached backend lacks pypdf; mounting only app but not tasks yields a misleading old-worker failure. Logs are in private .release-lab/backend-model-tests.log.
+
+## Currency checkpoint
+
+- Draft PR opened and attached: https://github.com/charlie-turner-314/personal-portfolio/pull/108 (develop target; not merge-ready). GitHub connector create failed with integration 403, so authenticated gh CLI was used. Branch is pushed through ownership checkpoint 3a24f6d; subsequent currency changes need a push after commit.
+- Added actor/date-aware SQL currency conversion. Native amount wins when already in viewer currency; source functional_amount is converted from the custodian’s currency. Missing, zero and future-only rates remain unknown. Cash snapshots use their native/functional denominations correctly.
+- Current cash totals and historical series no longer fill missing included balances with zero. Exact cash reconciliation keeps missing snapshots/rates unavailable. Net-worth totals are nullable with explicit missing values/known-only breakdown; different currency amounts are not added without conversion. Active permitted account coverage is displayed.
+- Focused currency/cash/net-worth tests: 34 passed across eight files, including real PostgreSQL execution and missing valuation/mixed currency tests. TypeScript check passed. This is additional focused validation, not a full suite or candidate image acceptance.
+
+### Scope/reporting findings to implement next
+
+- Transactions query-state currently has no My/Household view. Keep original bank amount for editing/cash portions; add economic share and a separate attributed display amount rather than overwriting the raw record. Totals currently add native amounts across currencies and should use actor currency with unknown conversion handling. See transactions.ts getTransactionsPage, mapTransactionRowsForUi and components/transactions/columns.tsx.
+- Budget defaults to whole accounts while dashboard defaults to My view. Budget person selector currently says Whole household and claims plans are household-wide, although plans are personal. Fix both labels and default scope. Centralize actuals instead of preserving old sign-only queries.
+- frontend/lib/spending/category-actuals.ts has a superseded linked SQL path: t2.user_id actor filter, scalar per-person allocation lookup, native amounts and sign-only expenses. It misses capital portions and shared peer semantics. Reuse the central dashboard activity query/summary for budget/category actuals and insights. Category-spending top chart already calls getSpendingByCategory but its detail rows/filters need scope alignment.
+- Dashboard getActivitySummary still nets linked peers without selected-account/date constraints; can swallow secondary rows with inaccessible/out-of-period primaries. Fix boundary relative to the selected permitted record set. internal_transfer_id rows are excluded entirely, so separate boundary movements need audit.
+- Distinguish boundary transfers (only one permitted/in-period leg) from ownership redistribution proven with the complete selected leg set. Do not use private peer metadata or private totals to make this distinction. Existing transfer summary labels claim ownership transfers too broadly.
+- Sankey balancing labels currently say Income above consumption / Consumption above income even though activitySankey includes capital and transfers; these are not necessarily saving. Simplify/replace that surface or use precise included-flow difference labels with no funding provenance claim.
+- Python analytics endpoints still need replacement of sign-only income/spending, manual/AI OR joins and name-based grouping; report_data_service and MCP need the same purpose/scope audit.
+
+## Shared activity/budget boundary checkpoint
+
+- Extracted the dashboard activity SQL into `lib/reporting/activity-query.ts`. One materialized permitted record set applies actor access, selected dates/accounts, dated economic shares and reporting currency. Linked peers can only come from that set; an unavailable primary cannot swallow a visible secondary.
+- Automatic transfer source/mirror records remain financial facts even when an old detector excluded them from ordinary analytics. Balanced visible full-value legs establish redistribution by dated ownership; missing/private/filtered/out-of-period counterparts remain boundary movements. No hidden peer totals or existence checks are used to label a movement.
+- Budget category actuals and contributor explanations now consume that activity calculation. Personal plans remain personal in both My/Household views. Consumption and capital are separately visible, refunds/withdrawals retain direction, unclassified movements remain in totals, and missing conversion yields unavailable amounts. Partner recurring-rule metadata is not exposed or inferred.
+- Replaced the Sankey balancing labels with Calculated net inflow/outflow and described them as an arithmetic movement difference, independent of recorded cash balances. Ribbons remain explicitly proportional, never traced funding.
+- Validation: 58 tests passed across seven files, including 14 PostgreSQL integration cases. Tested alternate amounts/ratios, selected accounts, date straddles, missing/private primaries, immediate grant revocation, generated mirror description redaction, mixed principal/interest and unknown FX. TypeScript no-emit passed. Reusing the permitted CTE reduced the integration suite from ~66s to ~4s; earlier failures were test-timeouts from the repeated correlated query, now resolved.
+- Remaining scope/coverage, transaction display, Python analytics/jobs/privacy audit, browser/build/release-lab and final delivery gates remain open. This checkpoint is focused source validation, not candidate-image or final migration evidence.
+
+## Transaction, category and export scope checkpoint
+
+- Transactions now carry original bank amount/currency separately from dated economic share and attributed reporting-currency amount. My/Household selection persists through pagination, filters, chart drilldowns and global navigation filters. Amount sorting/ranges use the selected reporting amount. Unknown conversion stays visible under an amount range and makes aggregate movement totals unavailable.
+- Shared transaction rows still remain editable as bank facts; their display shows both attributed and original amounts. Details label the original bank amount. Movement-in/out totals are not presented as income/consumption.
+- CSV export refreshes all requested records against live server account permissions; a missing/revoked selected record rejects the export. CSV preserves original values and includes attributed amount, reporting currency, economic share, stable category ID and explicit portions. A previously downloaded copy remains outside revocation.
+- Generated legacy mirror source-account names are suppressed in frontend reads, search/sort and export. Private recurring rules cannot be used as a frontend filter oracle. Backend mirror creation, routes, MCP/search and worker contexts still need the full corresponding audit.
+- Removed the category-spending duplicate transaction mapper/query. Category totals and detail pagination now use the same consumption entries (including refunds, linked netting and mixed portions), then re-fetch safe details under live permissions. Previous-period comparisons use category IDs, not names. Missing FX is labelled as known-only coverage. View scope is preserved in category selection and chart links.
+- Validation: combined transaction-related run passed 61 tests in16files, navigation run passed12tests in3files, final real migrated PostgreSQL scope suite passed7tests. TypeScript no-emit passed. Focused lint passed without warnings. These focused runs overlap; do not add their counts as independent acceptance cases.
+- Next: selected-account coverage and unavailable-filter behavior across all reports (including historical inactive accounts); backend analytics/report/newsletter/MCP coherent model; old mirror metadata at every backend boundary; full revocation/cache/job matrix; candidate image and exact-revision lab/recovery/browser gates. PR remains draft and goal active.
+
+## Coverage checkpoint
+
+- A central reporting coverage query returns only currently permitted account names and includes closed accounts owned by the custodian for historical activity. Closed shared accounts remain unavailable after their live grant stops applying. Current cash/net-worth balances still explicitly use active accounts.
+- Explicit inaccessible, withdrawn or nonexistent account selections fail with the same unavailable-selection response instead of silently dropping those IDs and reporting zero. Activity, budget actuals, transaction pages, current balances, balance histories, cash reconciliation and asset overviews enforce the selection. The final resource query still rechecks account access.
+- Dashboard, budget, transactions and category pages show a clear-account-filter recovery link before calculating an unavailable selection. Date/view/category context is preserved. Dashboard/budget coverage lists name the permitted included accounts; transaction coverage already lists them. Manual entry continues to offer active accounts.
+- Focused verification: 50 tests passed in7files, including real PostgreSQL activity/cash reconciliation and full migrated schema scope tests. Added custodian closed-history coverage, private/stale selection rejection, revoked selected-account rejection and a rendered recoverable-selection UI test. TypeScript no-emit passed. Focused lint has no errors; one pre-existing explicit-any warning in cached.ts remains.
+- A former reconciliation fixture silently ignored a selected private account. Its expected behavior now rejects that selection; the equivalent permitted selection retains its independently recorded400 cash change.
+- Remaining: backend analytics/MCP/newsletter model consistency and backend mirror metadata; complete privacy/revocation/job/cache matrix; candidate image, final exact-revision migration/recovery receipts, browser acceptance and final PR/UAT delivery. No final release evidence claimed.
+
+## Backend activity checkpoint
+
+- Added `financial_activity.py` as the backend counterpart of the TypeScript activity calculation. It applies the current permitted date/account boundary to every peer, dated stable-identity ownership, native/functional viewer-currency conversion, explicit portions and classification defaults. Same-label definitions remain separate IDs. Automatic transfer source/mirror facts survive old analytics exclusion flags; only complete balanced visible legs establish ownership redistribution.
+- Added the existing0053/0054 cash-flow fields to the Python ORM. This is schema parity, not a new migration or a financial-data rewrite.
+- Replaced conflicting sign-only/raw-SQL paths in analytics API routes, transaction category statistics, all MCP analytics tools and the legacy frontend analytics adapter. My view is the default, Household view is explicit, selected people sum deduplicated dated identities. Categories, monthly rows and merchant results carry scope/currency/coverage; missing conversion is unavailable.
+- Backend financial summaries distinguish saving from income, capital and boundary/ownership movements. Current cash totals include cash accounts only; debt is separate. Recorded cash reconciliation uses exact independent boundary snapshots and leaves differences visible. Historical API balances no longer reconstruct balances from transaction sums.
+- Current net worth includes permitted properties/own vehicles and all active account values once, with dated shares, currency conversion, super inclusion and holding valuation replacement. A holding without a dated valuation is unknown, not zero or a stale account fallback. Missing values make complete totals unavailable while known-only values remain explicit.
+- Verification:116 focused backend tests passed (17 new activity/value/API/MCP model cases plus existing ownership/vocabulary/context/suggestion/report/investment checks),4 existing warnings. Synthetic migrated PostgreSQL only; current source app/tasks/tests/mcp_server mounted into an ephemeral cached runtime. TypeScript no-emit and focused analytics adapter lint passed. This is not source-image or browser acceptance.
+- An additional MCP discovery smoke run returned404 for `/.well-known/oauth-protected-resource` while its unauthenticated MCP challenge test passed. This is unresolved; inspect the advertised metadata URL/current FastMCP behavior during the full gate. Do not describe all MCP tests as green.
+
+### Next implementation priorities (authoritative current handoff)
+
+1. Newsletter/report_data_service.py still uses old whole-account balances and sign/debit directions. Move it onto the activity/value rules, explicitly label personal view, preserve original bank facts alongside attributed amounts, render unknown values correctly, and recheck current access after rendering before a queued email send. No real email sends are authorized by this implementation task; tests must mock delivery.
+2. Backend transfer creation still embeds private source names in generated mirror descriptions/merchant fields. Analytics now sanitizes old generated text, but direct routes, MCP transactions/search/exports, AI contexts, attachments and jobs need the full boundary audit. Frontend purpose mutation blocks source internal_transfer_id but not a generated mirror with externalId=mirror-...; fix that server/UI path too.
+3. Audit all remaining ownership writers (including backend/MCP) for legacy timeless writes, and functional-currency setting changes for historical value recomputation. Do not claim complete consumer coverage from these focused tests.
+4. Run/repair full required automated checks, including the unresolved MCP metadata discovery smoke. Build candidate source images in the protected release lab, perform exact committed-revision migrations twice plus recovery/new-write evidence, run the privacy script and real browser journeys.
+5. Final acceptance matrix against every objective, PR108 description/readiness/CI, evidence and concrete UAT outputs remain required. No promotion to main or Pi/production deployment is authorized. Goal remains active.
+
+## Newsletter and transaction projection checkpoint
+
+- Newsletter payloads now use My view for the named report owner, current permitted account coverage, dated economic shares and actor currency. Consumption filters include refunds and exclude capital/transfer legs; income excludes those movements. ALL/inflow/outflow lists explicitly labelled attributed bank movements. Original bank amount/currency remain in each payload item. Cash total covers active cash accounts only; debt and investment account values are separately labelled.
+- Email rendering shows the view and coverage, original bank units beside attributed values, and Unavailable for missing values/FX. It never renders a missing conversion as zero or NaN. Report form wording explains personal economic scope and consumption versus capital/transfers.
+- Queued report delivery re-reads configuration and rebuilds/compares the complete financial payload after rendering. Current recipients replace the stale queued snapshot. A withdrawal, household departure, changed financial values or disabled report prevents delivery. Tests mock every mail adapter; no real emails were sent.
+- Added a safe transaction DTO/projection for API responses and MCP read/search/update previews. Generated mirror text is generic in serialization and search predicates/counts, foreign private guidance/enrichment/import IDs/recurring IDs are stripped, and collaborators cannot replace a custodian's personal guidance/enrichment. Effective manual/AI category names use one fallback. Stored source text and audit fields remain untouched.
+- New internal-transfer mirrors are created with generic Transfer text and no copied private source merchant. Frontend transaction DTOs carry an explicit generated-mirror flag; purpose editing is hidden and rejected server-side for those derived legs.
+- Validation:73 focused backend tests passed in9files, including queued revocation during rendering and before execution, current recipients, changed-value rejection, cross-currency mixed portions, legacy generated text/search count suppression and private guidance.16 frontend tests passed in4files (including the email renderer subprocess),8 migrated PostgreSQL transaction-scope cases passed, TypeScript passed, focused lint passed. Runs overlap prior cases; do not sum counts as independent acceptance scenarios. Cached ephemeral runtime/current source mounts only; not candidate-image acceptance.
+
+### Required next audit/fix
+
+1. Automatic transfer groups currently use automatic IDs for transfer summaries but manual-only group IDs for peer purpose/netting. Explicit principal/consumption on an original bank leg with an automatic mirror could therefore leave the mirror counted as an additional boundary flow. Apply one selected-boundary group rule to manual and automatic peers in both activity-query.ts and financial_activity.py. Original bank purpose editing currently requires unlinking an automatic transfer; support explicit original-bank purposes without deleting the link while keeping generated mirrors derived/read-only. Test partial/full/date/account/private boundaries and preserve stored portions/provenance. Do not hide private peers to force reconciliation or call this complete until fixed.
+2. Finish the broader backend/AI/attachment/upload/cache and mutation revocation matrix, all ownership writers and functional-currency setting history. Some direct ORM mutations still authorize before a later flush; audit the write boundary too. The transaction projection does not by itself prove every consumer safe.
+3. Resolve the previously observed MCP metadata discovery404. Run full required automated checks and a source-image release-lab up from a stable committed revision (the lab still has migration-only cached-image rehearsals, no final source candidate app). Keep source containers/keys available, do not sync restored feeds, do not print secrets.
+4. Complete exact-revision migration twice/recovery receipts, privacy script and real browser journeys. Final objective-by-objective matrix, PR108 readiness/checks and concrete UAT outputs remain open. Goal remains active; no main/Pi/production promotion.
+
+## Automatic purpose boundary checkpoint
+
+- Manual and automatic link IDs now participate in the same selected-boundary peer-purpose calculation in both runtimes. Original bank records can retain automatic links while receiving explicit principal/consumption/investment portions. Generated mirrors remain derived transfer legs, not another allocation, and the UI labels that distinction.
+- Existing raw annotations on generated mirrors are preserved in storage/audit but cannot create independent income, spending or capital from a derived leg. This is a reporting correction, not a rewrite of bank records or stored portions. Original bank portions stay authoritative; a missing/private/out-of-date original leg is never consulted to explain a visible mirror.
+- Focused checks:19 frontend tests (15 PostgreSQL activity cases plus4 purpose mutation cases) passed;52 focused backend cases passed. Tested automatic linked principal/consumption, both views, source-only, mirror-only, date straddles, withdrawal/private peers and unchanged stored link/portion provenance. TypeScript passed.
+
+### Newly confirmed reconciliation gap (required, not optional)
+
+`frontend/lib/actions/transactions.ts::recalculateAccountBalancesFromDate` writes daily balances computed from the same transaction sums. The account_balances table currently has no observation provenance, so the existing exact-date reconciliation query can mistake such calculated rows for independent observations. Fix this before final acceptance: inventory all balance writers, record genuine bank/statement/manual observations separately from computed/legacy-unknown values, and allow only independent observations to prove reconciliation. Preserve existing values; never retro-certify unknown legacy rows as independent. Read backend balance services/import writers before selecting the additive schema and record the decision before writing that migration.
+
+Also audit overlapping manual+automatic links: current coalesced IDs handle ordinary individual groups, but an original with both kinds of group needs explicit conflict handling or one coherent graph rule. Existing link creation has no automatic-link guard. Prevent future ambiguous grouping, inventory any existing overlaps and avoid silent data changes. Frontend transaction-links.ts also has separate read/search DTOs that still need the generated-text/private metadata audit.
+
+Next source build/release-lab remains required. A first candidate can help find UI/runtime failures, but no current rehearsal or focused run is final exact-revision acceptance. Broad ownership/currency/writer/cache/attachment/AI checks, MCP metadata discovery, full automated gates, browser journeys, final migration/recovery receipts and PR/UAT delivery remain open. Goal remains active.
+
+## First source-image runtime checkpoint
+
+- `python3 scripts/release-lab.py up` completed from a frozen clean worktree at0ad1cf9d0c011f5f29c5f4c5264ec9bf749a46c9. Lab project remains syllogic-release-lab-9ea1348b04, loopback8128. App and backend are healthy; workers/beat are absent and copied feeds were not synced. The original syllogic-develop-uat deployment/volumes were inspected and left unchanged.
+- Both migration runs succeeded. Existing columns/values in all six compared core tables were preserved: users2→2, auth_accounts2→2, accounts2→2, transactions29→29, holdings0→0, broker_trades0→0. This comparison occurred before intentional test-account seeding. It is stronger than the earlier migration-only cached-image runs, but not the final implementation's receipt and not an all-table/restore certification.
+- Runtime source record is `.release-lab/runtime.json` (mode source-build, revision0ad1cf9...). `.release-lab/manifest.json::candidate` is the original prepare-time develop base36ccf6e... and must NOT be mistaken for the current runtime revision. Container OCI revision labels are empty; the controlled source-build record plus image IDs identify this intermediate run. Frontend image sha256:612b43ed529ac0befeec36c5bebf36c8af266f249b052735a1fa5625de31c83b; backend sha256:022a6d1396061c97ccdb7e0c9c8f346030976599c35936a222b498b802a872a5.
+- `release-lab.py accounts` prepared the isolated populated demo and fresh users and passed cookie-authenticated session/render checks (demo dashboard, transactions and investments; fresh root/onboarding). Credentials remain encrypted, never printed. These are HTTP rendering smoke checks, not yet real browser critical-journey acceptance.
+- Resolved the MCP discovery smoke failure: actual source image has FastMCP4.1.3; its401 challenge advertises `/.well-known/oauth-protected-resource/mcp`, which returns200. The root well-known path legitimately returns404. The test now follows the advertised URL and verifies the configured issuer.12 discovery/health/composite-auth tests pass inside an ephemeral container using the actual source-built backend image and a synthetic test DB. No production auth route was changed.
+
+### Balance writer inventory evidence for the next step
+
+- AccountBalanceService calculates SUM(Transaction.amount)+starting_balance and writes/re-writes daily cache rows. It currently substitutes native currency amounts when FX is missing; do not preserve that fallback in new calculations.
+- AccountBalanceService.import_daily_balances accepts supplied statement/CSV values, but only transient skip_dates protects them from later calculated rewrites. Provenance is not persistent.
+- Other writers found: frontend transactions.ts recalculation, superannuation.ts manual snapshot, csv-import.ts supplied statement balances; backend holding_valuation_service, broker_trade_service, demo_seed_service, up_account_reconciliation copying and account_balance_service. Read the complete paths before choosing ledger/provenance schema. Original values and references must be preserved; do not retro-certify legacy cache rows as independent observations.
+- A final preservation receipt must cover required balance/ownership/category/planning/attachment/audit data beyond the helper's six-table check, and test recovery after new writes. Keep encrypted configs/backups/logs private.
+
+Current source runtime is available for browser/debugging at localhost8128. Continue from the balance-provenance gap, link-overlap/linked-DTO privacy audit, remaining mutation/ownership/currency/history/cache/attachment/AI consumers, broad tests/privacy script and real browser matrix. Rebuild/rehearse the final recorded revision after those changes. PR108 stays draft; goal active; no main/Pi/production promotion.

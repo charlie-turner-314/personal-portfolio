@@ -4,7 +4,10 @@ import { fmtMoney, light } from "./tokens";
 export type TransactionItem = {
   description: string;
   date: string;
-  amount: string;
+  amount: string | null;
+  original_amount?:string;
+  original_currency?:string|null;
+  amount_label?:string;
   currency: string;
   direction: "in" | "out";
 };
@@ -31,7 +34,8 @@ export function TransactionsSection({ modeLabel, items }: { modeLabel: string; i
                 {t.description}
               </Text>
               <Text className="sy-muted" style={{ fontSize: "11px", color: light.mutedForeground, margin: "2px 0 0" }}>
-                {t.date}
+                {t.date}{t.amount_label?` · ${t.amount_label}`:""}
+                {t.original_amount!==undefined&&t.original_currency?` · Bank ${fmtMoney(t.original_amount,t.original_currency)}`:""}
               </Text>
             </Column>
             <Column style={{ padding: "11px 0", textAlign: "right", whiteSpace: "nowrap" }}>
@@ -41,7 +45,7 @@ export function TransactionsSection({ modeLabel, items }: { modeLabel: string; i
                 className={t.direction === "out" ? "sy-out" : "sy-fg"}
                 style={{ fontSize: "13px", fontWeight: 600, margin: 0, color: t.direction === "out" ? light.destructive : light.foreground }}
               >
-                {t.direction === "out" ? "−" : "+"}
+                {t.amount===null?"":t.direction === "out" ? "−" : "+"}
                 {fmtMoney(t.amount, t.currency)}
               </Text>
             </Column>

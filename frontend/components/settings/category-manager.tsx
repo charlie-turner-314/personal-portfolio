@@ -46,7 +46,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
   const [deleteTransactionCount, setDeleteTransactionCount] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const groupedCategories = groupCategoriesByType(categories);
+  const groupedCategories = groupCategoriesByType(categories.filter(category => !category.hideFromSelection));
 
   const getCategoriesByType = (type: CategoryType) => groupedCategories[type];
 
@@ -84,8 +84,8 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
       if (result.success) {
         setCategories(categories.filter((c) => c.id !== deletingCategory.id));
         const message = result.reassignedCount && result.reassignedCount > 0
-          ? `Category deleted. ${result.reassignedCount} transaction${result.reassignedCount !== 1 ? "s" : ""} ${reassignToCategoryId ? "reassigned" : "set to uncategorized"}.`
-          : "Category deleted";
+          ? `Category retired. ${result.reassignedCount} transaction${result.reassignedCount !== 1 ? "s" : ""} ${reassignToCategoryId ? "reassigned" : "left with their recorded classifications"}.`
+          : "Category retired; existing classifications are retained";
         toast.success(message);
         router.refresh();
         setDeleteDialogOpen(false);
@@ -219,6 +219,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
                 <CategoryRow
                   key={category.id}
                   category={input}
+                  readOnly={!category.userId}
                   onEdit={() => handleEdit(category)}
                   onDelete={() => handleDelete(category)}
                 />
@@ -251,7 +252,7 @@ export function CategoryManager({ initialCategories }: CategoryManagerProps) {
         <CardHeader>
           <CardTitle>Categories</CardTitle>
           <CardDescription>
-            Manage your transaction categories. Categories help you organize and track your spending.
+            Household members apply one shared vocabulary. Category creators manage their definitions; private guidance stays with its author. Retiring a category preserves recorded classifications.
           </CardDescription>
         </CardHeader>
         <CardContent>

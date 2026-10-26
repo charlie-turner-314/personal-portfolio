@@ -5,6 +5,7 @@ from typing import Optional
 
 from app.mcp.dependencies import get_db, validate_uuid
 from app.models import Category
+from app.services.financial_access import category_access, category_definition_for_actor, category_definitions_for_actor
 
 
 def list_categories(user_id: str, category_type: Optional[str] = None) -> list[dict]:
@@ -19,18 +20,17 @@ def list_categories(user_id: str, category_type: Optional[str] = None) -> list[d
         List of category dictionaries with id, name, type, color, icon, parent info
     """
     with get_db() as db:
-        query = db.query(Category).filter(Category.user_id == user_id)
-
+        categories = category_definitions_for_actor(db,user_id)
         if category_type:
-            query = query.filter(Category.category_type == category_type)
-
-        categories = query.order_by(Category.name).all()
+            categories = [category for category in categories if category.category_type == category_type]
 
         return [
             {
                 "id": str(cat.id),
                 "name": cat.name,
                 "category_type": cat.category_type,
+                "cash_flow_kind": cat.cash_flow_kind,
+                "hide_from_selection": cat.hide_from_selection,
                 "color": cat.color,
                 "icon": cat.icon,
                 "description": cat.description,
@@ -58,18 +58,17 @@ def get_category(user_id: str, category_id: str) -> dict | None:
         return None
 
     with get_db() as db:
-        category = db.query(Category).filter(
-            Category.id == category_uuid,
-            Category.user_id == user_id
-        ).first()
+        category = next((category for category in category_definitions_for_actor(db,user_id) if category.id == category_uuid),None)
 
         if not category:
             return None
 
+        category = category_definition_for_actor(category, user_id)
         return {
             "id": str(category.id),
             "name": category.name,
             "category_type": category.category_type,
+            "cash_flow_kind": category.cash_flow_kind,
             "color": category.color,
             "icon": category.icon,
             "description": category.description,
@@ -141,6 +140,7 @@ def update_category(
                 "id": str(category.id),
                 "name": category.name,
                 "category_type": category.category_type,
+            "cash_flow_kind": category.cash_flow_kind,
                 "color": category.color,
                 "icon": category.icon,
                 "description": category.description,
@@ -162,9 +162,7 @@ def get_category_tree(user_id: str) -> list[dict]:
         List of root categories, each with nested 'children' list
     """
     with get_db() as db:
-        categories = db.query(Category).filter(
-            Category.user_id == user_id
-        ).order_by(Category.name).all()
+        categories = category_definitions_for_actor(db,user_id)
 
         # Build lookup map
         cat_map = {}
@@ -173,6 +171,8 @@ def get_category_tree(user_id: str) -> list[dict]:
                 "id": str(cat.id),
                 "name": cat.name,
                 "category_type": cat.category_type,
+                "cash_flow_kind": cat.cash_flow_kind,
+                "hide_from_selection": cat.hide_from_selection,
                 "color": cat.color,
                 "icon": cat.icon,
                 "description": cat.description,

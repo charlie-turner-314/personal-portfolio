@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.session.mockResolvedValue({ user: { id: "current-user" } });
   mocks.execute.mockImplementation(async (query: string) => ({
-    rows: query.includes('"functional_currency"') ? [["AUD"]] : [["3250"]],
+    rows: query.includes('order by "accounts"."name"') ? [["selected-account","Selected",null,"checking","AUD",true]] : query.includes('"functional_currency"') ? [["AUD"]] : [["3250"]],
   }));
 });
 
@@ -35,7 +35,7 @@ describe("dashboard cash queries", () => {
     expect(query).not.toMatch(/ABS\(|GREATEST\(/i);
     expect(query).toContain('"accounts"."is_active"');
     expect(query).toContain("ORDER BY ab.date DESC LIMIT 1");
-    expect(query).toContain('"accounts"."functional_balance"');
+    expect(query).toContain("accounts.functional_balance");
     expect(query).toContain("ab.date::date <= CURRENT_DATE");
   });
 
@@ -44,7 +44,7 @@ describe("dashboard cash queries", () => {
     const [query, params] = mocks.execute.mock.calls.find(([query]) => query.includes("SUM"))!;
     expect(params).toContain("selected-account");
     expect(params).toContain("person-half");
-    expect(query).toMatch(/effective_from <= \(CURRENT_DATE\)::date/);
+    expect(query).toMatch(/effective_from\s*<=\s*\(CURRENT_DATE\)::date/);
   });
 
   it("carries cash snapshots forward separately and never reads net-worth snapshots", async () => {
@@ -112,6 +112,11 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
         ('checking', CURRENT_DATE + 1, 123456),
         ('savings', CURRENT_DATE - 1, 2000),
         ('overdraft', CURRENT_DATE - 5, -250);
+      ALTER TABLE accounts ADD COLUMN currency text DEFAULT 'AUD';
+      ALTER TABLE account_balances ADD COLUMN balance_in_account_currency numeric;
+      UPDATE account_balances SET balance_in_account_currency=balance_in_functional_currency;
+      CREATE TEMP TABLE users(id text,functional_currency text);
+      INSERT INTO users VALUES ('current-user','AUD'),('other-user','AUD');
       INSERT INTO people(id,user_id,kind) VALUES ('person-half', 'current-user', 'self');
       INSERT INTO account_ownership_allocations
         SELECT id, 'person-half', CURRENT_DATE - 30, 0.5 FROM accounts;
@@ -123,6 +128,6 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
     const output = execFileSync("docker", ["exec", "-i", process.env.CASH_TEST_POSTGRES_CONTAINER!, "psql", "-U", "postgres", "-d", "postgres", "-Atq", "-v", "ON_ERROR_STOP=1"], { input: fixture, encoding: "utf8" }).trim().split("\n");
     expect(Number(output[0])).toBe(3250);
     expect(Number(output[1])).toBe(1625);
-    expect(output.slice(2).map(line => Number(line.split("|")[1]))).toEqual([750, 2750, 3250]);
+    expect(output.slice(2).map(line => line.split("|")[1] ? Number(line.split("|")[1]) : null)).toEqual([null, null, 3250]);
   });
 });

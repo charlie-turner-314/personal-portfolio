@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath, updateTag } from "next/cache";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, categories, type User, type NewCategory } from "@/lib/db/schema";
 import { getAuthenticatedSession, requireAuth } from "@/lib/auth-helpers";
@@ -168,7 +168,7 @@ export type { CategoryInput } from "./categories";
 
 /**
  * Save onboarding categories (step 2)
- * This replaces all existing categories with the provided ones
+ * This retires existing selection definitions without deleting historical references
  * Sets onboardingStatus to step_2 upon success
  */
 export async function saveOnboardingCategories(
@@ -186,8 +186,13 @@ export async function saveOnboardingCategories(
   }
 
   try {
-    // Delete existing categories
-    await db.delete(categories).where(eq(categories.userId, userId));
+    await db.transaction(async tx => {
+    // Retain every existing classification and planning reference.
+    await tx.update(categories).set({ hideFromSelection: true }).where(eq(categories.userId, userId));
+    await tx.execute(sql`INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+      SELECT coalesce((SELECT owner_user_id FROM household_memberships WHERE member_user_id=${userId}),${userId}),id,true
+      FROM categories WHERE user_id=${userId}
+      ON CONFLICT(owner_user_id,category_id) DO UPDATE SET hidden_from_selection=true`);
 
     // Insert new categories
     const newCategories: NewCategory[] = categoryInputs.map((cat) => ({
@@ -204,17 +209,19 @@ export async function saveOnboardingCategories(
     }));
 
     if (newCategories.length > 0) {
-      await db.insert(categories).values(newCategories);
+      await tx.insert(categories).values(newCategories);
     }
 
     // Update onboarding status
-    await db
+    await tx
       .update(users)
       .set({
         onboardingStatus: "step_2",
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));
+
+    });
 
     updateTag(CACHE_TAGS.onboarding(userId));
     updateTag(CACHE_TAGS.categories(userId));

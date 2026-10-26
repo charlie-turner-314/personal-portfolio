@@ -6,7 +6,9 @@ import {
   vehicleOwners,
   users,
 } from "@/lib/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
+
+import { ownershipShareSql, propertyOwnershipShareSql, vehicleOwnershipShareSql } from "./ownership-sql";
 
 export type EntityType = "account" | "property" | "vehicle";
 
@@ -47,86 +49,49 @@ export async function getSelfPersonId(userId: string): Promise<string> {
   }
 }
 
-export async function getOwners(entityType: EntityType, entityId: string) {
-  const table =
-    entityType === "account"
-      ? accountOwners
-      : entityType === "property"
-        ? propertyOwners
-        : vehicleOwners;
-  const idCol =
-    entityType === "account"
-      ? accountOwners.accountId
-      : entityType === "property"
-        ? propertyOwners.propertyId
-        : vehicleOwners.vehicleId;
-  const rows = await db.select().from(table).where(eq(idCol, entityId));
-  return rows.map((r) => ({
-    personId: r.personId,
-    share: r.share === null ? null : Number(r.share),
-  }));
+export async function getOwners(entityType: EntityType, entityId: string, asOf?: string) {
+  return (await getOwnersForEntities(entityType, [entityId], asOf)).get(entityId) ?? [];
 }
 
-/**
- * Batched lookup: returns a Map of entityId -> owners[] for all `entityIds`.
- * Used by server components to avoid an N-request fetch waterfall on list pages.
- */
-export async function getOwnersForEntities(
-  entityType: EntityType,
-  entityIds: string[]
-): Promise<Map<string, { personId: string; share: number | null }[]>> {
+/** Resolve the latest complete set for every entity at the requested date. */
+export async function getOwnersForEntities(entityType: EntityType, entityIds: string[], asOf?: string): Promise<Map<string, { personId: string; share: number | null }[]>> {
   const out = new Map<string, { personId: string; share: number | null }[]>();
-  if (entityIds.length === 0) return out;
-
-  const push = (eid: string, personId: string, share: string | null) => {
-    const list = out.get(eid) ?? [];
-    list.push({ personId, share: share === null ? null : Number(share) });
-    out.set(eid, list);
-  };
-
-  if (entityType === "account") {
-    const rows = await db
-      .select()
-      .from(accountOwners)
-      .where(inArray(accountOwners.accountId, entityIds));
-    for (const r of rows) push(r.accountId, r.personId, r.share);
-  } else if (entityType === "property") {
-    const rows = await db
-      .select()
-      .from(propertyOwners)
-      .where(inArray(propertyOwners.propertyId, entityIds));
-    for (const r of rows) push(r.propertyId, r.personId, r.share);
-  } else {
-    const rows = await db
-      .select()
-      .from(vehicleOwners)
-      .where(inArray(vehicleOwners.vehicleId, entityIds));
-    for (const r of rows) push(r.vehicleId, r.personId, r.share);
+  if (!entityIds.length) return out;
+  const history = sql.identifier(`${entityType}_ownership_allocations`);
+  const legacy = sql.identifier(`${entityType}_owners`);
+  const resource = sql.identifier(entityType === "property" ? "properties" : `${entityType}s`);
+  const field = (alias: string) => sql`${sql.identifier(alias)}.${sql.identifier(`${entityType}_id`)}`;
+  const ids = sql.join(entityIds.map(id => sql`${id}::uuid`), sql`, `);
+  const when = asOf ? sql`${asOf}::date` : sql`CURRENT_DATE`;
+  const rows = await db.execute(sql`SELECT ${field("history")}::text AS entity_id, history.person_id::text, history.share::text
+    FROM ${history} history WHERE ${field("history")} IN (${ids}) AND history.effective_from=(
+      SELECT max(latest.effective_from) FROM ${history} latest WHERE ${field("latest")}=${field("history")} AND latest.effective_from<=${when})
+    UNION ALL
+    SELECT ${field("legacy")}::text, legacy.person_id::text,
+      coalesce(legacy.share,1.0/(SELECT count(*) FROM ${legacy} peers WHERE ${field("peers")}=${field("legacy")}))::text
+    FROM ${legacy} legacy WHERE ${field("legacy")} IN (${ids})
+      AND NOT EXISTS(SELECT 1 FROM ${history} history WHERE ${field("history")}=${field("legacy")})
+    UNION ALL
+    SELECT owned.id::text,person.id::text,'1' FROM ${resource} owned JOIN people person ON person.user_id=owned.user_id AND person.kind='self'
+    WHERE owned.id IN (${ids}) AND NOT EXISTS(SELECT 1 FROM ${history} history WHERE ${field("history")}=owned.id)
+      AND NOT EXISTS(SELECT 1 FROM ${legacy} legacy WHERE ${field("legacy")}=owned.id)
+    ORDER BY entity_id,person_id`);
+  for (const row of rows) {
+    const id = String(row.entity_id);
+    const owners = out.get(id) ?? [];
+    owners.push({ personId: String(row.person_id), share: Number(row.share) });
+    out.set(id, owners);
   }
   return out;
 }
 
 /** Returns the set of entity ids of `entityType` owned by ANY of `personIds`. */
-export async function listEntityIdsForPeople(
-  entityType: EntityType,
-  personIds: string[]
-): Promise<string[]> {
-  if (personIds.length === 0) return [];
-  const table =
-    entityType === "account"
-      ? accountOwners
-      : entityType === "property"
-        ? propertyOwners
-        : vehicleOwners;
-  const idCol =
-    entityType === "account"
-      ? accountOwners.accountId
-      : entityType === "property"
-        ? propertyOwners.propertyId
-        : vehicleOwners.vehicleId;
-  const rows = await db
-    .select({ id: idCol })
-    .from(table)
-    .where(inArray(table.personId, personIds));
-  return Array.from(new Set(rows.map((r) => r.id)));
+export async function listEntityIdsForPeople(entityType: EntityType, personIds: string[], asOf?: string): Promise<string[]> {
+  if (!personIds.length) return [];
+  const resource = sql.identifier(entityType === "property" ? "properties" : `${entityType}s`);
+  const resolver = entityType === "account" ? ownershipShareSql : entityType === "property" ? propertyOwnershipShareSql : vehicleOwnershipShareSql;
+  const when = asOf ? sql`${asOf}::date` : sql`CURRENT_DATE`;
+  const rows = await db.execute(sql`SELECT resource.id::text FROM ${resource} resource WHERE
+    ${sql.join(personIds.map(personId => sql`(${resolver(personId,sql`resource.id`,when)}) > 0`),sql` OR `)}`);
+  return rows.map(row=>String(row.id));
 }

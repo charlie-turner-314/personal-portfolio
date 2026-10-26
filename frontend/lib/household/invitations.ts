@@ -1,16 +1,11 @@
+import { mergeVocabularyOnJoin, retainHouseholdVocabulary } from "./vocabulary";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { householdInvitations, householdMemberships, householdAccountShares, householdNetWorthShares, householdPropertyShares, upAccountSources, people, users } from "@/lib/db/schema";
 import { assertInvitationAcceptable, hashInvitationToken, INVITATION_LIFETIME_MS, newInvitationToken, normalizeInvitationEmail } from "./invitation-policy";
 
-// Serialize household graph changes, including reciprocal invites/acceptance.
-// The transaction-scoped lock is released on both success and rollback.
-export async function householdTransaction<T>(work: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(73194, 1)`);
-    return work(tx);
-  });
-}
+import { householdTransaction } from "./transaction";
+export { householdTransaction } from "./transaction";
 
 export async function createHouseholdInvitation(actorUserId: string, personId: string, email: string) {
   const normalizedEmail = normalizeInvitationEmail(email);
@@ -55,6 +50,7 @@ export async function acceptHouseholdInvitation(actorUserId: string, token: stri
     if (!person) throw new Error("This household person is no longer available");
     if (person.linkedUserId && person.linkedUserId !== actorUserId) throw new Error("This household person is already linked to another login");
     await tx.update(people).set({ linkedUserId: actorUserId }).where(eq(people.id, person.id));
+    await mergeVocabularyOnJoin(tx, actorUserId, invitation.ownerUserId);
     await tx.insert(householdMemberships).values({ memberUserId: actorUserId, ownerUserId: invitation.ownerUserId, personId: invitation.personId });
     await tx.update(householdInvitations).set({ consumedAt: new Date() }).where(eq(householdInvitations.id, invitation.id));
     // Joining cannot leave outstanding invitations capable of creating nested households.
@@ -78,7 +74,10 @@ export async function revokeHouseholdAccess(actorUserId: string, personId: strin
     const [person] = await tx.select().from(people).where(and(eq(people.id, personId), eq(people.userId, actorUserId)));
     if (!person || person.kind !== "member") throw new Error("Only the household owner can revoke access");
     const linked = await tx.select().from(householdMemberships).where(and(eq(householdMemberships.ownerUserId, actorUserId), eq(householdMemberships.personId, personId)));
-    for (const member of linked) await clearFinancialShares(tx, member.memberUserId);
+    for (const member of linked) {
+      await retainHouseholdVocabulary(tx, actorUserId, [member.memberUserId]);
+      await clearFinancialShares(tx, member.memberUserId);
+    }
     await tx.delete(householdMemberships).where(and(eq(householdMemberships.ownerUserId, actorUserId), eq(householdMemberships.personId, personId)));
     await tx.update(householdInvitations).set({ consumedAt: new Date() }).where(and(eq(householdInvitations.ownerUserId, actorUserId), eq(householdInvitations.personId, personId), isNull(householdInvitations.consumedAt)));
   });
@@ -86,7 +85,27 @@ export async function revokeHouseholdAccess(actorUserId: string, personId: strin
 
 export async function leaveHousehold(actorUserId: string) {
   await householdTransaction(async (tx) => {
+    const [membership] = await tx.select().from(householdMemberships).where(eq(householdMemberships.memberUserId, actorUserId));
+    if (!membership) throw new Error("Only household members can leave; dissolve the household to end it");
+    await retainHouseholdVocabulary(tx, membership.ownerUserId, [actorUserId]);
     await clearFinancialShares(tx, actorUserId);
     await tx.delete(householdMemberships).where(eq(householdMemberships.memberUserId, actorUserId));
+  });
+}
+
+/** Dissolution retains all custody, credentials, financial records and people. */
+export async function dissolveHousehold(actorUserId: string) {
+  await householdTransaction(async tx => {
+    const [membership] = await tx.select().from(householdMemberships)
+      .where(eq(householdMemberships.memberUserId, actorUserId));
+    if (membership) throw new Error("Only the household administrator can dissolve a household");
+    const members = await tx.select().from(householdMemberships)
+      .where(eq(householdMemberships.ownerUserId, actorUserId));
+    await retainHouseholdVocabulary(tx, actorUserId, members.map(member => member.memberUserId));
+    for (const member of members) await clearFinancialShares(tx, member.memberUserId);
+    await clearFinancialShares(tx, actorUserId);
+    await tx.delete(householdMemberships).where(eq(householdMemberships.ownerUserId, actorUserId));
+    await tx.update(householdInvitations).set({ consumedAt: new Date() }).where(and(
+      eq(householdInvitations.ownerUserId, actorUserId), isNull(householdInvitations.consumedAt)));
   });
 }

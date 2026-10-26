@@ -2,26 +2,12 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accounts } from "@/lib/db/schema";
 import { LIABILITY_ACCOUNT_TYPE_VALUES } from "@/lib/constants/account-types";
-import { propertyOwnershipShareSql } from "@/lib/people/ownership-sql";
+import { ownershipShareSql, propertyOwnershipShareSql, vehicleOwnershipShareSql } from "@/lib/people/ownership-sql";
 import { accountAccess, propertyAccess, sameHousehold } from "./account-access";
 
 /** Economic ownership is independent of access. Resolve dated allocations first. */
 function accountShare(owner: SQL): SQL {
-  const actorPeople = sql`select id from people where linked_user_id = ${owner} or (user_id = ${owner} and kind = 'self')
-    union select person_id from household_memberships where member_user_id = ${owner}`;
-  return sql`case
-    when exists(select 1 from account_ownership_allocations h where h.account_id = accounts.id) then coalesce((
-      select sum(a.share) from account_ownership_allocations a where a.account_id = accounts.id
-        and a.person_id in (${actorPeople}) and a.effective_from = (
-          select max(d.effective_from) from account_ownership_allocations d
-          where d.account_id = accounts.id and d.effective_from <= current_date
-        )
-    ), 0)
-    when exists(select 1 from account_owners l where l.account_id = accounts.id) then coalesce((
-      select sum(coalesce(l.share, 1.0 / (select count(*) from account_owners n where n.account_id = accounts.id)))
-      from account_owners l where l.account_id = accounts.id and l.person_id in (${actorPeople})
-    ), 0)
-    else case when accounts.user_id = ${owner} then 1 else 0 end end`;
+  return ownershipShareSql({ userId: owner }, sql`accounts.id`, sql`CURRENT_DATE`);
 }
 
 export type VisibleNetWorthTotal = { userId: string; name: string | null; currency: string; total: string | null; isOwn: boolean };
@@ -76,11 +62,7 @@ export async function getVisibleNetWorthTotals(actorUserId: string): Promise<Vis
       where p.is_active = true and ${propertyAccess(sql`p.id`, owner)}
       union all
       select visible_owner.id, visible_owner.name, visible_owner.currency, coalesce(v.currency, visible_owner.currency),
-        coalesce(v.current_value, 0) * case when exists(select 1 from vehicle_owners vo where vo.vehicle_id = v.id)
-          then coalesce((select sum(coalesce(vo.share, 1.0 / (select count(*) from vehicle_owners n where n.vehicle_id = v.id)))
-            from vehicle_owners vo join people person on person.id = vo.person_id
-            where vo.vehicle_id = v.id and person.user_id = visible_owner.id and person.kind = 'self'), 0)
-          else 1 end
+        coalesce(v.current_value, 0) * ${vehicleOwnershipShareSql({ userId: owner }, sql`v.id`)}
       from visible_owners visible_owner join vehicles v on v.user_id = visible_owner.id where v.is_active = true
     ), converted as materialized (
       select value_row.*, case when value = 0 then 0 when source_currency = target_currency then value else value * coalesce(

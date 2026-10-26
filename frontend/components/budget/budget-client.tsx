@@ -85,6 +85,7 @@ interface BudgetAccount {
   name: string;
   institution: string | null;
   accountType: string;
+  isActive?:boolean|null;
 }
 
 type HouseholdPerson = { id: string; name: string };
@@ -108,7 +109,8 @@ type PlannedExpenseFormState = {
   notes: string;
 };
 
-function formatCurrency(value: number, currency: string): string {
+function formatCurrency(value: number|null, currency: string): string {
+  if(value===null) return "Unavailable";
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency,
@@ -409,21 +411,26 @@ export function BudgetClient({
       (sum, line) => sum + parseAmount(line.plannedInput),
       0
     );
-    const actualAmount = lines.reduce((sum, line) => sum + line.actualAmount, 0);
+    const actualAmount = lines.some(line=>line.actualAmount===null)||data.unclassifiedActuals?.amount===null?null
+      :lines.reduce((sum,line)=>sum+(line.actualAmount??0),data.unclassifiedActuals?.amount??0);
     const categoriesOverBudget = lines.filter((line) => {
       const planned = parseAmount(line.plannedInput);
-      return planned > 0 && line.actualAmount > planned;
+      return planned > 0 && line.actualAmount!==null && line.actualAmount > planned;
     }).length;
 
     return {
       plannedAmount,
       actualAmount,
-      remainingAmount: plannedAmount - actualAmount,
+      consumptionAmount:lines.some(line=>line.consumptionAmount===null)||data.unclassifiedActuals?.consumptionAmount===null?null
+        :lines.reduce((sum,line)=>sum+(line.consumptionAmount??line.actualAmount??0),data.unclassifiedActuals?.consumptionAmount??0),
+      capitalAmount:lines.some(line=>line.capitalAmount===null)||data.unclassifiedActuals?.capitalAmount===null?null
+        :lines.reduce((sum,line)=>sum+(line.capitalAmount??0),data.unclassifiedActuals?.capitalAmount??0),
+      remainingAmount: actualAmount===null?null:plannedAmount - actualAmount,
       usedPct:
-        plannedAmount > 0 ? Math.round((actualAmount / plannedAmount) * 100) : 0,
-      categoriesOverBudget,
+        actualAmount===null?null:plannedAmount > 0 ? Math.round((actualAmount / plannedAmount) * 100) : 0,
+      categoriesOverBudget:actualAmount===null?null:categoriesOverBudget,
     };
-  }, [lines]);
+  }, [lines,data.unclassifiedActuals]);
 
   const selectedAccountSet = useMemo(
     () => new Set(data.accountIds),
@@ -433,12 +440,11 @@ export function BudgetClient({
   const canApplyPlanForward = data.monthKey >= new Date().toISOString().slice(0, 7);
   const accountTriggerText = isAllAccountsSelected ? "All accounts" : "Accounts";
   const actualScopeText = isAllAccountsSelected
-    ? "Actuals include all accounts."
-    : `Actuals filtered to ${data.accountIds.length} account${data.accountIds.length === 1 ? "" : "s"}.`;
+    ? `Actuals cover: ${accounts.map(account=>`${account.name}${account.isActive===false?" (closed)":""}`).join(", ")||"No permitted accounts"}. Other private accounts are excluded.`
+    : `Actuals cover: ${accounts.filter(account=>data.accountIds.includes(account.id)).map(account=>`${account.name}${account.isActive===false?" (closed)":""}`).join(", ")}.`;
 
-  const attributionScopeText = data.personId
-    ? " Actuals are attributed to the selected household person; plans remain household-wide."
-    : "";
+  const attributionScopeText = data.personId==="all"?" Household view counts each included record once. Plans remain personal."
+    : data.personId?" Actuals use the selected person’s economic share. Plans remain personal.":" My view uses your economic share. Plans remain personal.";
 
   const buildBudgetPath = (monthKey: string, accountIds: string[]) => {
     const params = new URLSearchParams();
@@ -514,18 +520,19 @@ export function BudgetClient({
   };
 
   const useLastMonthsSpending = () => {
-    if (!lines.some((line) => line.previousMonthActualAmount > 0)) {
-      toast.info("No spending found last month");
+    if(lines.some(line=>line.previousMonthActualAmount===null)) { toast.info("Previous actuals are incomplete. Set a plan explicitly instead of assuming zero."); return; }
+    if (!lines.some((line) => line.previousMonthActualAmount!==null && line.previousMonthActualAmount > 0)) {
+      toast.info("No included category movements found last month");
       return;
     }
 
     setLines((current) =>
       current.map((line) => ({
         ...line,
-        plannedInput: amountToInput(line.previousMonthActualAmount),
+        plannedInput: amountToInput(line.previousMonthActualAmount??0),
       }))
     );
-    toast.info("Last month's spending added to your plan. Save when you're ready.");
+    toast.info("Last month's included category movements added to your personal plan. Save when you're ready.");
   };
 
   const handleOpenFuturePlan = () => {
@@ -714,13 +721,14 @@ export function BudgetClient({
               </PopoverContent>
             </Popover>
           )}
-          {people.length > 1 && (
-            <Select value={data.personId ?? "all"} onValueChange={(value) => updatePerson(!value || value === "all" ? "" : value)}>
+          {(
+            <Select value={data.personId ?? "mine"} onValueChange={(value) => updatePerson(!value || value === "mine" ? "" : value)}>
               <SelectTrigger className="w-[160px]">
                 <SelectValue placeholder="Household" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Whole household</SelectItem>
+                <SelectItem value="mine">My view</SelectItem>
+                <SelectItem value="all">Household view</SelectItem>
                 {people.map((person) => (
                   <SelectItem key={person.id} value={person.id}>{person.name}</SelectItem>
                 ))}
@@ -828,10 +836,11 @@ export function BudgetClient({
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Actual</CardTitle>
+            <CardTitle>Actual movements</CardTitle>
           </CardHeader>
           <CardContent className="text-lg font-medium tabular-nums">
             {formatCurrency(totals.actualAmount, data.currency)}
+            <p className="mt-2 text-xs font-normal text-muted-foreground">Consumption {formatCurrency(totals.consumptionAmount,data.currency)} · capital {formatCurrency(totals.capitalAmount,data.currency)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -841,7 +850,7 @@ export function BudgetClient({
           <CardContent
             className={cn(
               "text-lg font-medium tabular-nums",
-              totals.remainingAmount < 0 && "text-destructive"
+              totals.remainingAmount !== null && totals.remainingAmount < 0 && "text-destructive"
             )}
           >
             {formatCurrency(totals.remainingAmount, data.currency)}
@@ -852,7 +861,7 @@ export function BudgetClient({
             <CardTitle>Over Budget</CardTitle>
           </CardHeader>
           <CardContent className="text-lg font-medium tabular-nums">
-            {totals.categoriesOverBudget}
+            {totals.categoriesOverBudget??"Unavailable"}
           </CardContent>
         </Card>
       </div>
@@ -860,14 +869,17 @@ export function BudgetClient({
       <Card>
         <CardHeader>
           <CardTitle>Monthly Budget</CardTitle>
+          <p className="text-sm text-muted-foreground">Personal category plans compare recorded consumption and capital movements. Capital is shown separately and is not consumption. Unclassified movements remain visible; transfers are outside category plans.</p>
+          {data.unclassifiedActuals && <p className="text-sm text-muted-foreground">Unclassified movements: {formatCurrency(data.unclassifiedActuals.amount,data.currency)}. Categorise them in Transactions to assign a plan.</p>}
+          {totals.actualAmount===null && <p role="status" className="text-sm text-muted-foreground">Actuals are incomplete while an included amount lacks currency conversion. Remaining amounts and usage are unavailable.</p>}
         </CardHeader>
         <CardContent>
           <div className="mb-4">
             <div className="mb-2 flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Total used</span>
-              <span className="tabular-nums">{totals.usedPct}%</span>
+              <span className="tabular-nums">{totals.usedPct===null?"Unavailable":`${totals.usedPct}%`}</span>
             </div>
-            <Progress value={Math.min(totals.usedPct, 100)} />
+            <Progress value={Math.min(totals.usedPct??0, 100)} />
           </div>
 
           {lines.length === 0 ? (
@@ -879,9 +891,9 @@ export function BudgetClient({
               <div className="space-y-3 md:hidden">
                 {lines.map((line) => {
                   const plannedAmount = parseAmount(line.plannedInput);
-                  const remainingAmount = plannedAmount - line.actualAmount;
+                  const remainingAmount = line.actualAmount===null?null:plannedAmount - line.actualAmount;
                   const usedPct =
-                    plannedAmount > 0
+                    line.actualAmount===null?null:plannedAmount > 0
                       ? Math.round((line.actualAmount / plannedAmount) * 100)
                       : 0;
 
@@ -936,13 +948,14 @@ export function BudgetClient({
                           >
                             {formatCurrency(line.actualAmount, data.currency)}
                           </button>
+                          <p className="text-xs text-muted-foreground">Consumption {formatCurrency(line.consumptionAmount===undefined?line.actualAmount:line.consumptionAmount,data.currency)} · capital {formatCurrency(line.capitalAmount===undefined?0:line.capitalAmount,data.currency)}</p>
                         </div>
                         <div className="space-y-1">
                           <span className="text-muted-foreground">Remaining</span>
                           <div
                             className={cn(
                               "h-8 border px-2 py-2 text-right tabular-nums",
-                              remainingAmount < 0 && "text-destructive"
+                              remainingAmount !== null && remainingAmount < 0 && "text-destructive"
                             )}
                           >
                             {formatCurrency(remainingAmount, data.currency)}
@@ -952,11 +965,11 @@ export function BudgetClient({
                           <span className="text-muted-foreground">Used</span>
                           <div className="flex h-8 items-center gap-2">
                             <Progress
-                              value={Math.min(usedPct, 100)}
+                              value={Math.min(usedPct??0, 100)}
                               className="min-w-0 flex-1"
                             />
                             <span className="w-10 text-right tabular-nums text-muted-foreground">
-                              {usedPct}%
+                              {usedPct===null?"Unavailable":`${usedPct}%`}
                             </span>
                           </div>
                         </div>
@@ -1006,9 +1019,9 @@ export function BudgetClient({
                   <TableBody>
                     {lines.map((line) => {
                       const plannedAmount = parseAmount(line.plannedInput);
-                      const remainingAmount = plannedAmount - line.actualAmount;
+                      const remainingAmount = line.actualAmount===null?null:plannedAmount - line.actualAmount;
                       const usedPct =
-                        plannedAmount > 0
+                        line.actualAmount===null?null:plannedAmount > 0
                           ? Math.round((line.actualAmount / plannedAmount) * 100)
                           : 0;
 
@@ -1051,22 +1064,23 @@ export function BudgetClient({
                                 {formatCurrency(line.actualAmount, data.currency)}
                                 <RiExternalLinkLine data-icon="inline-end" />
                               </Button>
+                              <p className="text-xs text-muted-foreground">Consumption {formatCurrency(line.consumptionAmount===undefined?line.actualAmount:line.consumptionAmount,data.currency)} · capital {formatCurrency(line.capitalAmount===undefined?0:line.capitalAmount,data.currency)}</p>
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <Progress
-                                  value={Math.min(usedPct, 100)}
+                                  value={Math.min(usedPct??0, 100)}
                                   className="min-w-20 flex-1"
                                 />
                                 <span className="w-10 text-right tabular-nums text-muted-foreground">
-                                  {usedPct}%
+                                  {usedPct===null?"Unavailable":`${usedPct}%`}
                                 </span>
                               </div>
                             </TableCell>
                             <TableCell
                               className={cn(
                                 "text-right tabular-nums",
-                                remainingAmount < 0 && "text-destructive"
+                                remainingAmount !== null && remainingAmount < 0 && "text-destructive"
                               )}
                             >
                               {formatCurrency(remainingAmount, data.currency)}

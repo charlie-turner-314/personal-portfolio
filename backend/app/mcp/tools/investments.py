@@ -117,7 +117,7 @@ def list_holdings_impl(
                 cache_key, get_owners(db, "account", h.account_id, as_of=v.date)
             )
             weighted_value = attribute_amount(
-                float(visible_value), owners, person_ids[0]
+                float(visible_value), owners, person_ids[0], db=db
             )
             value_str = str(Decimal(str(weighted_value)))
         out.append(
@@ -220,7 +220,7 @@ def get_portfolio_summary_impl(
             owners = owners_cache.setdefault(
                 cache_key, get_owners(db, "account", h.account_id, as_of=v.date)
             )
-            val = Decimal(str(attribute_amount(float(val), owners, person_ids[0])))
+            val = Decimal(str(attribute_amount(float(val), owners, person_ids[0], db=db)))
         total += val
         if v.is_stale:
             stale_count += 1
@@ -322,7 +322,7 @@ def get_portfolio_history_impl(
             owners = owners_cache.setdefault(
                 cache_key, get_owners(db, "account", r.account_id, as_of=balance_date)
             )
-            val = Decimal(str(attribute_amount(float(val), owners, person_ids[0])))
+            val = Decimal(str(attribute_amount(float(val), owners, person_ids[0], db=db)))
         by_date.setdefault(key, Decimal("0"))
         by_date[key] += val
 

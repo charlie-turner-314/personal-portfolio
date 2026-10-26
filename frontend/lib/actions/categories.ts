@@ -1,8 +1,9 @@
 "use server";
 
+import { categoryAccess, categoryDefinitionForActor, categorySelectionHidden } from "@/lib/household/category-access";
 import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
-import { eq, and, count, sql, or, asc } from "drizzle-orm";
+import { eq, and, count, sql, asc, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { categories, transactions, type Category, type NewCategory } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/household/financial-auth";
@@ -58,7 +59,8 @@ export async function createCategory(
       where: and(
         eq(categories.userId, userId),
         eq(categories.name, input.name.trim()),
-        eq(categories.categoryType, input.categoryType)
+        eq(categories.categoryType, input.categoryType),
+        input.cashFlowKind ? eq(categories.cashFlowKind,input.cashFlowKind) : isNull(categories.cashFlowKind)
       ),
     });
 
@@ -117,6 +119,10 @@ export async function updateCategory(
       return { success: false, error: "Invalid cash-flow purpose for this category" };
     }
 
+    if (input.cashFlowKind !== undefined && input.cashFlowKind !== existing.cashFlowKind) {
+      return { success:false, error:"Financial type and cash-flow purpose are fixed. Create a new definition for a different meaning" };
+    }
+
     // System categories accept description/categorization_instructions updates
     // (user-tailored context) but reject structural changes.
     if (existing.isSystem) {
@@ -155,7 +161,8 @@ export async function updateCategory(
         where: and(
           eq(categories.userId, userId),
           eq(categories.name, input.name.trim()),
-          eq(categories.categoryType, existing.categoryType)
+          eq(categories.categoryType, existing.categoryType),
+          existing.cashFlowKind ? eq(categories.cashFlowKind,existing.cashFlowKind) : isNull(categories.cashFlowKind)
         ),
       });
 
@@ -188,82 +195,22 @@ export async function updateCategory(
   }
 }
 
-export async function deleteCategory(
-  categoryId: string
-): Promise<{ success: boolean; error?: string }> {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return { success: false, error: "Not authenticated" };
-  }
-
-  try {
-    // Get the existing category
-    const existing = await db.query.categories.findFirst({
-      where: and(
-        eq(categories.id, categoryId),
-        eq(categories.userId, userId)
-      ),
-    });
-
-    if (!existing) {
-      return { success: false, error: "Category not found" };
-    }
-
-    if (existing.isSystem) {
-      return { success: false, error: "System categories cannot be deleted" };
-    }
-
-    // Clear categoryId references on transactions before deleting
-    await db
-      .update(transactions)
-      .set({ categoryId: null, categoryVerifiedAt: null })
-      .where(
-        and(
-          eq(transactions.userId, userId),
-          eq(transactions.categoryId, categoryId)
-        )
-      );
-
-    // Clear categorySystemId references on transactions as well
-    await db
-      .update(transactions)
-      .set({ categorySystemId: null, categoryConfidence: null })
-      .where(
-        and(
-          eq(transactions.userId, userId),
-          eq(transactions.categorySystemId, categoryId)
-        )
-      );
-
-    await db.delete(categories).where(eq(categories.id, categoryId));
-
-    revalidatePath("/");
-    revalidatePath("/settings");
-    revalidatePath("/transactions");
-    updateTag(CACHE_TAGS.categories(userId));
-    return { success: true };
-  } catch (error) {
-    console.error("Failed to delete category:", error);
-    return { success: false, error: "Failed to delete category" };
-  }
+/** Retiring a definition preserves every historical and planning reference. */
+export async function deleteCategory(categoryId: string): Promise<{ success: boolean; error?: string }> {
+  return deleteCategoryWithReassignment(categoryId, null);
 }
 
 export async function getCategories(): Promise<Category[]> {
   return getCachedUserCategories() as Promise<Category[]>;
 }
 
-/** Live filter metadata from own categories and categories on permitted transactions. */
+/** Vocabulary definitions, independent of private category activity. */
 export async function getReportingCategories() {
   const userId = await requireAuth();
   if (!userId) return [];
   return db.select({ id: categories.id, name: categories.name, color: categories.color,
-    categoryType: categories.categoryType }).from(categories).where(or(
-      eq(categories.userId, userId),
-      sql`EXISTS (SELECT 1 FROM ${transactions} visible_transaction
-        WHERE COALESCE(visible_transaction.category_id, visible_transaction.category_system_id) = ${categories.id}
-          AND ${accountAccess(sql`visible_transaction.account_id`, userId)})`,
-    )).orderBy(asc(categories.name));
+    categoryType: categories.categoryType, cashFlowKind: categories.cashFlowKind }).from(categories)
+    .where(categoryAccess(userId)).orderBy(asc(categories.name), asc(categories.id));
 }
 
 // Alias for backward compatibility
@@ -278,13 +225,15 @@ export async function getCategoriesByType(
     return [];
   }
 
-  return db.query.categories.findMany({
+  const rows = await db.query.categories.findMany({
     where: and(
-      eq(categories.userId, userId),
+      categoryAccess(userId),
       eq(categories.categoryType, type)
     ),
-    orderBy: (categories, { asc }) => [asc(categories.name)],
+    extras: { selectionHidden: categorySelectionHidden(userId).as("selection_hidden") },
+    orderBy: (categories, { asc }) => [asc(categories.name), asc(categories.id)],
   });
+  return rows.map(category => ({ ...categoryDefinitionForActor(category,userId), hideFromSelection: category.selectionHidden }));
 }
 
 export async function getCategoryByName(name: string): Promise<Category | null> {
@@ -294,14 +243,12 @@ export async function getCategoryByName(name: string): Promise<Category | null> 
     return null;
   }
 
-  const category = await db.query.categories.findFirst({
-    where: and(
-      eq(categories.userId, userId),
-      eq(categories.name, name)
-    ),
+  const matches = await db.query.categories.findMany({
+    where: and(categoryAccess(userId), eq(categories.name,name)), limit:2,
+    extras: { selectionHidden: categorySelectionHidden(userId).as("selection_hidden") },
   });
-
-  return category || null;
+  if (matches.length !== 1) return null;
+  return { ...categoryDefinitionForActor(matches[0],userId), hideFromSelection: matches[0].selectionHidden };
 }
 
 /**
@@ -322,8 +269,8 @@ export async function getCategoryTransactionCount(
       .from(transactions)
       .where(
         and(
-          eq(transactions.userId, userId),
-          eq(transactions.categoryId, categoryId)
+          accountAccess(transactions.accountId, userId),
+          sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId}) = ${categoryId}`
         )
       );
 
@@ -344,92 +291,37 @@ export async function deleteCategoryWithReassignment(
   reassignToCategoryId: string | null
 ): Promise<{ success: boolean; error?: string; reassignedCount?: number }> {
   const userId = await requireAuth();
-
-  if (!userId) {
-    return { success: false, error: "Not authenticated" };
-  }
-
+  if (!userId) return { success: false, error: "Not authenticated" };
   try {
-    // Get the category to delete
-    const categoryToDelete = await db.query.categories.findFirst({
-      where: and(
-        eq(categories.id, categoryId),
-        eq(categories.userId, userId)
-      ),
+    const reassignedCount = await db.transaction(async tx => {
+      const [source] = await tx.select().from(categories).where(and(
+        eq(categories.id, categoryId), eq(categories.userId, userId))).for("update");
+      if (!source) throw new Error("Only the category creator can retire this definition");
+      if (source.isSystem) throw new Error("System categories cannot be retired");
+      let reassigned = 0;
+      if (reassignToCategoryId && reassignToCategoryId !== categoryId) {
+        const [target] = await tx.select().from(categories).where(and(
+          eq(categories.id, reassignToCategoryId), categoryAccess(userId)));
+        if (!target || target.categoryType !== source.categoryType || target.cashFlowKind !== source.cashFlowKind) {
+          throw new Error("Choose a category with the same type and cash-flow purpose");
+        }
+        const changed = await tx.update(transactions).set({ categoryId: target.id, categoryVerifiedAt: new Date() })
+          .where(and(accountAccess(transactions.accountId, userId),
+            sql`COALESCE(${transactions.categoryId}, ${transactions.categorySystemId}) = ${source.id}`))
+          .returning({ id: transactions.id });
+        reassigned = changed.length;
+      }
+      await tx.update(categories).set({ hideFromSelection: true }).where(eq(categories.id, source.id));
+      await tx.execute(sql`INSERT INTO category_vocabulary_entries(owner_user_id,category_id,hidden_from_selection)
+        VALUES (coalesce((SELECT owner_user_id FROM household_memberships WHERE member_user_id=${userId}),${userId}),${source.id},true)
+        ON CONFLICT(owner_user_id,category_id) DO UPDATE SET hidden_from_selection=true`);
+      return reassigned;
     });
-
-    if (!categoryToDelete) {
-      return { success: false, error: "Category not found" };
-    }
-
-    if (categoryToDelete.isSystem) {
-      return { success: false, error: "System categories cannot be deleted" };
-    }
-
-    // If reassigning to another category, verify it exists and belongs to user
-    if (reassignToCategoryId) {
-      const targetCategory = await db.query.categories.findFirst({
-        where: and(
-          eq(categories.id, reassignToCategoryId),
-          eq(categories.userId, userId)
-        ),
-      });
-
-      if (!targetCategory) {
-        return { success: false, error: "Target category not found" };
-      }
-
-      // Verify same category type
-      if (targetCategory.categoryType !== categoryToDelete.categoryType) {
-        return { success: false, error: "Cannot reassign to a different category type" };
-      }
-    }
-
-    // Count affected transactions before update
-    const countResult = await db
-      .select({ count: count() })
-      .from(transactions)
-      .where(
-        and(
-          eq(transactions.userId, userId),
-          eq(transactions.categoryId, categoryId)
-        )
-      );
-    const reassignedCount = countResult[0]?.count ?? 0;
-
-    // Reassign transactions with user-assigned categoryId
-    await db
-      .update(transactions)
-      .set({ categoryId: reassignToCategoryId, categoryVerifiedAt: reassignToCategoryId ? new Date() : null })
-      .where(
-        and(
-          eq(transactions.userId, userId),
-          eq(transactions.categoryId, categoryId)
-        )
-      );
-
-    // Reassign transactions with system-assigned categorySystemId
-    await db
-      .update(transactions)
-      .set({ categorySystemId: reassignToCategoryId, categoryConfidence: null })
-      .where(
-        and(
-          eq(transactions.userId, userId),
-          eq(transactions.categorySystemId, categoryId)
-        )
-      );
-
-    // Delete the category
-    await db.delete(categories).where(eq(categories.id, categoryId));
-
-    revalidatePath("/");
-    revalidatePath("/settings");
-    revalidatePath("/transactions");
+    revalidatePath("/"); revalidatePath("/settings"); revalidatePath("/transactions");
     updateTag(CACHE_TAGS.categories(userId));
-
     return { success: true, reassignedCount };
   } catch (error) {
-    console.error("Failed to delete category:", error);
-    return { success: false, error: "Failed to delete category" };
+    const message = error instanceof Error ? error.message : "";
+    return { success: false, error: /^(Only |System |Choose )/.test(message) ? message : "Could not retire category" };
   }
 }

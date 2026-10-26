@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from datetime import date, datetime
 from datetime import time as _time_type
 from decimal import Decimal
-from typing import Any, Optional, List
+from typing import Literal, Any, Optional, List
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -120,6 +120,7 @@ class AccountOwnershipAllocationSetResponse(BaseModel):
 
 # Category Schemas
 class CategoryBase(BaseModel):
+    cash_flow_kind: Optional[Literal["investment", "loan_principal"]] = None
     name: str
     parent_id: Optional[UUID] = None
     category_type: str = "expense"
@@ -139,9 +140,10 @@ class CategoryUpdate(BaseModel):
 
 
 class CategoryResponse(CategoryBase):
+    hide_from_selection: bool = False
     id: UUID
     is_system: bool
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -177,6 +179,8 @@ class CategoryAssign(BaseModel):
 
 
 class TransactionResponse(TransactionBase):
+    cash_flow_kind: Optional[str] = None
+    cash_flow_parts: Optional[list[dict]] = None
     id: UUID
     external_id: Optional[str] = None
     category_id: Optional[UUID] = None
@@ -199,8 +203,13 @@ class TransactionWithDetails(TransactionResponse):
 class CategorySpending(BaseModel):
     category_id: Optional[UUID]
     category_name: Optional[str]
-    total: Decimal
+    total: Optional[Decimal]
     count: int
+    known_total: Optional[Decimal] = None
+    currency: Optional[str] = None
+    scope: Optional[str] = None
+    complete: bool = True
+    accounts: list[dict] = Field(default_factory=list)
 
 
 class AccountSummary(BaseModel):

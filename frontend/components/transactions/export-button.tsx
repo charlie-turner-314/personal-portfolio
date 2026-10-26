@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { RiDownloadLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -12,14 +13,15 @@ interface ExportButtonProps {
 }
 
 export function ExportButton({ transactions, disabled }: ExportButtonProps) {
-  const handleExport = () => {
+  const searchParams=useSearchParams();
+  const handleExport = async () => {
     if (transactions.length === 0) {
       toast.error("No transactions to export");
       return;
     }
 
     try {
-      exportTransactionsToCSV(transactions);
+      await exportTransactionsToCSV(transactions,undefined,searchParams.get("person")??undefined);
       toast.success(`Exported ${transactions.length} transactions`);
     } catch {
       toast.error("Failed to export transactions");

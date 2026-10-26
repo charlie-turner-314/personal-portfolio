@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { groupReportingCategories } from "@/lib/categories/reporting";
 
 import * as React from "react";
@@ -442,8 +443,7 @@ export function TransactionFilters({
     (filters.minAmount || filters.maxAmount ? 1 : 0);
   const categoryOptions: FilterOption[] = groupedCategories.map((category) => ({
     id: category.id,
-    label: groupedCategories.some(other => other.id !== category.id && other.name.trim().toLowerCase() === category.name.trim().toLowerCase())
-      ? `${category.name} (${category.categoryType})` : category.name,
+    label: categorySelectionLabel(category, groupedCategories),
     color: category.color ?? undefined,
   }));
 
@@ -579,11 +579,11 @@ export function TransactionFilters({
   if (filters.minAmount || filters.maxAmount) {
     let amountLabel = "";
     if (filters.minAmount && filters.maxAmount) {
-      amountLabel = `EUR ${filters.minAmount} - EUR ${filters.maxAmount}`;
+      amountLabel = `${filters.minAmount} - ${filters.maxAmount}`;
     } else if (filters.minAmount) {
-      amountLabel = `>= EUR ${filters.minAmount}`;
+      amountLabel = `>= ${filters.minAmount}`;
     } else {
-      amountLabel = `<= EUR ${filters.maxAmount}`;
+      amountLabel = `<= ${filters.maxAmount}`;
     }
 
     filterTags.push({
@@ -598,6 +598,17 @@ export function TransactionFilters({
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm">Reporting view
+          <select aria-label="Reporting view" className="ml-2 h-9 border bg-background px-2" value={filters.personId??"mine"}
+            onChange={event=>onFiltersChange({personId:event.target.value==="mine"?undefined:event.target.value},{resetPage:true})}>
+            <option value="mine">My view</option><option value="all">Household view</option>
+            {filters.personId&&filters.personId!=="all"&&<option value={filters.personId}>Selected person’s share</option>}
+          </select>
+        </label>
+        <p className="text-xs text-muted-foreground">{filters.personId==="all"?"Permitted bank records counted once":"Economic share at each transaction date"}. Amount filters use your reporting currency; unconverted amounts remain visible as unavailable. Details preserve the original bank amount.</p>
+      </div>
+      <p className="text-xs text-muted-foreground">Account coverage: {(filters.accountIds.length?accounts.filter(account=>filters.accountIds.includes(account.id)):accounts).map(account=>account.name).join(", ")||"No permitted accounts"}. Private accounts without permission are excluded.</p>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
           <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none" data-walkthrough="walkthrough-search">

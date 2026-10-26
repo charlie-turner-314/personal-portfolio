@@ -1,3 +1,5 @@
+import { hasUnavailableAccountSelection,ReportingSelectionNotice } from "@/components/reporting/selection-notice";
+import { toTransactionsSearchParams } from "@/lib/transactions/query-state";
 import { TransactionsClient } from "./transactions-client";
 import { getTransactionsPage, getUserAccounts } from "@/lib/actions/transactions";
 import { getUserCategories, getReportingCategories } from "@/lib/actions/categories";
@@ -11,11 +13,12 @@ export async function TransactionsSection({
 }: {
   queryState: TransactionsQueryState;
 }) {
-  const [session, pageData, categories, accounts, properties, filterCategories] = await Promise.all([
+  const accounts=await getUserAccounts();
+  if(hasUnavailableAccountSelection(accounts,queryState.accountIds))return <ReportingSelectionNotice clearHref={`/transactions?${toTransactionsSearchParams({...queryState,accountIds:[],page:1})}`} />;
+  const [session, pageData, categories, properties, filterCategories] = await Promise.all([
     getAuthenticatedSession(),
     getTransactionsPage(queryState),
     getUserCategories(),
-    getUserAccounts(),
     getProperties(),
     getReportingCategories(),
   ]);

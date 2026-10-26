@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter,useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -67,11 +67,13 @@ export function SpendingByCategoryChart({
   horizon,
 }: SpendingByCategoryChartProps) {
   const router = useRouter();
+  const personId=useSearchParams().get("person")??undefined;
 
   const navigateToCategorySpending = React.useCallback(
     (categoryId: string | null) => {
       if (!categoryId) return;
       const query = buildCategorySpendingQuery({
+        personId,
         categoryIds: [categoryId],
         accountIds,
         dateFrom,
@@ -80,18 +82,19 @@ export function SpendingByCategoryChart({
       });
       router.push(query ? `/category-spending?${query}` : "/category-spending");
     },
-    [accountIds, dateFrom, dateTo, horizon, router]
+    [accountIds, dateFrom, dateTo, horizon, personId, router]
   );
 
   const navigateToCategorySpendingAll = React.useCallback(() => {
     const query = buildCategorySpendingQuery({
+        personId,
       accountIds,
       dateFrom,
       dateTo,
       horizon,
     });
     router.push(query ? `/category-spending?${query}` : "/category-spending");
-  }, [accountIds, dateFrom, dateTo, horizon, router]);
+  }, [accountIds, dateFrom, dateTo, horizon, personId, router]);
 
   if (isLoading) {
     return <SpendingByCategoryChartSkeleton />;

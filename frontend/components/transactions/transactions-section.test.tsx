@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { getTransactionsPage } from "@/lib/actions/transactions";
+import { parseTransactionsSearchParams } from "@/lib/transactions/query-state";
 import type { TransactionsQueryState } from "@/lib/transactions/query-state";
 import { TransactionsSection } from "@/app/(dashboard)/transactions/_sections";
 
@@ -62,4 +64,15 @@ describe("TransactionsSection", () => {
       "false"
     );
   });
+  it("shows a recoverable unavailable selection without fetching misleading zero totals",async()=>{
+    vi.mocked(getTransactionsPage).mockClear();
+    const queryState=parseTransactionsSearchParams({account:"withdrawn-account",person:"all",from:"2026-01-01",to:"2026-01-31"});
+    render(await TransactionsSection({queryState}));
+    expect(screen.getByRole("alert")).toHaveTextContent("cannot be calculated");
+    const href=screen.getByRole("link",{name:"Clear account filter"}).getAttribute("href")!;
+    const params=new URLSearchParams(href.split("?")[1]);
+    expect(params.get("person")).toBe("all");expect(params.get("from")).toBe("2026-01-01");expect(params.has("account")).toBe(false);
+    expect(getTransactionsPage).not.toHaveBeenCalled();
+  });
+
 });

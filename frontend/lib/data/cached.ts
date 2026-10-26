@@ -1,7 +1,9 @@
+import { getReportingCoverage } from "@/lib/reporting/coverage";
+import { categoryAccess, categoryDefinitionForActor, categorySelectionHidden } from "@/lib/household/category-access";
 // Cached read layer. NOT a "use server" module.
 // Two cache layers:
 // - React.cache: per-request dedup (no TTL, scoped to a single render).
-// - unstable_cache: personal categories/onboarding only. Account access is checked live.
+// - unstable_cache: onboarding only. Vocabulary and account access are checked live.
 // Mutations MUST call revalidateTag(...) for the relevant tag below.
 
 import { accountAccess } from "@/lib/household/account-access";
@@ -9,7 +11,7 @@ import { cache } from "react";
 import { unstable_cache } from "next/cache";
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, categories, users, householdAccountShares } from "@/lib/db/schema";
+import { accounts, users, householdAccountShares } from "@/lib/db/schema";
 import { getAuthenticatedSession as getFinancialSession } from "@/lib/household/financial-auth";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";
@@ -28,18 +30,16 @@ export const getCachedSession = cache(async () => {
 // ---------- Categories ----------
 
 async function fetchCategoriesForUser(userId: string) {
-  return db.query.categories.findMany({
-    where: eq(categories.userId, userId),
-    orderBy: (c, { asc }) => [asc(c.name)],
+  const rows = await db.query.categories.findMany({
+    where: categoryAccess(userId),
+    extras: { selectionHidden: categorySelectionHidden(userId).as("selection_hidden") },
+    orderBy: (c, { asc }) => [asc(c.name), asc(c.id)],
   });
+  return rows.map(category => ({ ...categoryDefinitionForActor(category,userId), hideFromSelection: category.selectionHidden }));
 }
 
-const getCachedCategoriesByUser = (userId: string) =>
-  unstable_cache(
-    () => fetchCategoriesForUser(userId),
-    ["categories", userId],
-    { tags: [CACHE_TAGS.categories(userId)] },
-  )();
+// Membership and retained classification access are evaluated on every request.
+const getCachedCategoriesByUser = fetchCategoriesForUser;
 
 export const getCachedUserCategories = cache(async () => {
   const session = await getFinancialSession();
@@ -50,18 +50,8 @@ export const getCachedUserCategories = cache(async () => {
 
 // ---------- Accounts (slim, for filter dropdowns) ----------
 
-async function fetchAccountsForUser(userId: string) {
-  return db
-    .select({
-      id: accounts.id,
-      name: accounts.name,
-      institution: accounts.institution,
-      accountType: accounts.accountType,
-      currency: accounts.currency,
-    })
-    .from(accounts)
-    .where(and(accountAccess(accounts.id, userId), eq(accounts.isActive, true)))
-    .orderBy(accounts.name);
+async function fetchAccountsForUser(userId:string) {
+  return (await getReportingCoverage(userId)).accounts;
 }
 
 const getCachedAccountsByUser = fetchAccountsForUser;

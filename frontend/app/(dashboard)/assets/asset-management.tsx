@@ -218,6 +218,7 @@ export function AssetManagement({
   // People are preloaded server-side so the OwnersField gate is correct on
   // first render — no client fetch race, no silent failures.
   const [people, setPeople] = useState<Person[]>(initialPeople ?? []);
+  const [ownershipEffectiveFrom, setOwnershipEffectiveFrom] = useState(() => new Date().toLocaleDateString("en-CA"));
   const [editAccountOwners, setEditAccountOwners] = useState<OwnerValue[]>([]);
   const [editPropertyOwners, setEditPropertyOwners] = useState<OwnerValue[]>([]);
   const [editVehicleOwners, setEditVehicleOwners] = useState<OwnerValue[]>([]);
@@ -387,7 +388,7 @@ export function AssetManagement({
           const ownersResp = await fetch(`/api/owners/account/${editingAccount.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ owners: editAccountOwners }),
+            body: JSON.stringify({ owners: editAccountOwners, effectiveFrom: ownershipEffectiveFrom }),
           });
           if (!ownersResp.ok) {
             const text = await ownersResp.text().catch(() => "request failed");
@@ -508,7 +509,7 @@ export function AssetManagement({
           const ownersResp = await fetch(`/api/owners/property/${editingProperty.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ owners: editPropertyOwners }),
+            body: JSON.stringify({ owners: editPropertyOwners, effectiveFrom: ownershipEffectiveFrom }),
           });
           if (!ownersResp.ok) {
             const text = await ownersResp.text().catch(() => "request failed");
@@ -601,7 +602,7 @@ export function AssetManagement({
           const ownersResp = await fetch(`/api/owners/vehicle/${editingVehicle.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ owners: editVehicleOwners }),
+            body: JSON.stringify({ owners: editVehicleOwners, effectiveFrom: ownershipEffectiveFrom }),
           });
           if (!ownersResp.ok) {
             const text = await ownersResp.text().catch(() => "request failed");
@@ -1114,12 +1115,13 @@ export function AssetManagement({
                 </Select>
               </div>
               {editingAccount?.accessMode !== "shared" && people.length > 1 && (
+                <div className="space-y-3"><label className="block text-sm">Ownership effective date<Input type="date" required value={ownershipEffectiveFrom} onChange={event => setOwnershipEffectiveFrom(event.target.value)} /></label><p className="text-xs text-muted-foreground">This complete split applies from the selected date. Earlier ownership and account access remain unchanged.</p>
                 <OwnersField
                   people={people}
                   value={editAccountOwners}
                   onChange={setEditAccountOwners}
                   disabled={isLoading}
-                />
+                /></div>
               )}
             </div>
             <DialogFooter>
@@ -1256,12 +1258,13 @@ export function AssetManagement({
                 </Select>
               </div>
               {people.length > 1 && editingProperty?.userId === actorUserId && (
+                <div className="space-y-3"><label className="block text-sm">Ownership effective date<Input type="date" required value={ownershipEffectiveFrom} onChange={event => setOwnershipEffectiveFrom(event.target.value)} /></label><p className="text-xs text-muted-foreground">This complete split applies from the selected date. Earlier ownership and account access remain unchanged.</p>
                 <OwnersField
                   people={people}
                   value={editPropertyOwners}
                   onChange={setEditPropertyOwners}
                   disabled={isLoading}
-                />
+                /></div>
               )}
             </div>
             <DialogFooter>
@@ -1326,12 +1329,13 @@ export function AssetManagement({
                 </Select>
               </div>
               {people.length > 1 && (
+                <div className="space-y-3"><label className="block text-sm">Ownership effective date<Input type="date" required value={ownershipEffectiveFrom} onChange={event => setOwnershipEffectiveFrom(event.target.value)} /></label><p className="text-xs text-muted-foreground">This complete split applies from the selected date. Earlier ownership and account access remain unchanged.</p>
                 <OwnersField
                   people={people}
                   value={editVehicleOwners}
                   onChange={setEditVehicleOwners}
                   disabled={isLoading}
-                />
+                /></div>
               )}
             </div>
             <DialogFooter>

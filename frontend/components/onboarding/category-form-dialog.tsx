@@ -110,13 +110,14 @@ export function CategoryFormDialog({
         <div className="grid gap-4 py-4">
           {categoryType === "expense" && !isSystem && <div className="space-y-2">
             <Label htmlFor="category-cash-flow">Default cash-flow purpose</Label>
-            <select id="category-cash-flow" value={cashFlowKind ?? "activity"}
+            <select id="category-cash-flow" disabled={isEditing} value={cashFlowKind ?? "activity"}
               onChange={e => setCashFlowKind(e.target.value === "activity" ? null : e.target.value as "investment" | "loan_principal")}
               className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm">
               <option value="activity">Everyday spending</option>
               <option value="investment">Investment allocation</option>
               <option value="loan_principal">Loan principal</option>
             </select>
+            {isEditing && <p className="text-xs text-muted-foreground">Financial meaning is fixed for existing classifications. Create a new definition to change its cash-flow purpose.</p>}
             <p className="text-xs text-muted-foreground">Allocations remain cash movements but do not reduce saving from income. Individual transactions can override this.</p>
           </div>}
           <div className="space-y-2">

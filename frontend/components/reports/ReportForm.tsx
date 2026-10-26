@@ -163,8 +163,8 @@ export function ReportForm({
             {...register("transaction_direction")}
             className="w-full border border-border bg-background text-foreground rounded px-2 py-2 text-sm"
           >
-            <option value="ALL">All</option>
-            <option value="EXPENSE">Expenses</option>
+            <option value="ALL">Included bank movements</option>
+            <option value="EXPENSE">Consumption (including refunds)</option>
             <option value="INCOME">Income</option>
             <option value="INFLOW">Inflows</option>
             <option value="OUTFLOW">Outflows</option>
@@ -172,6 +172,7 @@ export function ReportForm({
         </div>
       </div>
 
+      <p className="text-sm text-muted-foreground">Reports use My view: your economic share of permitted accounts. Income and consumption are separate from capital and transfers. The cash total covers active cash accounts.</p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className="block text-sm font-medium mb-1">Frequency</label>

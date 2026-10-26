@@ -52,4 +52,11 @@ describe("ReportNewsletter", () => {
     const html = await render(ReportNewsletter(props));
     expect(html).toContain("Personal Portfolio | Weekly Digest");
   });
+  it("labels the economic scope, preserves bank units and renders unknown values as unavailable",async()=>{
+    const html=await render(ReportNewsletter({...props,scopeLabel:"My view · economic share",coverageNote:"Only Joint is included; private accounts are excluded.",totalBalance:null,accounts:[{...props.accounts[0],balance:null}],transactions:[{...props.transactions[0],amount:null,original_amount:"-1000.00",original_currency:"AUD",amount_label:"Consumption allocation"}]}));
+    expect(html).toContain("My view");expect(html).toContain("private accounts are excluded");
+    expect(html).toContain("Unavailable");expect(html).not.toContain("NaN");
+    expect(html).toContain("Bank -1,000.00 AUD");expect(html).toContain("Consumption allocation");
+  });
+
 });

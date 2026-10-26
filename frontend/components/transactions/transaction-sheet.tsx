@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { CashFlowPurpose } from "./cash-flow-purpose";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -274,6 +275,7 @@ export function TransactionSheet({
           <SheetTitle className="text-lg font-medium break-all">
             {transaction.description}
           </SheetTitle>
+          <p className="text-xs text-muted-foreground">Original bank amount</p>
           <div
             className={cn(
               "text-3xl font-semibold tracking-tight pt-2",
@@ -282,6 +284,7 @@ export function TransactionSheet({
           >
             {formatAmount(transaction.amount, transaction.currency || "EUR")}
           </div>
+          {transaction.attributedAmount!==undefined&&<p className="text-sm text-muted-foreground">Selected view: {transaction.attributedAmount===null?"Unavailable":formatAmount(transaction.attributedAmount,transaction.reportingCurrency||transaction.currency||"EUR")}</p>}
         </SheetHeader>
 
         <Separator className="my-4 shrink-0" />
@@ -365,7 +368,7 @@ export function TransactionSheet({
                         className="h-3 w-3 shrink-0"
                         style={{ backgroundColor: category.color || "#A1A1AA" }}
                       />
-                      <span>{category.name}</span>
+                      <span>{categorySelectionLabel(category, categories)}</span>
                     </div>
                   </SelectItem>
                 ))}
@@ -411,7 +414,8 @@ export function TransactionSheet({
             </div>
           )}
 
-          {!isBalancingTransfer && !transaction.internalTransferId && (
+          {transaction.isGeneratedMirror&&<p className="text-xs text-muted-foreground">Generated transfer mirror · reporting purpose is Transfer. Allocations are edited on the original bank record.</p>}
+          {!isBalancingTransfer && !transaction.isGeneratedMirror && (
             <CashFlowPurpose
               key={`${transaction.id}:${JSON.stringify(transaction.cashFlowParts)}`}
               transactionId={transaction.id} amount={transaction.amount} currency={transaction.currency || "EUR"}

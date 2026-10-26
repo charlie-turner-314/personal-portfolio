@@ -298,7 +298,7 @@ def test_financial_summary_reports_account_net_worth_for_person(seeded_household
     assert summary["gross_assets"] == pytest.approx(600.0)
     assert summary["total_liabilities"] == pytest.approx(1650.0)
     assert summary["net_worth"] == pytest.approx(-1050.0)
-    assert summary["total_balance"] == pytest.approx(2150.0)
+    assert summary["total_balance"] == pytest.approx(550.0)  # cash only; liabilities stay separate
 
 
 def test_household_summary_keeps_linked_debt_for_person_without_property_share(seeded_household, db_session):

@@ -1,5 +1,6 @@
 "use client";
 
+import { categorySelectionLabel } from "@/lib/utils/category-utils";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import {
@@ -34,6 +35,7 @@ import { filterSelectableCategories } from "@/lib/utils/category-utils";
 import { DeleteConfirmationDialog } from "./delete-confirmation-dialog";
 
 interface BulkActionsDockProps {
+  personId?:string;
   selectedCount: number;
   selectedIds: string[];
   selectedTransactions: TransactionWithRelations[];
@@ -47,6 +49,7 @@ interface BulkActionsDockProps {
 }
 
 export function BulkActionsDock({
+  personId,
   selectedCount,
   selectedIds,
   selectedTransactions,
@@ -103,14 +106,14 @@ export function BulkActionsDock({
     }
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (selectedTransactions.length === 0) {
       toast.error("No transactions to export");
       return;
     }
 
     try {
-      exportTransactionsToCSV(selectedTransactions);
+      await exportTransactionsToCSV(selectedTransactions,undefined,personId);
       toast.success(`Exported ${selectedTransactions.length} transactions`);
     } catch {
       toast.error("Failed to export transactions");
@@ -237,7 +240,7 @@ export function BulkActionsDock({
                     className="mr-2 h-3 w-3 rounded-full shrink-0"
                     style={{ backgroundColor: category.color || "#666" }}
                   />
-                  <span className="truncate">{category.name}</span>
+                  <span className="truncate">{categorySelectionLabel(category, categories)}</span>
                 </Button>
               ))}
               {filteredCategories.length === 0 && searchQuery && (
