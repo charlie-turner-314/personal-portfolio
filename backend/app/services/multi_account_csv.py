@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import text, or_
 
+from app.services.financial_access import category_access
 from app.models import Account, Category, InternalTransfer, Transaction
 from app.services.category_matcher import CategoryMatcher
 from app.services.financial_access import account_access
@@ -51,7 +52,7 @@ def import_routed_rows(db, user_id, rows, csv_import_id):
 
         category_id = row.get("category_id")
         if category_id and not destination_id:
-            category = db.query(Category).filter(Category.id == category_id, Category.user_id == user_id).first()
+            category = db.query(Category).filter(Category.id == category_id, category_access(user_id)).first()
             if not category:
                 raise ValueError("Mapped category is unavailable")
 

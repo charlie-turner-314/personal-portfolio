@@ -5,6 +5,7 @@ from typing import Optional
 
 from app.mcp.dependencies import get_db, validate_uuid
 from app.models import Category
+from app.services.financial_access import category_access, category_definition_for_actor
 
 
 def list_categories(user_id: str, category_type: Optional[str] = None) -> list[dict]:
@@ -19,12 +20,12 @@ def list_categories(user_id: str, category_type: Optional[str] = None) -> list[d
         List of category dictionaries with id, name, type, color, icon, parent info
     """
     with get_db() as db:
-        query = db.query(Category).filter(Category.user_id == user_id)
+        query = db.query(Category).filter(category_access(user_id))
 
         if category_type:
             query = query.filter(Category.category_type == category_type)
 
-        categories = query.order_by(Category.name).all()
+        categories = [category_definition_for_actor(cat, user_id) for cat in query.order_by(Category.name, Category.id).all()]
 
         return [
             {
@@ -60,12 +61,13 @@ def get_category(user_id: str, category_id: str) -> dict | None:
     with get_db() as db:
         category = db.query(Category).filter(
             Category.id == category_uuid,
-            Category.user_id == user_id
+            category_access(user_id)
         ).first()
 
         if not category:
             return None
 
+        category = category_definition_for_actor(category, user_id)
         return {
             "id": str(category.id),
             "name": category.name,
@@ -163,8 +165,10 @@ def get_category_tree(user_id: str) -> list[dict]:
     """
     with get_db() as db:
         categories = db.query(Category).filter(
-            Category.user_id == user_id
+            category_access(user_id)
         ).order_by(Category.name).all()
+
+        categories = [category_definition_for_actor(cat, user_id) for cat in categories]
 
         # Build lookup map
         cat_map = {}

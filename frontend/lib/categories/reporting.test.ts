@@ -6,20 +6,20 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { groupReportingCategories } from "./reporting";
 import { reportingCategoryFilter } from "./reporting-sql";
 import { accountAccess } from "@/lib/household/account-access";
-it("groups display names and types, retaining source IDs and stable representatives", () => {
+it("keeps same-name definitions distinct until explicitly mapped", () => {
   const categories = [
     { id: "b", name: "Housing", categoryType: "expense" },
     { id: "a", name: " housing ", categoryType: "expense" },
     { id: "c", name: "Housing", categoryType: "income" },
   ];
   const groups = groupReportingCategories(categories);
-  expect(groups).toHaveLength(2);
-  expect(groups.find(g => g.categoryType === "expense")).toMatchObject({ id: "a", categoryIds: ["a", "b"] });
+  expect(groups).toHaveLength(3);
+  expect(groups.find(g => g.id === "a")).toMatchObject({ categoryIds: ["a"] });
   expect(groupReportingCategories([...categories].reverse())).toEqual(groups);
   expect(categories).toHaveLength(3);
 });
 describe.skipIf(!process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER)("household category filter on PostgreSQL", () => {
-  it("includes both visible Housing IDs, preserves category type and enforces permission", () => {
+  it("selects exact IDs and enforces permission", () => {
     const query = new PgDialect().sqlToQuery(sql`SELECT id FROM transactions
       WHERE ${accountAccess(sql`transactions.account_id`, "viewer")}
         AND ${reportingCategoryFilter(sql`COALESCE(category_id, category_system_id)`, ["housing-a"])} ORDER BY id`);
@@ -37,6 +37,6 @@ describe.skipIf(!process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER)("household categ
       INSERT INTO transactions VALUES ('one','own','housing-a',NULL),('two','shared',NULL,'housing-b'),('private','private','housing-b',NULL),('income','shared','housing-income',NULL),('overridden','shared','housing-income','housing-b');
       ${literal}; ROLLBACK;`;
     const result = execFileSync("docker", ["exec", "-i", process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER!, "psql", "-U", "postgres", "-d", "postgres", "-qAt", "-v", "ON_ERROR_STOP=1"], { input: fixture, encoding: "utf8" });
-    expect(result.trim().split("\n")).toEqual(["one", "two"]);
+    expect(result.trim().split("\n")).toEqual(["one"]);
   });
 });

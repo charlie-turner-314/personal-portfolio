@@ -1,5 +1,6 @@
 "use server";
 
+import { categoryAccess } from "@/lib/household/category-access";
 import { revalidatePath } from "next/cache";
 import { eq, and, isNull, desc, asc, sql, inArray, gte, lt, or, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -120,7 +121,7 @@ export async function createSubscription(
       const category = await db.query.categories.findFirst({
         where: and(
           eq(categories.id, input.categoryId),
-          eq(categories.userId, userId)
+          categoryAccess(userId)
         ),
       });
 
@@ -226,7 +227,7 @@ export async function updateSubscription(
       const category = await db.query.categories.findFirst({
         where: and(
           eq(categories.id, input.categoryId),
-          eq(categories.userId, userId)
+          categoryAccess(userId)
         ),
       });
 
@@ -1649,7 +1650,7 @@ export async function createSubscriptionFromTransaction(
       const category = await db.query.categories.findFirst({
         where: and(
           eq(categories.id, input.categoryId),
-          eq(categories.userId, userId)
+          categoryAccess(userId)
         ),
       });
 

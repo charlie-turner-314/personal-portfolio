@@ -90,8 +90,8 @@ describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL
     const selectedMember = await getSankeyData(start, end, undefined, "linked");
     expect(selectedMember).toEqual(personal);
     const total = (data: typeof whole, name: string) => data.nodes.find(node => node.name === name)?.total;
-    expect(total(whole, "Cash required")).toBeCloseTo(5244.92, 2);
-    expect(total(personal, "Cash required")).toBeCloseTo(1974.02, 2);
+    expect(total(whole, "Consumption above income")).toBeCloseTo(5244.92, 2);
+    expect(total(personal, "Consumption above income")).toBeCloseTo(1974.02, 2);
     expect(total(personal, "Income")).toBeCloseTo(5158.11, 2);
     expect(total(personal, "Spending")).toBeCloseTo(4337.23, 2);
     expect(total(personal, "Investments")).toBeCloseTo(2794.90, 2);

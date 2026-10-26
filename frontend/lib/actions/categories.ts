@@ -1,5 +1,6 @@
 "use server";
 
+import { categoryAccess, categoryDefinitionForActor } from "@/lib/household/category-access";
 import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
 import { eq, and, count, sql, or, asc } from "drizzle-orm";
@@ -253,17 +254,13 @@ export async function getCategories(): Promise<Category[]> {
   return getCachedUserCategories() as Promise<Category[]>;
 }
 
-/** Live filter metadata from own categories and categories on permitted transactions. */
+/** Vocabulary definitions, independent of private category activity. */
 export async function getReportingCategories() {
   const userId = await requireAuth();
   if (!userId) return [];
   return db.select({ id: categories.id, name: categories.name, color: categories.color,
-    categoryType: categories.categoryType }).from(categories).where(or(
-      eq(categories.userId, userId),
-      sql`EXISTS (SELECT 1 FROM ${transactions} visible_transaction
-        WHERE COALESCE(visible_transaction.category_id, visible_transaction.category_system_id) = ${categories.id}
-          AND ${accountAccess(sql`visible_transaction.account_id`, userId)})`,
-    )).orderBy(asc(categories.name));
+    categoryType: categories.categoryType }).from(categories)
+    .where(categoryAccess(userId)).orderBy(asc(categories.name), asc(categories.id));
 }
 
 // Alias for backward compatibility
@@ -278,13 +275,14 @@ export async function getCategoriesByType(
     return [];
   }
 
-  return db.query.categories.findMany({
+  const rows = await db.query.categories.findMany({
     where: and(
-      eq(categories.userId, userId),
+      categoryAccess(userId),
       eq(categories.categoryType, type)
     ),
-    orderBy: (categories, { asc }) => [asc(categories.name)],
+    orderBy: (categories, { asc }) => [asc(categories.name), asc(categories.id)],
   });
+  return rows.map(category => categoryDefinitionForActor(category, userId));
 }
 
 export async function getCategoryByName(name: string): Promise<Category | null> {
@@ -296,12 +294,12 @@ export async function getCategoryByName(name: string): Promise<Category | null> 
 
   const category = await db.query.categories.findFirst({
     where: and(
-      eq(categories.userId, userId),
+      categoryAccess(userId),
       eq(categories.name, name)
     ),
   });
 
-  return category || null;
+  return category ? categoryDefinitionForActor(category, userId) : null;
 }
 
 /**

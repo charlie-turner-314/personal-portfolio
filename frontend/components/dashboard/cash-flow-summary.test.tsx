@@ -10,5 +10,6 @@ describe("cash-flow explanation", () => {
     expect(screen.getByText("-A$1,234.56")).toBeVisible();
     expect(screen.getByText("-A$2,734.56")).toBeVisible();
     expect(screen.getByText("Saving from income")).toBeVisible();
+    expect(screen.getByText("Income, consumption and capital movements")).toBeVisible();
   });
 });

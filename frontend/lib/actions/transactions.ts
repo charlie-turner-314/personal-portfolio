@@ -1,5 +1,6 @@
 "use server";
 
+import { categoryAccess } from "@/lib/household/category-access";
 import { validateCashFlowPortions, type CashFlowPortion } from "@/lib/dashboard/cash-flow";
 import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
@@ -294,7 +295,7 @@ export async function updateTransactionCategory(
       const category = await db.query.categories.findFirst({
         where: and(
           eq(categories.id, categoryId),
-          eq(categories.userId, userId)
+          categoryAccess(userId)
         ),
       });
 
@@ -310,7 +311,7 @@ export async function updateTransactionCategory(
         categoryVerifiedAt: categoryId ? new Date() : null,
         updatedAt: new Date(),
       })
-      .where(eq(transactions.id, transactionId));
+      .where(and(eq(transactions.id, transactionId), accountAccess(transactions.accountId, userId)));
 
     revalidatePath("/transactions");
     return { success: true };
@@ -362,7 +363,7 @@ export async function updateTransactionProperty(
         propertyId,
         updatedAt: new Date(),
       })
-      .where(eq(transactions.id, transactionId));
+      .where(and(eq(transactions.id, transactionId), accountAccess(transactions.accountId, userId)));
 
     revalidatePath("/transactions");
     revalidatePath("/");
@@ -1185,7 +1186,7 @@ export async function bulkUpdateTransactionCategory(
       const category = await db.query.categories.findFirst({
         where: and(
           eq(categories.id, categoryId),
-          eq(categories.userId, userId)
+          categoryAccess(userId)
         ),
       });
 
@@ -1246,7 +1247,7 @@ export async function updateTransactionIncludeInAnalytics(
         includeInAnalytics,
         updatedAt: new Date(),
       })
-      .where(eq(transactions.id, transactionId));
+      .where(and(eq(transactions.id, transactionId), accountAccess(transactions.accountId, userId)));
 
     revalidatePath("/transactions");
     revalidatePath("/");
@@ -1341,7 +1342,7 @@ export async function deleteBalancingTransaction(
     const startingBalance = parseFloat(account.startingBalance || "0");
 
     // Delete the transaction
-    await db.delete(transactions).where(eq(transactions.id, transactionId));
+    await db.delete(transactions).where(and(eq(transactions.id, transactionId), accountAccess(transactions.accountId, userId)));
 
     // Recalculate balances from the deleted transaction's date
     // Pass the transactionId to exclude it from balance calculations

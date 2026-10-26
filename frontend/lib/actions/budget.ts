@@ -1,5 +1,6 @@
 "use server";
 
+import { categoryAccess } from "@/lib/household/category-access";
 import { revalidatePath } from "next/cache";
 import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -207,7 +208,7 @@ export async function getBudgetData(
       .from(categories)
       .where(
         and(
-          eq(categories.userId, userId),
+          categoryAccess(userId),
           eq(categories.categoryType, "expense"),
           or(eq(categories.hideFromSelection, false), isNull(categories.hideFromSelection))
         )
@@ -367,7 +368,7 @@ export async function saveBudgetLines(
     .from(categories)
     .where(
       and(
-        eq(categories.userId, userId),
+        categoryAccess(userId),
         eq(categories.categoryType, "expense"),
         inArray(categories.id, categoryIds)
       )
@@ -504,7 +505,7 @@ export async function applyBudgetToFutureMonths(
       .from(categories)
       .where(
         and(
-          eq(categories.userId, userId),
+          categoryAccess(userId),
           eq(categories.categoryType, "expense"),
           inArray(categories.id, categoryIds)
         )

@@ -1,5 +1,6 @@
 "use server";
 
+import { categoryAccess } from "@/lib/household/category-access";
 import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
 import {
@@ -703,7 +704,7 @@ export async function getCashflowOverrideFormOptions(): Promise<CashflowForecast
       .from(categories)
       .where(
         and(
-          eq(categories.userId, userId),
+          categoryAccess(userId),
           or(eq(categories.hideFromSelection, false), isNull(categories.hideFromSelection))
         )
       )
@@ -757,7 +758,7 @@ async function validateOverrideOwnership(
     const categoryRows = await db
       .select({ id: categories.id })
       .from(categories)
-      .where(and(eq(categories.id, input.categoryId), eq(categories.userId, userId)))
+      .where(and(eq(categories.id, input.categoryId), categoryAccess(userId)))
       .limit(1);
     if (!categoryRows[0]) return "Category could not be found";
   }

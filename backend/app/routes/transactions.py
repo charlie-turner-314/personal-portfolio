@@ -6,6 +6,7 @@ from uuid import UUID
 from datetime import datetime
 from enum import Enum
 
+from app.services.financial_access import category_access
 from app.database import get_db
 from app.models import Transaction, Account, Category
 from app.db_helpers import get_user_id
@@ -232,7 +233,7 @@ def create_transaction(
     if transaction.category_id:
         category = db.query(Category).filter(
             Category.id == transaction.category_id,
-            Category.user_id == user_id
+            category_access(user_id)
         ).first()
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
@@ -269,7 +270,7 @@ def update_transaction(
     update_data = updates.model_dump(exclude_unset=True)
     if "category_id" in update_data:
         if update_data["category_id"]:
-            category = db.query(Category).filter(Category.id == update_data["category_id"], Category.user_id == user_id).first()
+            category = db.query(Category).filter(Category.id == update_data["category_id"], category_access(user_id)).first()
             if not category:
                 raise HTTPException(status_code=404, detail="Category not found")
         transaction.category_verified_at = datetime.utcnow() if update_data["category_id"] else None
@@ -299,7 +300,7 @@ def assign_category(
 
     category = db.query(Category).filter(
         Category.id == category_data.category_id,
-        Category.user_id == user_id
+        category_access(user_id)
     ).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")

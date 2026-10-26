@@ -1,3 +1,4 @@
+import { categoryAccess } from "@/lib/household/category-access";
 import { accountAccess } from "@/lib/household/account-access";
 import { and, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -157,7 +158,7 @@ export async function fetchCategoryActualAmounts(
     .where(
       and(
         ...baseConditions,
-        eq(categories.userId, userId),
+        categoryAccess(userId),
         eq(categories.categoryType, "expense"),
         or(isNull(transactionLinks.linkRole), eq(transactionLinks.linkRole, "primary"))!
       )

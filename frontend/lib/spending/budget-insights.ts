@@ -1,3 +1,4 @@
+import { categoryAccess } from "@/lib/household/category-access";
 import { accountAccess } from "@/lib/household/account-access";
 import {
   and,
@@ -253,7 +254,7 @@ function buildBaseConditions(
     eq(transactions.transactionType, "debit"),
     eq(transactions.includeInAnalytics, true),
     isNull(transactions.internalTransferId),
-    eq(categories.userId, userId),
+    categoryAccess(userId),
     eq(categories.categoryType, "expense"),
     inArray(categories.id, categoryIds),
     gte(transactions.bookedAt, startDate),

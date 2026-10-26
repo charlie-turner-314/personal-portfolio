@@ -64,3 +64,35 @@ def value_in_actor_currency(db: Session, value, owner_user_id: str, actor_user_i
     return converted
 
 
+
+def category_access(actor_user_id: str):
+    """Definition access never grants access to activity or private guidance.
+
+    Household definitions form one selectable vocabulary. Classifications on
+    permitted accounts remain applicable when an account changes household.
+    """
+    from app.models import Category, Transaction
+    classified = aliased(Transaction)
+    retained = exists(select(classified.id).where(and_(
+        or_(classified.category_id == Category.id,
+            classified.category_system_id == Category.id),
+        account_access(classified.account_id, actor_user_id),
+    )))
+    return or_(household_root(Category.user_id) == household_root(actor_user_id), retained)
+
+
+def category_definition_for_actor(category, actor_user_id: str):
+    """Return a detached safe projection, never mutate the ORM source row."""
+    from types import SimpleNamespace
+    own = category.user_id == actor_user_id
+    return SimpleNamespace(
+        id=category.id, name=category.name, category_type=category.category_type,
+        cash_flow_kind=getattr(category, "cash_flow_kind", None),
+        color=category.color, icon=category.icon, is_system=category.is_system,
+        hide_from_selection=getattr(category, "hide_from_selection", False),
+        parent_id=category.parent_id if own else None,
+        description=category.description if own else None,
+        categorization_instructions=category.categorization_instructions if own else None,
+        created_at=category.created_at if own else None,
+        user_id=actor_user_id if own else None,
+    )

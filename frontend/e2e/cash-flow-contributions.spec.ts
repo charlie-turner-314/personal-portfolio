@@ -67,7 +67,7 @@ test("saving stays independent of a partner contribution and explicit principal 
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("response", response => { if (response.status() >= 500) errors.push(`${response.status()} ${new URL(response.url()).pathname}`); });
-  const summary = () => page.locator('[data-slot="card"]').filter({ has: page.getByText("Where your saving went", { exact: true }) });
+  const summary = () => page.locator('[data-slot="card"]').filter({ has: page.getByText("Income, consumption and capital movements", { exact: true }) });
   const assertMetric = async (label: string, amount: string) => {
     await expect(summary().locator("dl > div").filter({ has: page.getByText(label, { exact: true }) })).toContainText(amount);
   };
@@ -94,7 +94,7 @@ test("saving stays independent of a partner contribution and explicit principal 
   await assertMetric("Recorded cash balance change", "A$3,000");
   await assertMetric("Unreconciled difference", "A$0");
   await expect(summary().getByRole("status")).toContainText("agree");
-  await expect(page.getByText("Cash required", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Consumption above income", { exact: true })).toHaveCount(0);
   const preserved = psql(`SELECT amount || ':' || category_id::text FROM transactions WHERE id='${ids.principal}';`).trim();
   expect(preserved).toBe(`-70000.00:${ids.housing}`);
   await page.screenshot({ path: testInfo.outputPath("ownership-contributions.png"), fullPage: true });

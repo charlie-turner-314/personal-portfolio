@@ -1,3 +1,4 @@
+import { categoryAccess, categoryDefinitionForActor } from "@/lib/household/category-access";
 // Cached read layer. NOT a "use server" module.
 // Two cache layers:
 // - React.cache: per-request dedup (no TTL, scoped to a single render).
@@ -28,18 +29,15 @@ export const getCachedSession = cache(async () => {
 // ---------- Categories ----------
 
 async function fetchCategoriesForUser(userId: string) {
-  return db.query.categories.findMany({
-    where: eq(categories.userId, userId),
-    orderBy: (c, { asc }) => [asc(c.name)],
+  const rows = await db.query.categories.findMany({
+    where: categoryAccess(userId),
+    orderBy: (c, { asc }) => [asc(c.name), asc(c.id)],
   });
+  return rows.map(category => categoryDefinitionForActor(category, userId));
 }
 
-const getCachedCategoriesByUser = (userId: string) =>
-  unstable_cache(
-    () => fetchCategoriesForUser(userId),
-    ["categories", userId],
-    { tags: [CACHE_TAGS.categories(userId)] },
-  )();
+// Membership and retained classification access are evaluated on every request.
+const getCachedCategoriesByUser = fetchCategoriesForUser;
 
 export const getCachedUserCategories = cache(async () => {
   const session = await getFinancialSession();

@@ -24,19 +24,19 @@ describe("dashboard activity", () => {
     expect(sankey.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Uncategorized income", total: 1000 }),
       expect.objectContaining({ name: "Uncategorized expenses", total: 200 }),
-      expect.objectContaining({ name: "Cash retained", total: 750 }),
+      expect.objectContaining({ name: "Income above consumption", total: 750 }),
     ]));
   });
 
-  it("combines equivalent household categories while retaining different types", () => {
+  it("keeps same-name household definitions distinct until explicitly mapped", () => {
     const result = summarizeActivity([
       row(-100, { categoryId: "charlie-housing", categoryName: "Housing", categoryType: "expense" }),
       row(-200, { categoryId: "jessica-housing", categoryName: "Housing", categoryType: "expense" }),
       row(500, { categoryId: "housing-income", categoryName: "Housing", categoryType: "income" }),
     ]);
-    expect(result.categories).toHaveLength(2);
-    expect(result.categories.find(c => c.type === "expense")?.amount).toBe(300);
-    expect(activitySankey(result).nodes.filter(n => n.name === "Housing")).toHaveLength(2);
+    expect(result.categories).toHaveLength(3);
+    expect(result.categories.filter(c => c.type === "expense").map(c => c.amount).sort()).toEqual([100, 200]);
+    expect(activitySankey(result).nodes.filter(n => n.name === "Housing")).toHaveLength(3);
   });
 
   it("keeps category exclusions and zeroed secondary/fully reimbursed amounts excluded", () => {
@@ -50,7 +50,7 @@ describe("dashboard activity", () => {
   });
 
   it.each([
-    [250, "Cash retained"], [-125, "Cash required"],
+    [250, "Income above consumption"], [-125, "Consumption above income"],
   ])("renders one-sided uncategorized activity %s", (amount, balancingName) => {
     const chart = activitySankey(summarizeActivity([row(amount)]));
     expect(chart.links).toHaveLength(1);
@@ -80,7 +80,7 @@ describe("dashboard activity", () => {
     expect(activitySankey(result).nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Food", total: 70 }),
       expect.objectContaining({ name: "Salary", total: 800 }),
-      expect.objectContaining({ name: "Cash retained", total: 730 }),
+      expect.objectContaining({ name: "Income above consumption", total: 730 }),
     ]));
   });
 
@@ -95,7 +95,7 @@ describe("dashboard activity", () => {
     expect(chart.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Refunds: Food", total: 80, categoryType: "income" }),
       expect.objectContaining({ name: "Income reversals: Salary", total: 30, categoryType: "expense" }),
-      expect.objectContaining({ name: "Cash retained", total: 50 }),
+      expect.objectContaining({ name: "Income above consumption", total: 50 }),
     ]));
     expect(chart.links.every((link) => link.value > 0)).toBe(true);
   });
@@ -125,9 +125,9 @@ describe("cash flow separates consumption, allocations and ownership transfers",
     expect(chart.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Loan principal", total: 35000 }),
       expect.objectContaining({ name: "Transfers in", total: 35000 }),
-      expect.objectContaining({ name: "Cash retained", total: 4000 }),
+      expect.objectContaining({ name: "Income above consumption", total: 4000 }),
     ]));
-    expect(chart.nodes.some(n => n.name === "Cash required")).toBe(false);
+    expect(chart.nodes.some(n => n.name === "Consumption above income")).toBe(false);
   });
 
   it("handles arbitrary contribution amounts and ownership rates, independently of later payments", () => {

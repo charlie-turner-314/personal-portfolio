@@ -12,6 +12,7 @@ from typing import Optional, Literal
 from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import joinedload
 
+from app.services.financial_access import category_access
 from app.services.financial_access import account_access
 from app.mcp.dependencies import get_db, validate_uuid, validate_date
 from app.models import Transaction, Account, Category
@@ -657,7 +658,7 @@ def update_transaction_category(
         # Verify category belongs to user
         category = db.query(Category).filter(
             Category.id == cat_uuid,
-            Category.user_id == user_id
+            category_access(user_id)
         ).first()
 
         if not category:
@@ -724,7 +725,7 @@ def bulk_update_transaction_categories(
         # Verify category belongs to user
         category = db.query(Category).filter(
             Category.id == cat_uuid,
-            Category.user_id == user_id,
+            category_access(user_id),
         ).first()
 
         if not category:

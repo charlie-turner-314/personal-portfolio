@@ -14,7 +14,7 @@ export interface CashFlowSummaryData {
 
 export function CashFlowSummary({ data, currency, reconciliation }: { data: CashFlowSummaryData; currency: string; reconciliation?: CashReconciliation }) {
   return <Card>
-    <CardHeader><CardTitle className="text-sm font-medium">Where your saving went</CardTitle></CardHeader>
+    <CardHeader><CardTitle className="text-sm font-medium">Income, consumption and capital movements</CardTitle></CardHeader>
     <CardContent className="space-y-4">
       <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {[
