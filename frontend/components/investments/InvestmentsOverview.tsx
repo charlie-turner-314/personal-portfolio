@@ -97,7 +97,7 @@ export function InvestmentsOverview({
   for (const h of holdings) {
     if (h.archived_at) continue;
     const qty = Number(h.quantity ?? 0);
-    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (!Number.isFinite(qty) || qty === 0) continue;
     activePositions += 1;
     const v = Number(h.current_value_user_currency ?? 0);
     if (Number.isFinite(v)) valueFromHoldings += v;

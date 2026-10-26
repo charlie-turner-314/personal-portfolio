@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   getPortfolio,
   listHoldings,
@@ -42,6 +43,7 @@ export async function InvestmentsSection({ financialYearStart: requestedYear, pe
 
   return (
     <InvestmentsOverview
+      key={createHash("sha256").update(JSON.stringify([personScope, financialYearStart, portfolio.currency, portfolio.total_value, historyResult.data])).digest("hex")}
       personScope={personScope}
       portfolio={portfolio}
       holdings={holdings}
@@ -68,7 +70,7 @@ export async function InvestmentsSection({ financialYearStart: requestedYear, pe
         disposal_count: cgtSummary.disposal_count,
         calculation_status: cgtSummary.missing_fx_allocation_count > 0 || cgtSummary.coverage_warnings.length > 0 ? "partial" : "complete",
         assumptions: cgtSummary.assumptions,
-        unavailable_reason: [cgtSummary.missing_fx_allocation_count > 0 ? `${cgtSummary.missing_fx_allocation_count} allocation(s) have missing FX.` : null, ...cgtSummary.coverage_warnings].filter(Boolean).join(" ") || null,
+        unavailable_reason: [cgtSummary.missing_fx_allocation_count > 0 ? `${cgtSummary.missing_fx_allocation_count} allocation(s) lack verified AUD valuation, fee or FX inputs.` : null, ...cgtSummary.coverage_warnings].filter(Boolean).join(" ") || null,
       }] : []}
       connections={connections}
       financialYears={financialYears}

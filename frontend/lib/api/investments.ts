@@ -596,6 +596,7 @@ export async function addManualHolding(
   accountId: string,
   payload: {
     symbol: string;
+    name?: string;
     quantity: string;
     instrument_type: "equity" | "etf" | "fund" | "crypto" | "cash";
     currency: string;

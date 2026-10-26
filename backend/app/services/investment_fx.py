@@ -11,7 +11,7 @@ class InvestmentFxAdapter:
         self._svc = ExchangeRateService(db=db)
 
     def convert(self, amount, src, dst, on):
-        if src.upper() == dst.upper():
+        if amount == 0 or src.upper() == dst.upper():
             return amount
         result = self._svc.convert_amount(
             amount=amount, from_currency=src, to_currency=dst, for_date=on,

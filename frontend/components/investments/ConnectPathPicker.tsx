@@ -59,7 +59,7 @@ export function ConnectPathPicker({
   if (picked === null) {
     return (
       <div className="flex-1 overflow-auto">
-        <div className="p-8 max-w-3xl space-y-5">
+        <div className="p-4 sm:p-8 max-w-3xl space-y-5">
           <p className="text-sm text-muted-foreground leading-relaxed max-w-xl">
             Choose how to track your investments. You can combine these methods
             across different accounts — a brokerage account synced from IBKR
@@ -69,6 +69,10 @@ export function ConnectPathPicker({
             {paths.map((p) => (
               <Card
                 key={p.id}
+                role="button"
+                tabIndex={0}
+                aria-label={p.title}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPicked(p.id); } }}
                 onClick={() => setPicked(p.id)}
                 className="cursor-pointer transition-colors hover:bg-muted/20 hover:border-primary"
               >
@@ -105,7 +109,7 @@ export function ConnectPathPicker({
 
   return (
     <div className="flex-1 overflow-auto">
-      <div className="p-8 max-w-3xl space-y-5">
+      <div className="p-4 sm:p-8 max-w-3xl space-y-5">
         <Button
           variant="ghost"
           size="sm"

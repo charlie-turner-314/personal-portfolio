@@ -536,6 +536,15 @@ def _recompute_cgt_allocations(
         ))
 
 
+def rebuild_recorded_cgt(db: Session, account: Account, keys) -> None:
+    """Rebuild tax projections without replacing broker-reported positions."""
+    for symbol, instrument_type in keys:
+        trades = db.query(BrokerTrade).filter_by(account_id=account.id, symbol=symbol, instrument_type=instrument_type).order_by(BrokerTrade.trade_date, BrokerTrade.id).all()
+        holding = db.query(Holding).filter_by(account_id=account.id, symbol=symbol, instrument_type=instrument_type).one_or_none()
+        adjustments = db.query(InvestmentCostBaseAdjustment).filter_by(holding_id=holding.id).all() if holding else []
+        _recompute_cgt_allocations(db, account, symbol, instrument_type, trades, [CostBaseAdjustment(symbol=symbol, effective_date=item.effective_date, amount=Decimal(item.amount_native), currency=item.currency, adjustment_id=str(item.id), sort_key=str(item.id)) for item in adjustments])
+
+
 def remove_trade(
     db: Session,
     user_id: str,

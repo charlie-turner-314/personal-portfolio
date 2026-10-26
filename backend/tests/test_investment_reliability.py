@@ -318,3 +318,98 @@ def test_migration_preserves_unknown_currency_and_provider_key_on_replay(client,
     result = client.get("/api/investments/holdings").json()
     assert result[0]["current_value_user_currency"] is None
     assert "unverified" in result[0]["valuation_error"]
+
+
+def test_ibkr_statement_marks_are_used_and_sold_positions_keep_income(client, db):
+    from app.models import User
+    from app.integrations.ibkr_flex_adapter import ParsedPosition
+    from app.services.investment_sync_service import InvestmentSyncService
+    account, holding = position(db, symbol="BHP")
+    db.query(User).filter_by(id="u1").one().functional_currency = "AUD"
+    db.add(InvestmentIncomeEvent(user_id="u1", account_id=account.id, holding_id=holding.id, event_type="dividend", pay_date=date(2026, 10, 1), currency="AUD", cash_received=25))
+    db.commit()
+    fx = MagicMock(); fx.convert.side_effect = lambda amount, *args: amount
+    service = InvestmentSyncService(db, fx=fx)
+    service._upsert_positions(account, [ParsedPosition("BHP", "Australian BHP", Decimal(10), "AUD", "equity", Decimal(100), Decimal(110), date(2026, 10, 26))])
+    db.commit()
+    service.valuation_service.compute(account.id, date(2026, 10, 26))
+    valuation = db.query(HoldingValuation).one()
+    assert valuation.price == 110
+    assert valuation.quote_currency == "AUD"
+    assert valuation.quote_source == "IBKR statement"
+    assert valuation.value_user_currency == 1100
+    service._upsert_positions(account, [])
+    db.commit()
+    assert db.get(Holding, holding.id).quantity == 0
+    assert db.query(InvestmentIncomeEvent).one().cash_received == 25
+    assert db.query(HoldingValuation).count() == 1
+
+
+def test_ibkr_typed_fees_rebuild_cgt_without_overwriting_reported_units(client, db):
+    from app.models import CgtAllocation
+    from app.integrations.ibkr_flex_adapter import ParsedTrade
+    from app.services.investment_sync_service import InvestmentSyncService
+    account, holding = position(db, quantity="10")
+    holding.instrument_type = "etf"; holding.source = "ibkr_flex"; db.commit()
+    service = InvestmentSyncService(db, fx=MagicMock())
+    rows = [ParsedTrade("buy", holding.symbol, "buy", Decimal(2), Decimal(100), "AUD", date(2024, 1, 1), "etf", Decimal(2), "AUD"), ParsedTrade("sell", holding.symbol, "sell", Decimal(1), Decimal(120), "AUD", date(2026, 10, 1), "etf", Decimal(2), "AUD")]
+    assert service._upsert_trades(account, rows) == 0
+    db.flush()
+    allocation = db.query(CgtAllocation).one()
+    assert allocation.instrument_type == "etf"
+    assert allocation.gain_aud == 17
+    assert holding.quantity == 10  # broker position is authoritative, not partial history
+    assert service._ibkr_position_mismatches(account) == [holding.symbol]
+
+
+def test_account_sync_lock_survives_session_commits(db):
+    from threading import Event, Thread
+    from sqlalchemy.orm import Session
+    from app.services.investment_lock_service import account_sync_lock
+    account_id = uuid4()
+    engine = db.get_bind().engine
+    attempted, entered = Event(), Event()
+    errors = []
+
+    def contender():
+        try:
+            with Session(engine) as other:
+                attempted.set()
+                with account_sync_lock(other, account_id):
+                    entered.set()
+        except Exception as error:
+            errors.append(error)
+
+    with account_sync_lock(db, account_id):
+        thread = Thread(target=contender, daemon=True)
+        thread.start()
+        assert attempted.wait(2)
+        db.commit()
+        assert not entered.wait(0.2), "Session commit must not release the account lock"
+    assert entered.wait(2), "Waiting refresh must resume after lock release"
+    thread.join(2)
+    assert not errors
+    assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_old_refresh_does_not_replace_newer_queued_status(client, db, fails):
+    from app.services.investment_sync_service import InvestmentSyncService
+    account, _ = position(db)
+    newer_id = str(uuid4())
+    service = InvestmentSyncService(db, fx=MagicMock())
+
+    def refresh(*args):
+        account.investment_sync_state = {"status": "queued", "request_id": newer_id}
+        db.commit()
+        if fails:
+            raise RuntimeError("Synthetic provider failure")
+
+    with patch.object(service, "_sync_manual", side_effect=refresh):
+        if fails:
+            with pytest.raises(RuntimeError):
+                service.sync_account(account.id)
+        else:
+            service.sync_account(account.id)
+    db.refresh(account)
+    assert account.investment_sync_state == {"status": "queued", "request_id": newer_id}

@@ -63,7 +63,11 @@ def holding_price_lookup(holding, market_provider):
     """A ticker is not globally unique across exchange balance and market feeds."""
     override = holding.provider_symbol
     if override and override.startswith("manual:"):
-        return override, None
+        return override, "manual"
+    if override and override.startswith("ibkr:"):
+        return override, "ibkr_flex"
+    if holding.source == "ibkr_flex" and not override:
+        return f"ibkr:{holding.id.hex}", "ibkr_flex"
     exchange_sources = {"coinspot_api": "coinspot", "binance_api": "binance", "crypto_com_api": "crypto_com_exchange"}
     if holding.source in exchange_sources and (not override or len(override) > 64):
         return holding.symbol, exchange_sources[holding.source]

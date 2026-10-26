@@ -7,7 +7,7 @@ from io import StringIO
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -166,6 +166,13 @@ def _run_sync_in_process(account_id: UUID) -> None:
         db.close()
 
 
+def _enqueue_account_refresh(db, background_tasks, account_id):
+    account = db.query(Account).filter_by(id=account_id).one()
+    account.investment_sync_state = {"request_id": str(uuid4()), "status": "queued", "queued_at": datetime.utcnow().isoformat(), "error": None}
+    db.commit()
+    background_tasks.add_task(_run_sync_in_process, account_id)
+
+
 router = APIRouter()
 
 
@@ -250,6 +257,7 @@ def preview_investment_import(
 @router.post("/imports")
 def apply_investment_import(
     payload: InvestmentImportApplyRequest,
+    background_tasks: BackgroundTasks,
     user_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -280,6 +288,7 @@ def apply_investment_import(
             profile = _save_investment_import_profile(db, user_id=user_id, payload=profile_payload)
             db.commit()
             result["profile_id"] = str(profile.id)
+        _enqueue_account_refresh(db, background_tasks, payload.account_id)
         return result
     except (InvestmentCsvImportError, ActivityApplicationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -923,6 +932,8 @@ def create_broker_connection(
                 status_code=400,
                 detail="The existing account currency must match the connector base currency.",
             )
+        if db.query(Holding.id).filter(Holding.account_id == account.id, Holding.source == "manual").first():
+            raise HTTPException(status_code=409, detail="This account contains manual opening snapshots. Use a separate connected account so its history and balances cannot be mixed ambiguously.")
         account.account_type = "investment_brokerage"
         account.provider = payload.provider
     else:
@@ -996,7 +1007,7 @@ def create_broker_connection(
     db.refresh(conn)
 
     # Kick off background sync.
-    background_tasks.add_task(_run_sync_in_process, account.id)
+    _enqueue_account_refresh(db, background_tasks, account.id)
 
     return {
         "connection_id": str(conn.id),
@@ -1130,7 +1141,7 @@ def trigger_sync(
     conn.last_sync_error = None
     conn.next_retry_at = None
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    _enqueue_account_refresh(db, background_tasks, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
 
@@ -1195,7 +1206,7 @@ def update_coinspot_credentials(
         ),
     }
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    _enqueue_account_refresh(db, background_tasks, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
 
@@ -1228,7 +1239,7 @@ def update_binance_configuration(
         "configured_trade_symbols": payload.trade_symbols,
     }
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, conn.account_id)
+    _enqueue_account_refresh(db, background_tasks, conn.account_id)
     return {"status": "queued", "account_id": str(conn.account_id)}
 
 
@@ -1252,7 +1263,7 @@ def trigger_sync_all(
         .all()
     )
     for account in accounts:
-        account.investment_sync_state = {"status": "queued", "queued_at": datetime.utcnow().isoformat(), "error": None}
+        account.investment_sync_state = {"request_id": str(uuid4()), "status": "queued", "queued_at": datetime.utcnow().isoformat(), "error": None}
     db.commit()
     for account in accounts:
         background_tasks.add_task(_run_sync_in_process, account.id)
@@ -1343,7 +1354,7 @@ def create_manual_holding(
     if not account or account.account_type != "investment_manual":
         raise HTTPException(status_code=404, detail="Manual investment account not found")
 
-    if payload.provider_symbol and payload.provider_symbol.startswith("manual:"):
+    if payload.provider_symbol and payload.provider_symbol.startswith(("manual:", "ibkr:")):
         raise HTTPException(status_code=422, detail="Private price references are created through this holding's unit-price form")
 
     def existing_position():
@@ -1359,20 +1370,12 @@ def create_manual_holding(
         raise HTTPException(status_code=409, detail="This symbol and type already exist with different details; edit the existing position")
     repeated = existing_position()
     if repeated:
-        background_tasks.add_task(_run_sync_in_process, account.id)
+        _enqueue_account_refresh(db, background_tasks, account.id)
         return repeated
 
-    # Resolve symbol metadata via the price provider.
-    name: Optional[str] = None
-    try:
-        provider = get_price_provider()
-        matches = provider.search_symbols(payload.symbol)
-        if matches:
-            name = next((getattr(match, "name", None) for match in matches
-                         if match.symbol.upper() == payload.symbol.upper()), None)
-    except Exception:
-        # Symbol lookup is best-effort; do not fail the holding creation.
-        name = None
+    # Symbol resolution is an explicit UI step. Saving a manual or unlisted
+    # instrument must not depend on a live market-data request.
+    name = payload.name or payload.symbol
 
     holding = Holding(
         user_id=account.user_id,
@@ -1399,7 +1402,7 @@ def create_manual_holding(
     db.refresh(holding)
 
     # Trigger an async revaluation so the new holding gets priced.
-    background_tasks.add_task(_run_sync_in_process, account.id)
+    _enqueue_account_refresh(db, background_tasks, account.id)
 
     return {
         "holding_id": str(holding.id),
@@ -1494,7 +1497,7 @@ def list_holdings(
                 ownership_share=share,
                 is_stale=bool(h.last_price_error) or not latest_val or bool(latest_val.is_stale) or (date.today() - latest_val.date).days > 3,
                 valuation_date=latest_val.date if latest_val else None,
-                valuation_error=h.last_price_error or ("Valuation currency is unverified; refresh this holding" if latest_val and not latest_val.value_currency else None if latest_val else "No valuation available"),
+                valuation_error=("Position quantity changed; revaluation pending" if latest_val and latest_val.quantity != h.quantity else None) or h.last_price_error or ("Valuation currency is unverified; refresh this holding" if latest_val and not latest_val.value_currency else None if latest_val else "No valuation available"),
                 quote_currency=latest_val.quote_currency if latest_val else None,
                 quote_date=latest_val.quote_date if latest_val else None,
                 quote_source=latest_val.quote_source if latest_val else None,
@@ -1529,7 +1532,7 @@ def update_holding(
 
     payload = updates.model_dump(exclude_unset=True)
     reference = payload.get("provider_symbol")
-    if reference and reference.startswith("manual:") and reference != f"manual:{holding.id.hex}":
+    if reference and reference.startswith(("manual:", "ibkr:")) and reference.split(":", 1)[1] != holding.id.hex:
         raise HTTPException(status_code=422, detail="A private price belongs to its original holding")
     if any(field in payload and payload[field] is None for field in ("symbol", "currency", "instrument_type", "quantity")):
         raise HTTPException(status_code=422, detail="Instrument identity and quantity cannot be null")
@@ -1548,7 +1551,7 @@ def update_holding(
 
     # Every position correction invalidates current valuation, including quantity.
     if payload:
-        background_tasks.add_task(_run_sync_in_process, holding.account_id)
+        _enqueue_account_refresh(db, background_tasks, holding.account_id)
 
     return {"id": str(holding.id), "symbol": holding.symbol, "quantity": str(holding.quantity)}
 
@@ -1571,7 +1574,7 @@ def archive_holding(
         raise HTTPException(status_code=400, detail="Disconnect the broker before archiving positions")
     holding.archived_at = datetime.utcnow()
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, holding.account_id)
+    _enqueue_account_refresh(db, background_tasks, holding.account_id)
 
 
 @router.delete("/holdings/{holding_id}", status_code=204)
@@ -1602,7 +1605,7 @@ def delete_holding(
     account_id = holding.account_id
     db.delete(holding)
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, account_id)
+    _enqueue_account_refresh(db, background_tasks, account_id)
 
 
 @router.post("/holdings/{holding_id}/prices")
@@ -1637,7 +1640,7 @@ def save_manual_price(
     snap.source_label = payload.source
     holding.provider_symbol = symbol
     db.commit()
-    background_tasks.add_task(_run_sync_in_process, holding.account_id)
+    _enqueue_account_refresh(db, background_tasks, holding.account_id)
     return {"date": payload.date, "price": payload.price, "currency": payload.currency, "source": payload.source}
 
 
@@ -1688,11 +1691,12 @@ def portfolio_summary(
             share = scope.share(account.id, latest.date if latest else date.today())
             if share == 0:
                 continue
-            if not latest or not latest.value_currency or h.last_price_error or latest.is_stale or (date.today() - latest.date).days > 3:
+            if not latest or not latest.value_currency or latest.quantity != h.quantity or h.last_price_error or latest.is_stale or (date.today() - latest.date).days > 3:
                 unavailable_holdings += 1
             if latest and latest.value_currency:
                 priced_holdings += 1
-                valuation_dates.append(latest.quote_date or latest.date)
+                if latest.quote_date:
+                    valuation_dates.append(latest.quote_date)
                 visible_value = _valuation_in_actor_currency(db, latest, account.user_id, user_id) * share
                 account_value += visible_value
                 allocation_by_type[h.instrument_type] = (
@@ -1754,7 +1758,7 @@ def portfolio_summary(
         allocation_by_currency=allocation_by_currency,
         valuation_status="unavailable" if unavailable_holdings and not priced_holdings else "partial" if unavailable_holdings else "complete",
         unavailable_holdings=unavailable_holdings,
-        as_of=min(valuation_dates) if valuation_dates else None,
+        as_of=min(valuation_dates) if valuation_dates and len(valuation_dates) == priced_holdings else None,
     )
 
 
@@ -2213,7 +2217,7 @@ def cgt_financial_year_summary(
     assumptions.extend(coverage_warnings)
     missing = len(rows) - len(known)
     if missing:
-        assumptions.append(f"{missing} allocation(s) excluded from AUD totals because transaction-date FX is missing.")
+        assumptions.append(f"{missing} allocation(s) excluded from AUD totals because required AUD valuation, fee or transaction-date FX inputs are missing.")
     return CgtFinancialYearSummary(
         financial_year_start=financial_year_start,
         gross_gains_aud=gross_gains.quantize(Decimal("0.01")),

@@ -59,8 +59,10 @@ class HoldingValuationService:
             valuation.quote_currency = currency
             lookup, provider = holding_price_lookup(h, self.price_service.provider.name)
             snap = self.price_service.latest_snapshot(lookup, on, provider) if h.instrument_type != "cash" else None
-            valuation.quote_date = snap.date if snap else on
-            valuation.quote_source = (snap.source_label or snap.provider) if snap else "cash"
+            valuation.quote_date = snap.date if snap else h.as_of_date if h.source == "ibkr_flex" and h.instrument_type == "cash" else on
+            valuation.quote_source = (snap.source_label or snap.provider) if snap else "cash" if h.instrument_type == "cash" else "closed-position"
+            if snap is None and h.instrument_type != "cash":
+                valuation.quote_currency = None
             total_user += value_user
             total_account_ccy += value_acct
 
@@ -81,18 +83,19 @@ class HoldingValuationService:
     STALE_AFTER_DAYS = 3
 
     def _price_for(self, h: Holding, on: date) -> tuple[Decimal, str, bool]:
-        if Decimal(h.quantity) == 0:
-            return Decimal("0"), h.currency, False
         if h.instrument_type == "cash":
-            return Decimal("1"), h.currency, False
+            stale = Decimal(h.quantity) != 0 and h.source == "ibkr_flex" and (h.as_of_date is None or (on - h.as_of_date).days > self.STALE_AFTER_DAYS)
+            return Decimal("1"), h.currency, stale
         lookup_symbol, provider = holding_price_lookup(h, self.price_service.provider.name)
-        if lookup_symbol.startswith("manual:") and lookup_symbol != f"manual:{h.id.hex}":
+        if lookup_symbol.startswith(("manual:", "ibkr:")) and lookup_symbol.split(":", 1)[1] != h.id.hex:
             raise MissingInvestmentPrice("Private price reference does not belong to this holding")
         snap = self.price_service.latest_snapshot(lookup_symbol, on, provider)
         if snap is None:
+            if Decimal(h.quantity) == 0:
+                return Decimal(0), h.currency, False
             raise MissingInvestmentPrice(f"Price unavailable for {h.symbol}")
         gap_days = (on - snap.date).days
-        is_stale = gap_days > self.STALE_AFTER_DAYS
+        is_stale = Decimal(h.quantity) != 0 and gap_days > self.STALE_AFTER_DAYS
         return Decimal(snap.close), snap.currency, is_stale
 
     def _upsert_valuation(self, holding_id, on: date, qty: Decimal, price: Decimal,

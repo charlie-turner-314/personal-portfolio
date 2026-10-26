@@ -172,6 +172,7 @@ export function HoldingsTableHF({
         </div>
         <div className="flex-1" />
         <ToggleGroup
+          className="max-w-full flex-wrap"
           multiple={false}
           value={[filter]}
           onValueChange={(v) => {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RiAlertLine, RiCheckLine, RiDeleteBinLine, RiLoader4Line } from "@remixicon/react";
 import { toast } from "sonner";
@@ -241,7 +242,7 @@ export function InvestmentImportWizard({ accounts: initialAccounts, defaultCurre
       });
       setCompletedMessage(
         `Imported ${result.inserted_activities} activit${result.inserted_activities === 1 ? "y" : "ies"}. ` +
-        `${result.skipped_duplicate_records} duplicate source record${result.skipped_duplicate_records === 1 ? " was" : "s were"} skipped.`,
+        `${result.skipped_duplicate_records} duplicate source record${result.skipped_duplicate_records === 1 ? " was" : "s were"} skipped. Portfolio valuation refresh queued.`,
       );
       toast.success("Investment import completed");
       setPreview(await previewInvestmentImport(requestPayload()));
@@ -331,6 +332,7 @@ export function InvestmentImportWizard({ accounts: initialAccounts, defaultCurre
 
   return (
     <div className="space-y-5">
+      {completedMessage && <Link className="inline-block text-sm underline" href="/investments">View portfolio</Link>}
       <Button variant="outline" onClick={() => setCreatingAccount((value) => !value)}>Create another investment account</Button>
       {creatingAccount && accountCreator}
       <Card className="rounded-none">

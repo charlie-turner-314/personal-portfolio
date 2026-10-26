@@ -268,7 +268,7 @@ export function BrokerForm({
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">What you need</div>
               <p className="text-xs text-muted-foreground leading-relaxed">
                 Create a Flex Web Service token plus separate Positions and Trades Flex
-                Query IDs in IBKR Account Management.
+                Query IDs in IBKR Account Management. Include position report dates, mark prices, currency and instrument identifiers. Include trade dates, asset category, commission and commission currency in the Trades query; missing fee information stays incomplete.
               </p>
               <a
                 href="https://www.interactivebrokers.com/en/index.php?f=1325"

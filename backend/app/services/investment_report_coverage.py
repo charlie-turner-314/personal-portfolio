@@ -1,7 +1,7 @@
 """Coverage warnings are separate from arithmetic over recorded allocations."""
 from datetime import datetime, time
 
-from app.models import BrokerConnection, Holding, InvestmentActivity, InvestmentCryptoTransfer, InvestmentIncomeEvent, InvestmentIngestionRun, InvestmentReconciliationItem
+from app.models import BrokerTrade, BrokerConnection, Holding, InvestmentActivity, InvestmentCryptoTransfer, InvestmentIncomeEvent, InvestmentIngestionRun, InvestmentReconciliationItem
 
 
 def investment_report_warnings(db, user_id, start, end, scope, account_id=None):
@@ -26,6 +26,11 @@ def investment_report_warnings(db, user_id, start, end, scope, account_id=None):
         warnings.append("Some connected provider history is incomplete or requires attention.")
     if db.query(InvestmentIngestionRun.id).filter(InvestmentIngestionRun.account_id.in_(accounts), InvestmentIngestionRun.status == "partial").first():
         warnings.append("Partial import batches exist. Review skipped or unsupported activities in import history.")
+    missing_trades = db.query(BrokerTrade).filter(BrokerTrade.account_id.in_(accounts), BrokerTrade.valuation_missing.is_(True), BrokerTrade.trade_date >= start, BrokerTrade.trade_date < end).all()
+    if any(scope.share(item.account_id, item.trade_date) > 0 for item in missing_trades):
+        warnings.append("Recorded trades have missing fee or valuation inputs; complete the source data before using tax totals.")
+    if db.query(Holding.id).filter(Holding.account_id.in_(accounts), Holding.quantity < 0).first():
+        warnings.append("Short positions require a dedicated tax workflow; the current allocation engine is long-only FIFO.")
     positions = db.query(Holding).filter(Holding.account_id.in_(accounts), Holding.source == "manual", Holding.quantity > 0).all()
     if any((item.as_of_date or item.created_at.date()) < end and scope.share(item.account_id, item.as_of_date or item.created_at.date()) > 0 for item in positions):
         warnings.append("Manual opening positions do not establish a complete acquisition history.")

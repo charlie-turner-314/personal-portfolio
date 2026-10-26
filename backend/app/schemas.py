@@ -456,6 +456,7 @@ class ManualAccountCreate(BaseModel):
 
 
 class HoldingCreate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=255)
     symbol: str = Field(min_length=1, max_length=64)
     provider_symbol: Optional[str] = None
     quantity: Decimal = Field(ge=0, allow_inf_nan=False)

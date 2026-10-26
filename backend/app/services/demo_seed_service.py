@@ -1142,7 +1142,7 @@ class DemoSeedService:
                     account_id=account.id,
                     date=day,
                     account_currency=account.currency,
-                balance_in_account_currency=total_acct,
+                    balance_in_account_currency=total_acct,
                     balance_in_functional_currency=total_user,
                 ))
                 account_balances += 1

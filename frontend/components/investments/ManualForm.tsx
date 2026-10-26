@@ -32,6 +32,7 @@ type Inst = "etf" | "equity" | "fund" | "crypto" | "cash";
 type Row = {
   id: string;
   symbol: string;
+  name: string | null;
   symbolConfirmed: boolean;
   qty: string;
   type: Inst;
@@ -46,6 +47,7 @@ function newRow(currency = "AUD"): Row {
   return {
     id: `r${++_rowSeq}`,
     symbol: "",
+    name: null,
     symbolConfirmed: false,
     qty: "",
     type: "etf",
@@ -109,6 +111,7 @@ export function ManualForm({
         valid.map((r) =>
           addManualHolding(target, {
             symbol: r.symbol.trim().toUpperCase(),
+            ...(r.name ? { name: r.name } : {}),
             quantity: r.qty,
             instrument_type: r.type,
             currency: r.currency,
@@ -158,17 +161,17 @@ export function ManualForm({
 
   return (
     <Card className="border-t-2 border-t-primary">
-      <CardContent className="p-6 space-y-4">
+      <CardContent className="p-4 sm:p-6 space-y-4">
         <form onSubmit={submit} className="space-y-4">
           <div className="text-sm font-semibold">Add holdings</div>
 
-          <div className="flex gap-3">
-            <Field label="Account" className="flex-1">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Field htmlFor="manual-account-select" label="Account" className="flex-1">
               <Select
                 value={accountId}
                 onValueChange={(v) => { if (v) { setAccountId(v); const currency = accounts.find((account) => account.id === v)?.base_currency ?? baseCcy; setRows((items) => items.map((row) => row.currencyExplicit ? row : { ...row, currency })); } }}
               >
-                <SelectTrigger className="w-full">
+                <SelectTrigger id="manual-account-select" className="w-full">
                   <SelectValue>{accounts.find((a) => a.id === accountId) ? `${accounts.find((a) => a.id === accountId)!.name} · ${accounts.find((a) => a.id === accountId)!.base_currency}` : "+ Create new account…"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -184,19 +187,20 @@ export function ManualForm({
           </div>
 
           {accountId === NEW && (
-            <div className="flex gap-3">
-              <Field label="New account name" className="flex-[2_1_0%]">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Field htmlFor="manual-account-name" label="New account name" className="flex-[2_1_0%]">
                 <Input
+                  id="manual-account-name"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                 />
               </Field>
-              <Field label="Base currency" className="flex-1">
+              <Field htmlFor="manual-account-currency" label="Base currency" className="flex-1">
                 <Select
                   value={baseCcy}
                   onValueChange={(v) => { if (v) { setBaseCcy(v); setRows((items) => items.map((row) => row.currencyExplicit ? row : { ...row, currency: v })); } }}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id="manual-account-currency" className="w-full">
                     <SelectValue>{baseCcy}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -299,16 +303,18 @@ function HoldingRow({
           </Button>
         )}
       </div>
-      <div className="flex gap-3">
-        <Field label={symbolLabel} className="flex-[2_1_0%]">
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <Field htmlFor={`holding-symbol-${row.id}`} label={symbolLabel} className="flex-[2_1_0%]">
           <SymbolSearchInput
+            id={`holding-symbol-${row.id}`}
             value={row.symbol}
             onChange={(v) =>
-              onChange({ symbol: v, symbolConfirmed: false })
+              onChange({ symbol: v, name: null, symbolConfirmed: false })
             }
             onSelect={(r: SymbolSearchResult) =>
               onChange({
                 symbol: r.symbol,
+                name: r.name,
                 symbolConfirmed: true,
                 ...(r.currency ? { currency: r.currency, currencyExplicit: true } : {}),
                 ...(r.instrument_type ? { type: r.instrument_type } : {}),
@@ -318,9 +324,10 @@ function HoldingRow({
           />
         </Field>
       </div>
-      <div className="flex gap-3">
-        <Field label="Quantity" className="flex-1">
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <Field htmlFor={`holding-quantity-${row.id}`} label="Quantity" className="flex-1">
           <Input
+            id={`holding-quantity-${row.id}`}
             type="number"
             min="0"
             step="any"
@@ -331,6 +338,8 @@ function HoldingRow({
         </Field>
         <Field label="Instrument type" className="flex-1">
           <ToggleGroup
+            aria-label="Instrument type"
+            className="flex flex-wrap"
             multiple={false}
             value={[row.type]}
             onValueChange={(v) =>
@@ -350,12 +359,12 @@ function HoldingRow({
             ))}
           </ToggleGroup>
         </Field>
-        <Field label="Currency" className="flex-1">
+        <Field htmlFor={`holding-currency-${row.id}`} label="Currency" className="flex-1">
           <Select
             value={row.currency}
             onValueChange={(v) => v && onChange({ currency: v, currencyExplicit: true })}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger id={`holding-currency-${row.id}`} className="w-full">
               <SelectValue>{row.currency}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -364,6 +373,7 @@ function HoldingRow({
           </Select>
         </Field>
         <Field
+          htmlFor={`holding-cost-${row.id}`}
           label={
             <>
               Avg cost{" "}
@@ -375,6 +385,7 @@ function HoldingRow({
           className="flex-1"
         >
           <Input
+            id={`holding-cost-${row.id}`}
             type="number"
             min="0"
             step="any"
