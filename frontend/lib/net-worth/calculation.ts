@@ -62,19 +62,23 @@ export interface NetWorthSuperannuation {
 export interface NetWorthOverview {
   scope?: string;
   accountFiltered?: boolean;
-  total: number;
-  grossAssets: number;
-  totalLiabilities: number;
-  netWorth: number;
+  missingValues: string[];
+  knownGrossAssets: number;
+  coveredAccounts?: { id:string; name:string }[];
+  total: number | null;
+  grossAssets: number | null;
+  totalLiabilities: number | null;
+  netWorth: number | null;
   currency: string;
   categories: NetWorthAssetCategory[];
   liabilities: NetWorthLiability[];
   superannuation: NetWorthSuperannuation;
 }
 
-function parseAmount(value: NetWorthEntry["value"]): number {
-  const parsed = typeof value === "number" ? value : parseFloat(value || "0");
-  return Number.isFinite(parsed) ? parsed : 0;
+function parseAmount(value: NetWorthEntry["value"]): number | null {
+  if (value == null || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function getInitial(name: string): string {
@@ -111,6 +115,8 @@ function buildEmptySuperannuation(): NetWorthSuperannuation {
 
 export function emptyNetWorthOverview(currency = "EUR"): NetWorthOverview {
   return {
+    missingValues: [],
+    knownGrossAssets: 0,
     total: 0,
     grossAssets: 0,
     totalLiabilities: 0,
@@ -129,11 +135,13 @@ export function calculateNetWorthOverview(
   const categoryMap = new Map<AssetCategoryKey, NetWorthAssetAccount[]>();
   const liabilities: NetWorthLiability[] = [];
   const superannuation = buildEmptySuperannuation();
+  const missingValues: string[] = [];
   let grossAssets = 0;
   let totalLiabilities = 0;
 
   for (const entry of entries) {
     const value = parseAmount(entry.value);
+    if (value === null || (entry.currency && entry.currency !== currency)) { missingValues.push(entry.name); continue; }
     if (value === 0) continue;
 
     const isExcludedSuper = entry.isSuperannuation && entry.includeInNetWorth === false;
@@ -251,10 +259,12 @@ export function calculateNetWorthOverview(
 
   const netWorth = grossAssets - totalLiabilities;
   return {
-    total: netWorth,
-    grossAssets,
-    totalLiabilities,
-    netWorth,
+    total: missingValues.length ? null : netWorth,
+    grossAssets: missingValues.length ? null : grossAssets,
+    totalLiabilities: missingValues.length ? null : totalLiabilities,
+    netWorth: missingValues.length ? null : netWorth,
+    knownGrossAssets: grossAssets,
+    missingValues,
     currency,
     categories,
     liabilities,

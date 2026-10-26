@@ -36,7 +36,7 @@ async function LiabilitiesKpi({ accountIds, personId }: { accountIds?: string[];
   const data = await getDashboardAssets(accountIds, personId);
   return <KpiSparkCard
     title="Total Liabilities"
-    value={-Math.abs(data.totalLiabilities)}
+    value={data.totalLiabilities === null ? null : -Math.abs(data.totalLiabilities)}
     currency={data.currency}
     subtitle="Balance owed · included in net worth"
     sparkData={[]}

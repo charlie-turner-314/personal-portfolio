@@ -226,4 +226,15 @@ describe("calculateNetWorthOverview", () => {
     expect(overview.superannuation.excludedValue).toBe(150_000);
     expect(overview.superannuation.excludedAccounts).toMatchObject([{ id: "super-excluded", value: 150_000 }]);
   });
+  it("keeps missing valuations and mixed currencies unknown instead of zero or a misleading sum", () => {
+    const unavailable=calculateNetWorthOverview([
+      {id:"cash",name:"Cash",institution:null,value:100,currency:"AUD",source:"account"},
+      {id:"foreign",name:"Foreign home",institution:null,value:100,currency:"EUR",source:"property"},
+      {id:"missing",name:"Missing valuation",institution:null,value:null,currency:"AUD",source:"vehicle"},
+    ],"AUD");
+    expect(unavailable).toMatchObject({total:null,netWorth:null,grossAssets:null,totalLiabilities:null,knownGrossAssets:100});
+    expect(unavailable.missingValues).toEqual(["Foreign home","Missing valuation"]);
+    expect(unavailable.categories.flatMap(category=>category.accounts).map(account=>account.id)).toEqual(["cash"]);
+  });
+
 });

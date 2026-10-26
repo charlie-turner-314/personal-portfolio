@@ -35,7 +35,7 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
               Visible balance
             </div>
             <div className="break-words text-3xl font-bold leading-tight sm:text-2xl">
-              {formatCurrency(netWorth, data.currency, { showSign: true })}
+              {netWorth === null ? "Unavailable" : formatCurrency(netWorth, data.currency, { showSign: true })}
             </div>
           </div>
         </div>
@@ -44,13 +44,15 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
+        {data.coveredAccounts && <p className="text-sm text-muted-foreground">Active permitted accounts covered: {data.coveredAccounts.map(account=>account.name).join(", ") || "None"}. Other private accounts are outside this report.</p>}
+        {!!data.missingValues?.length && <p role="status" className="text-sm text-muted-foreground">Complete totals are unavailable while valuations or currency conversions are missing for {data.missingValues.join(", ")}. The breakdown shows known values only.</p>}
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="min-w-0 border-t pt-3">
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Gross assets
             </div>
             <div className="break-words text-lg font-semibold">
-              {formatCurrency(grossAssets, data.currency)}
+              {grossAssets === null ? "Unavailable" : formatCurrency(grossAssets, data.currency)}
             </div>
           </div>
           <div className="min-w-0 border-t pt-3">
@@ -58,11 +60,11 @@ export function AssetsOverviewCard({ data }: AssetsOverviewCardProps) {
               Total liabilities
             </div>
             <div className="break-words text-lg font-semibold text-red-600 dark:text-red-400">
-              {formatCurrency(-Math.abs(totalLiabilities), data.currency, { showSign: true })}
+              {totalLiabilities === null ? "Unavailable" : formatCurrency(-Math.abs(totalLiabilities), data.currency, { showSign: true })}
             </div>
           </div>
         </div>
-        <AssetsStackedBar categories={data.categories} total={grossAssets} />
+        <AssetsStackedBar categories={data.categories} total={grossAssets ?? data.knownGrossAssets ?? 0} />
         <AssetsTable
           categories={data.categories}
           currency={data.currency}

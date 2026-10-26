@@ -54,9 +54,11 @@ describe("dashboard activity queries", () => {
     expect(amount.sql).toContain("t2.account_id in");
     expect(amount.sql).toContain("t2.include_in_analytics = true");
     expect(amount.sql).toContain("account_ownership_allocations");
-    expect(amount.sql).toContain('COALESCE("transactions"."functional_amount", CASE WHEN "transactions"."currency"');
-    expect(amount.sql).toContain('THEN "transactions"."amount" END)');
-    expect(amount.sql).toContain("t2.functional_amount");
+    expect(amount.sql).toContain('"transactions"."currency"');
+    expect(amount.sql).toContain("reporting_user");
+    expect(amount.sql).toContain("exchange_rates");
+    expect(amount.sql).toContain('THEN "transactions"."amount"');
+    expect(amount.sql).toContain('"t2"."functional_amount"');
     expect(amount.sql).toContain("IS NULL) > 0 THEN NULL");
     expect(amount.params).toContain("person-1");
   });

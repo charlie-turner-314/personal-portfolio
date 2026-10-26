@@ -1,5 +1,6 @@
 "use server";
 
+import { convertReportingAmount, reportingCurrencyForUser, snapshotBalanceInReportingCurrency, transactionAmountInReportingCurrency } from "@/lib/household/reporting-currency";
 import { reconcileCashMovement } from "@/lib/dashboard/cash-flow";
 
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
@@ -117,17 +118,18 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
   // New manual accounts may not have daily snapshots yet. Their current
   // functional balance is authoritative until a snapshot is available.
   const balance = sql`COALESCE((
-    SELECT ab.balance_in_functional_currency FROM account_balances ab
+    SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab
     WHERE ab.account_id = ${accounts.id} AND ab.date::date <= CURRENT_DATE
     ORDER BY ab.date DESC LIMIT 1
-  ), ${accounts.functionalBalance}, 0)`;
+  ), ${convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrencyForUser(session.user.id),sql`CURRENT_DATE`)})`;
   const share = ownershipShareSql(ownershipScope, accounts.id, sql`CURRENT_DATE`);
   const [result, currency] = await Promise.all([
-    db.select({ total: sql<string>`COALESCE(SUM(${balance} * ${share}), 0)` })
+    db.select({ total: sql<string | null>`CASE WHEN count(*) FILTER(WHERE (${share})>0 AND (${balance}) IS NULL)>0 THEN NULL
+      ELSE COALESCE(SUM(CASE WHEN (${share})=0 THEN 0 ELSE (${balance})*(${share}) END),0) END` })
       .from(accounts).where(and(...conditions)),
     getUserCurrency(session.user.id),
   ]);
-  return { total: parseFloat(result[0]?.total || "0"), currency };
+  return { total: result[0]?.total == null ? null : Number(result[0].total), currency };
 }
 
 export async function getBalanceHistory(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
@@ -150,22 +152,24 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   // Carry each account's latest known balance forward independently, so an
   // account without a snapshot on a particular day does not disappear. Never
   // mix whole-portfolio net-worth snapshots into this cash-only series.
+  const currentBalance = convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrencyForUser(session.user.id),day);
+  const value = sql`coalesce(cash_balance.value,CASE WHEN ${day}::date=CURRENT_DATE THEN ${currentBalance} END)`;
   const result = await db.select({
     date: sql<string>`TO_CHAR(${day}, 'YYYY-MM-DD')`,
-    value: sql<string>`SUM(COALESCE(cash_balance.value,
-      CASE WHEN ${day}::date = CURRENT_DATE THEN ${accounts.functionalBalance} END, 0) * ${share})`,
+    value: sql<string | null>`CASE WHEN count(*) FILTER(WHERE (${share})>0 AND (${value}) IS NULL)>0 THEN NULL
+      ELSE sum(CASE WHEN (${share})=0 THEN 0 ELSE (${value})*(${share}) END) END`,
   }).from(accounts)
     .innerJoin(sql`generate_series(${startDate.toISOString()}::date,
       LEAST(${endDate.toISOString()}::date, CURRENT_DATE), interval '1 day') AS cash_days(day)`, sql`true`)
     .leftJoin(sql`LATERAL (
-      SELECT ab.balance_in_functional_currency AS value FROM account_balances ab
+      SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} AS value FROM account_balances ab
       WHERE ab.account_id = ${accounts.id} AND ab.date::date <= ${day}::date
       ORDER BY ab.date DESC LIMIT 1
     ) AS cash_balance`, sql`true`)
-    .where(and(...conditions, sql`(cash_balance.value IS NOT NULL OR ${day}::date = CURRENT_DATE)`))
+    .where(and(...conditions))
     .groupBy(day).orderBy(day);
 
-  return result.map(row => ({ date: row.date, value: parseFloat(row.value || "0") }));
+  return result.map(row => ({ date: row.date, value: row.value == null ? null : Number(row.value) }));
 }
 
 /** Exact recorded boundary snapshots only; missing data must never become zero. */
@@ -185,9 +189,9 @@ export async function getRecordedCashChange(startDate: Date, endDate: Date, acco
     missing: sql<number>`count(*) FILTER (WHERE (${openingShare} > 0 AND boundary.opening IS NULL) OR (${closingShare} > 0 AND boundary.closing IS NULL))::int`,
     change: sql<string>`sum(COALESCE(boundary.closing,0) * ${closingShare} - COALESCE(boundary.opening,0) * ${openingShare})`,
   }).from(accounts).leftJoin(sql`LATERAL (
-    SELECT (SELECT balance_in_functional_currency FROM account_balances ab WHERE ab.account_id = ${accounts.id}
+    SELECT (SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab WHERE ab.account_id = ${accounts.id}
       AND ab.date::date = ${from}::date - 1 ORDER BY ab.date DESC LIMIT 1) opening,
-    (SELECT balance_in_functional_currency FROM account_balances ab WHERE ab.account_id = ${accounts.id}
+    (SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab WHERE ab.account_id = ${accounts.id}
       AND ab.date::date = ${to}::date ORDER BY ab.date DESC LIMIT 1) closing
   ) boundary`, sql`true`).where(and(...conditions));
   return { recordedChange: !row?.count || row.missing ? null : Number(row.change), missingAccounts: row?.missing ?? 0 };
@@ -210,9 +214,8 @@ async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: s
     lte(transactions.bookedAt, endDate),
   ];
   if (normalizedAccountIds?.length) conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  const userCurrency = sql`COALESCE((SELECT functional_currency FROM ${users} WHERE id = ${session.user.id}), 'EUR')`;
-  const amountInCurrency = sql`COALESCE(${transactions.functionalAmount}, CASE WHEN ${transactions.currency} = ${userCurrency} THEN ${transactions.amount} END)`;
-  const linkedAmountInCurrency = sql`COALESCE(t2.functional_amount, CASE WHEN t2.currency = ${userCurrency} THEN t2.amount END)`;
+  const amountInCurrency = transactionAmountInReportingCurrency("transactions", session.user.id);
+  const linkedAmountInCurrency = transactionAmountInReportingCurrency("t2", session.user.id);
   const rows = await db.select({
     date: sql<string>`DATE(${transactions.bookedAt})`,
     cashFlowKind: sql<string | null>`COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind})`,
@@ -320,6 +323,8 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
     userId: session.user.id, householdPersonId: session.householdPersonId,
   };
 
+  const reportingCurrency = reportingCurrencyForUser(session.user.id);
+
   const [userAccounts, userProperties, userVehicles, currency, portfolio] = await Promise.all([
     db
       .select({
@@ -327,8 +332,10 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         name: accounts.name,
         accountType: accounts.accountType,
         institution: accounts.institution,
-        functionalBalance: accounts.functionalBalance,
-        startingBalance: accounts.startingBalance,
+        functionalBalance: convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrency,sql`CURRENT_DATE`),
+        hasHoldings: sql<boolean>`EXISTS(SELECT 1 FROM holdings WHERE holdings.account_id=accounts.id)`,
+        startingBalance: sql<string | null>`CASE WHEN NOT EXISTS(SELECT 1 FROM transactions balance_record WHERE balance_record.account_id=accounts.id)
+          THEN ${convertReportingAmount(sql`accounts.starting_balance`,sql`accounts.currency`,reportingCurrency,sql`CURRENT_DATE`)} ELSE NULL END`,
         currency: accounts.currency,
         superAccountId: superAccounts.id,
         includeSuperInNetWorth: superAccounts.includeInNetWorth,
@@ -349,7 +356,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         name: properties.name,
         propertyType: properties.propertyType,
         address: properties.address,
-        currentValue: properties.currentValue,
+        currentValue: convertReportingAmount(sql`properties.current_value`,sql`coalesce(properties.currency,${reportingCurrencyForUser(sql`properties.user_id`)})`,reportingCurrency,sql`CURRENT_DATE`),
         currency: properties.currency,
         ownershipShare: propertyOwnershipShareSql(ownershipScope, properties.id),
       })
@@ -363,7 +370,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         make: vehicles.make,
         model: vehicles.model,
         year: vehicles.year,
-        currentValue: vehicles.currentValue,
+        currentValue: convertReportingAmount(sql`vehicles.current_value`,sql`coalesce(vehicles.currency,${reportingCurrencyForUser(sql`vehicles.user_id`)})`,reportingCurrency,sql`CURRENT_DATE`),
         ownershipShare: vehicleOwnershipShareSql(ownershipScope, vehicles.id),
         currency: vehicles.currency,
       })
@@ -383,7 +390,12 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
         name: account.name,
         institution: account.institution,
         // Portfolio holdings replace, rather than duplicate, the same account balance.
-        value: Number(portfolioById.get(account.id)?.value ?? account.functionalBalance ?? 0) * Number(account.ownershipShare),
+        value: Number(account.ownershipShare) === 0 ? 0 : (() => {
+          const investment = portfolioById.get(account.id);
+          const recorded = investment ? portfolio?.currency === currency ? investment.value : null
+            : account.hasHoldings ? null : account.functionalBalance ?? account.startingBalance;
+          return recorded == null ? null : Number(recorded)*Number(account.ownershipShare);
+        })(),
         currency,
         source: "account" as const,
         accountType: account.accountType,
@@ -394,16 +406,16 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
       id: property.id,
       name: property.name,
       institution: property.address,
-      value: Number(property.currentValue || 0) * Number(property.ownershipShare),
-      currency: property.currency || currency,
+      value: Number(property.ownershipShare) === 0 ? 0 : property.currentValue == null ? null : Number(property.currentValue)*Number(property.ownershipShare),
+      currency,
       source: "property" as const,
     }))),
     ...(selectedIds ? [] : userVehicles.map((vehicle) => ({
       id: vehicle.id,
       name: vehicle.name,
       institution: [vehicle.make, vehicle.model].filter(Boolean).join(" ") || null,
-      value: Number(vehicle.currentValue || 0) * Number(vehicle.ownershipShare),
-      currency: vehicle.currency || currency,
+      value: Number(vehicle.ownershipShare) === 0 ? 0 : vehicle.currentValue == null ? null : Number(vehicle.currentValue)*Number(vehicle.ownershipShare),
+      currency,
       source: "vehicle" as const,
     }))),
   ];
@@ -413,6 +425,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
     scope: personId === "all" ? "Household view · permitted accounts counted once"
       : personId ? "Selected person’s share of permitted records" : "My view · economic share of permitted records",
     accountFiltered: Boolean(selectedIds),
+    coveredAccounts: userAccounts.filter(account=>!selectedIds || selectedIds.includes(account.id)).map(account=>({id:account.id,name:account.name})),
   };
 }
 

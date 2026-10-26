@@ -55,4 +55,13 @@ describe("net worth account and ownership orchestration", () => {
   it("limits account-filtered results to selected accounts", async () => {
     expect(await getAssetsOverview(["cash"])).toMatchObject({ grossAssets: 25000, totalLiabilities: 0, netWorth: 25000, accountFiltered: true });
   });
+  it("does not treat missing current values or failed holding valuations as zero", async () => {
+    mocks.rows.accounts=[{...account("cash","savings",0),functionalBalance:null,startingBalance:null}];
+    mocks.rows.properties=[];
+    expect(await getAssetsOverview()).toMatchObject({total:null,netWorth:null,missingValues:["cash"]});
+    mocks.rows.accounts=[{...account("broker","investment_brokerage",100000),hasHoldings:true}];
+    mocks.portfolio.mockRejectedValue(new Error("valuation unavailable"));
+    expect(await getAssetsOverview()).toMatchObject({total:null,missingValues:["broker"]});
+  });
+
 });

@@ -125,3 +125,14 @@ legacy owner tables are no longer an alternative writer. Edits require an
 explicit effective date when allocations change. Stable linked login identities
 resolve through retained people, independently of present membership. Dated
 history prevents deleting a person. Economic changes never grant resource access.
+
+## Currency and missing observations
+
+An account’s stored functional values are in its custodian’s functional currency.
+They cannot be relabelled as a collaborator’s currency. Reporting converts to the
+viewer’s currency at the observation date, uses native amounts directly when the
+native currency already matches, and uses only dated positive direct/inverse
+rates available on or before the observation. Missing conversion or valuation is
+unknown, never zero. Complete net-worth totals become unavailable while the
+breakdown identifies its known values and missing permitted records. Cash history
+keeps gaps when an included economic share lacks a balance observation.
