@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PgDialect } from "drizzle-orm/pg-core";
-import type { SQL } from "drizzle-orm";
 
 const mocks = vi.hoisted(() => {
   const results: unknown[][] = [];
   const queries: { joins: string[]; where?: unknown; select?: unknown }[] = [];
-  return { results, queries, db: { select: vi.fn((select: unknown) => {
+  const boundaries:unknown[]=[];
+  return { results, queries, boundaries, db: { select: vi.fn((select: unknown) => {
     const query = { joins: [] as string[], where: undefined as unknown, select };
     queries.push(query);
     const result = results.shift() ?? [];
@@ -21,6 +20,11 @@ const mocks = vi.hoisted(() => {
   }) } };
 });
 vi.mock("@/lib/db", () => ({ db: mocks.db }));
+vi.mock("@/lib/reporting/activity-query",()=>({fetchFinancialActivity:async(actor:string,boundary:unknown)=>{
+  mocks.boundaries.push({actor,boundary});
+  const {summarizeActivity}=await import("@/lib/dashboard/activity");
+  return summarizeActivity((mocks.results.shift()??[]) as Parameters<typeof summarizeActivity>[0]);
+}}));
 vi.mock("@/lib/household/financial-auth", () => ({ getAuthenticatedSession: async () => ({ user: { id: "user-1" }, householdPersonId: "linked-person" }) }));
 vi.mock("@/lib/data/cached", () => ({ getCachedUserAccounts: vi.fn() }));
 vi.mock("@/lib/api/investments", () => ({ getPortfolio: vi.fn() }));
@@ -36,48 +40,16 @@ const fixture = [1000, -100, -50].map((amount) => ({
 }));
 
 describe("dashboard activity queries", () => {
-  beforeEach(() => { mocks.results.length = 0; mocks.queries.length = 0; });
-  it("keeps uncategorized rows eligible while applying visibility, transfer and user filters", async () => {
+  beforeEach(() => { mocks.results.length = 0; mocks.queries.length = 0; mocks.boundaries.length=0; });
+  it("passes the authenticated actor and exact selected reporting boundary to the shared calculation",async()=>{
     mocks.results.push(fixture);
-    expect((await getSpendingHistory(from, to, ["account-1"], "person-1"))[0].value).toBe(150);
-    const query = mocks.queries[0];
-    expect(query.joins).toEqual(["left", "left"]);
-    const dialect = new PgDialect();
-    const where = dialect.sqlToQuery(query.where as SQL);
-    expect(where.sql).toContain('"transactions"."include_in_analytics"');
-    expect(where.sql).toContain('"transactions"."internal_transfer_id" is null');
-    expect(where.sql).toContain('"transactions"."booked_at" >=');
-    expect(where.sql).toContain('"transactions"."booked_at" <=');
-    expect(where.params).toEqual(expect.arrayContaining(["user-1", true, "account-1"]));
-    expect(where.sql).not.toContain('"categories"');
-    const amount = dialect.sqlToQuery((query.select as { amount: SQL }).amount);
-    expect(amount.sql).toContain("t2.account_id in");
-    expect(amount.sql).toContain("t2.include_in_analytics = true");
-    expect(amount.sql).toContain("account_ownership_allocations");
-    expect(amount.sql).toContain('"transactions"."currency"');
-    expect(amount.sql).toContain("reporting_user");
-    expect(amount.sql).toContain("exchange_rates");
-    expect(amount.sql).toContain('THEN "transactions"."amount"');
-    expect(amount.sql).toContain('"t2"."functional_amount"');
-    expect(amount.sql).toContain("IS NULL) > 0 THEN NULL");
-    expect(amount.params).toContain("person-1");
+    expect((await getSpendingHistory(from,to,["account-1"],"person-1"))[0].value).toBe(150);
+    expect(mocks.boundaries).toEqual([{actor:"user-1",boundary:{startDate:from,endDate:to,accountIds:["account-1"],personId:"person-1"}}]);
   });
-
-  it("attributes the default member scope to linked and own self identities", async () => {
+  it.each([undefined,"all"])("preserves the My/Household scope %s",async(personId)=>{
     mocks.results.push(fixture);
-    await getSpendingHistory(from, to);
-    const amount = new PgDialect().sqlToQuery((mocks.queries[0].select as { amount: SQL }).amount);
-    expect(amount.params).toContain("linked-person");
-    expect(amount.sql).toContain("account_ownership_allocations");
-    expect(amount.sql).toContain("kind = 'self'");
-  });
-
-  it("retains full amounts for explicitly selected whole-account scope", async () => {
-    mocks.results.push(fixture);
-    await getSpendingHistory(from, to, undefined, "all");
-    const amount = new PgDialect().sqlToQuery((mocks.queries[0].select as { amount: SQL }).amount);
-    expect(amount.sql).not.toContain("account_ownership_allocations");
-    expect(amount.params).not.toContain("linked-person");
+    await getSpendingHistory(from,to,undefined,personId);
+    expect(mocks.boundaries).toEqual([{actor:"user-1",boundary:{startDate:from,endDate:to,accountIds:undefined,personId}}]);
   });
 
   it("returns consistent totals across each dashboard widget", async () => {
@@ -97,7 +69,7 @@ describe("dashboard activity queries", () => {
     mocks.results.push(fixture);
     expect((await getSankeyData(from, to)).nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Uncategorized expenses", total: 150 }),
-      expect.objectContaining({ name: "Income above consumption", total: 850 }),
+      expect.objectContaining({ name: "Calculated net inflow", total: 850 }),
     ]));
   });
 });

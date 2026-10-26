@@ -1,11 +1,12 @@
 "use server";
 
-import { convertReportingAmount, reportingCurrencyForUser, snapshotBalanceInReportingCurrency, transactionAmountInReportingCurrency } from "@/lib/household/reporting-currency";
+import { fetchFinancialActivity } from "@/lib/reporting/activity-query";
+import { convertReportingAmount, reportingCurrencyForUser, snapshotBalanceInReportingCurrency } from "@/lib/household/reporting-currency";
 import { reconcileCashMovement } from "@/lib/dashboard/cash-flow";
 
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, transactionLinks, superAccounts } from "@/lib/db/schema";
+import { accounts, transactions, categories, users, properties, vehicles, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { getCachedUserAccounts } from "@/lib/data/cached";
 import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
@@ -42,9 +43,6 @@ function normalizeAccountIds(accountIds?: string[]): string[] | undefined {
   const uniqueIds = Array.from(new Set(accountIds.map((id) => id.trim()).filter(Boolean)));
   return uniqueIds.length > 0 ? uniqueIds : undefined;
 }
-
-const t2AccountId = sql.raw("t2.account_id");
-const t2BookedAt = sql.raw("t2.booked_at");
 
 async function getLatestTransactionDate(userId: string, accountIds?: string[]): Promise<Date> {
   const normalizedAccountIds = normalizeAccountIds(accountIds);
@@ -199,76 +197,10 @@ export async function getRecordedCashChange(startDate: Date, endDate: Date, acco
 
 // All activity widgets share classification and linked-transaction semantics.
 // A LEFT JOIN is essential: categorization enriches activity, never gates it.
-async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
-  const session = await getAuthenticatedSession();
-  if (!session?.user?.id) return summarizeActivity([]);
-  const ownershipScope = personId === "all" ? undefined : personId ?? {
-    userId: session.user.id, householdPersonId: session.householdPersonId,
-  };
-  const normalizedAccountIds = normalizeAccountIds(accountIds);
-  const conditions = [
-    accountAccess(transactions.accountId, session.user.id),
-    eq(transactions.includeInAnalytics, true),
-    isNull(transactions.internalTransferId),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-  ];
-  if (normalizedAccountIds?.length) conditions.push(inArray(transactions.accountId, normalizedAccountIds));
-  const amountInCurrency = transactionAmountInReportingCurrency("transactions", session.user.id);
-  const linkedAmountInCurrency = transactionAmountInReportingCurrency("t2", session.user.id);
-  const rows = await db.select({
-    date: sql<string>`DATE(${transactions.bookedAt})`,
-    cashFlowKind: sql<string | null>`COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind})`,
-    cashFlowParts: transactions.cashFlowParts,
-    nativeAmount: transactions.amount,
-    transferGroupId: sql<string | null>`CASE WHEN NOT EXISTS (
-      SELECT 1 FROM ${transactionLinks} transfer_peer
-      JOIN ${transactions} peer ON peer.id = transfer_peer.transaction_id
-      LEFT JOIN ${categories} peer_category ON peer_category.id = COALESCE(peer.category_id, peer.category_system_id)
-      WHERE transfer_peer.group_id = ${transactionLinks.groupId}
-        AND ${accountAccess(sql.raw("peer.account_id"), session.user.id)}
-        AND (peer_category.category_type IS DISTINCT FROM 'transfer'
-          OR peer.cash_flow_parts IS NOT NULL
-          OR COALESCE(peer.cash_flow_kind, peer_category.cash_flow_kind) IS NOT NULL)
-    ) THEN ${transactionLinks.groupId} END`,
-    transferAmount: sql<string | null>`${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}`,
-    categoryId: categories.id,
-    categoryName: categories.name,
-    categoryType: categories.categoryType,
-    icon: categories.icon,
-    color: categories.color,
-    // A group containing an explicit allocation is reported per leg, so a
-    // linked ordinary expense is neither swallowed nor counted twice.
-    amount: sql<string | null>`CASE
-      WHEN ${transactions.cashFlowParts} IS NOT NULL OR COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind}) IN ('investment', 'loan_principal')
-        OR EXISTS (
-          SELECT 1 FROM ${transactionLinks} allocation_link
-          JOIN ${transactions} allocation_peer ON allocation_peer.id = allocation_link.transaction_id
-          LEFT JOIN ${categories} allocation_category ON allocation_category.id = COALESCE(allocation_peer.category_id, allocation_peer.category_system_id)
-          WHERE allocation_link.group_id = ${transactionLinks.groupId}
-            AND ${accountAccess(sql.raw("allocation_peer.account_id"), session.user.id)}
-            AND (allocation_peer.cash_flow_parts IS NOT NULL OR COALESCE(allocation_peer.cash_flow_kind, allocation_category.cash_flow_kind) IN ('investment', 'loan_principal'))
-        )
-        THEN ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
-      WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
-        (
-          SELECT CASE WHEN COUNT(*) FILTER (WHERE ${linkedAmountInCurrency} IS NULL) > 0 THEN NULL
-            ELSE SUM(${linkedAmountInCurrency} * ${ownershipShareSql(ownershipScope, t2AccountId, t2BookedAt)}) END
-          FROM ${transactions} t2
-          JOIN ${transactionLinks} tl2 ON t2.id = tl2.transaction_id
-          WHERE tl2.group_id = ${transactionLinks.groupId}
-            AND ${accountAccess(t2AccountId, session.user.id)}
-            AND t2.include_in_analytics = true
-            AND t2.internal_transfer_id IS NULL
-        )
-      WHEN ${transactionLinks.linkRole} IS NOT NULL THEN 0
-      ELSE ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
-    END`,
-  }).from(transactions)
-    .leftJoin(categories, sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`)
-    .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))
-    .where(and(...conditions));
-  return summarizeActivity(rows);
+async function getActivitySummary(startDate:Date,endDate:Date,accountIds?:string[],personId?:string) {
+  const session=await getAuthenticatedSession();
+  if(!session?.user?.id) return summarizeActivity([]);
+  return fetchFinancialActivity(session.user.id,{startDate,endDate,accountIds,personId});
 }
 
 export async function getPeriodSpending(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {

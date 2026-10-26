@@ -94,7 +94,7 @@ test("saving stays independent of a partner contribution and explicit principal 
   await assertMetric("Recorded cash balance change", "A$3,000");
   await assertMetric("Unreconciled difference", "A$0");
   await expect(summary().getByRole("status")).toContainText("agree");
-  await expect(page.getByText("Consumption above income", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Calculated net outflow", { exact: true })).toHaveCount(0);
   const preserved = psql(`SELECT amount || ':' || category_id::text FROM transactions WHERE id='${ids.principal}';`).trim();
   expect(preserved).toBe(`-70000.00:${ids.housing}`);
   await page.screenshot({ path: testInfo.outputPath("ownership-contributions.png"), fullPage: true });

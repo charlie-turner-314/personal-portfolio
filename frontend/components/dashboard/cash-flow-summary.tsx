@@ -7,6 +7,10 @@ export interface CashFlowSummaryData {
   investments: number;
   loanPrincipal: number;
   otherCapital?: number;
+  boundaryTransfersIn?:number;
+  boundaryTransfersOut?:number;
+  ownershipTransfersIn?:number;
+  ownershipTransfersOut?:number;
   transfersIn: number;
   transfersOut: number;
   explainedCashFlow: number;
@@ -22,8 +26,10 @@ export function CashFlowSummary({ data, currency, reconciliation }: { data: Cash
           ["Investments", data.investments],
           ["Loan principal", data.loanPrincipal],
           ["Other capital", data.otherCapital ?? 0],
-          ["Ownership transfers in", data.transfersIn],
-          ["Ownership transfers out", data.transfersOut],
+          ["Boundary transfers in", data.boundaryTransfersIn??data.transfersIn],
+          ["Boundary transfers out", data.boundaryTransfersOut??data.transfersOut],
+          ["Ownership redistribution in", data.ownershipTransfersIn??0],
+          ["Ownership redistribution out", data.ownershipTransfersOut??0],
           ["Explained cash flow", data.explainedCashFlow],
         ].map(([label, value]) => <div key={String(label)}>
           <dt className="text-sm text-muted-foreground">{label}</dt>
@@ -48,8 +54,8 @@ export function CashFlowSummary({ data, currency, reconciliation }: { data: Cash
         Set payment portions in transaction details; unclassified payments remain spending.
       </p>
       <p className="text-xs text-muted-foreground">
-        Ownership transfers are derived from visible linked transfer legs and ownership shares, not inferred gifts, loans or funding relationships.
-        Explained cash flow is saving minus capital allocations plus net ownership transfers.
+        Ownership redistribution uses balanced, visible linked legs and their dated shares. A missing, private, unselected or out-of-period counterpart is a boundary movement; it establishes no gift, loan or funding relationship.
+        Explained cash flow is saving minus capital allocations plus net boundary and ownership movements.
         Recorded cash change uses independent daily balances; a difference stays visible rather than being called a funding gap.
       </p>
     </CardContent>

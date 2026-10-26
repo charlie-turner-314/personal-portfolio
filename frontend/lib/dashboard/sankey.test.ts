@@ -49,13 +49,13 @@ describe("buildConservativeSankey", () => {
     }
   });
 
-  it("adds synthetic Savings expense node when income exceeds expenses", () => {
+  it("labels the calculated net inflow without claiming recorded saving", () => {
     const result = buildConservativeSankey(
       [{ categoryId: "i1", categoryName: "Salary", total: 4000, categoryType: "income" }],
       [{ categoryId: "e1", categoryName: "Rent", total: 2500, categoryType: "expense" }]
     );
 
-    const savingsNode = result.nodes.find((node) => node.name === "Income above consumption");
+    const savingsNode = result.nodes.find((node) => node.name === "Calculated net inflow");
     expect(savingsNode).toBeDefined();
     expect(savingsNode?.categoryId).toBeUndefined();
     expect(savingsNode?.categoryType).toBe("expense");
@@ -66,13 +66,13 @@ describe("buildConservativeSankey", () => {
     });
   });
 
-  it("adds synthetic Funding Gap income node when expenses exceed income", () => {
+  it("labels the calculated net outflow without inventing a funding source", () => {
     const result = buildConservativeSankey(
       [{ categoryId: "i1", categoryName: "Salary", total: 1000, categoryType: "income" }],
       [{ categoryId: "e1", categoryName: "Rent", total: 1900, categoryType: "expense" }]
     );
 
-    const fundingGapNode = result.nodes.find((node) => node.name === "Consumption above income");
+    const fundingGapNode = result.nodes.find((node) => node.name === "Calculated net outflow");
     expect(fundingGapNode).toBeDefined();
     expect(fundingGapNode?.categoryId).toBeUndefined();
     expect(fundingGapNode?.categoryType).toBe("income");

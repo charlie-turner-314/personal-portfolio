@@ -24,7 +24,7 @@ describe("dashboard activity", () => {
     expect(sankey.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Uncategorized income", total: 1000 }),
       expect.objectContaining({ name: "Uncategorized expenses", total: 200 }),
-      expect.objectContaining({ name: "Income above consumption", total: 750 }),
+      expect.objectContaining({ name: "Calculated net inflow", total: 750 }),
     ]));
   });
 
@@ -50,7 +50,7 @@ describe("dashboard activity", () => {
   });
 
   it.each([
-    [250, "Income above consumption"], [-125, "Consumption above income"],
+    [250, "Calculated net inflow"], [-125, "Calculated net outflow"],
   ])("renders one-sided uncategorized activity %s", (amount, balancingName) => {
     const chart = activitySankey(summarizeActivity([row(amount)]));
     expect(chart.links).toHaveLength(1);
@@ -80,7 +80,7 @@ describe("dashboard activity", () => {
     expect(activitySankey(result).nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Food", total: 70 }),
       expect.objectContaining({ name: "Salary", total: 800 }),
-      expect.objectContaining({ name: "Income above consumption", total: 730 }),
+      expect.objectContaining({ name: "Calculated net inflow", total: 730 }),
     ]));
   });
 
@@ -95,7 +95,7 @@ describe("dashboard activity", () => {
     expect(chart.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Refunds: Food", total: 80, categoryType: "income" }),
       expect.objectContaining({ name: "Income reversals: Salary", total: 30, categoryType: "expense" }),
-      expect.objectContaining({ name: "Income above consumption", total: 50 }),
+      expect.objectContaining({ name: "Calculated net inflow", total: 50 }),
     ]));
     expect(chart.links.every((link) => link.value > 0)).toBe(true);
   });
@@ -125,9 +125,9 @@ describe("cash flow separates consumption, allocations and ownership transfers",
     expect(chart.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Loan principal", total: 35000 }),
       expect.objectContaining({ name: "Transfers in", total: 35000 }),
-      expect.objectContaining({ name: "Income above consumption", total: 4000 }),
+      expect.objectContaining({ name: "Calculated net inflow", total: 4000 }),
     ]));
-    expect(chart.nodes.some(n => n.name === "Consumption above income")).toBe(false);
+    expect(chart.nodes.some(n => n.name === "Calculated net outflow")).toBe(false);
   });
 
   it("handles arbitrary contribution amounts and ownership rates, independently of later payments", () => {

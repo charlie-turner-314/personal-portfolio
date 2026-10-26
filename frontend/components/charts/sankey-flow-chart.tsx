@@ -357,7 +357,7 @@ export function SankeyFlowChart({
         </CardHeader>
         <CardContent className="flex h-[400px] items-center justify-center">
           <p className="text-muted-foreground text-sm">
-            No included income or expenses in this period
+            No included financial movements in this period
           </p>
         </CardContent>
       </Card>
@@ -371,7 +371,7 @@ export function SankeyFlowChart({
         {subtitle && (
           <p className="text-xs text-muted-foreground">{subtitle}</p>
         )}
-        <p className="text-xs text-muted-foreground">Connections distribute totals proportionally; they do not trace deposits to payments.</p>
+        <p className="text-xs text-muted-foreground">Connections distribute included movements proportionally; they do not trace deposits to payments. Calculated net inflow or outflow is the difference between these movements, not a recorded balance change.</p>
         {selectedNode && selectedTotal !== null && (
           <p className="text-xs text-muted-foreground mt-1">
             <span className="font-medium text-foreground">

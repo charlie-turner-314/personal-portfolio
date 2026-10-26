@@ -275,7 +275,37 @@ describe("budget actions", () => {
         categoriesOverBudget: 0,
       },
       lines: [],
+      unclassifiedActuals: { amount: 0, consumptionAmount: 0, capitalAmount: 0 },
     });
+  });
+
+  it("retains unknown conversion coverage and unclassified movements instead of reporting a zero total",async()=>{
+    mocks.requireAuth.mockResolvedValue("user-1");
+    mocks.queryResults.categories=[{id:"housing",name:"Housing",color:null,icon:null}];
+    mocks.queryResults.currencyRows=[{functionalCurrency:"AUD"}];
+    mocks.fetchCategoryActualAmounts.mockResolvedValueOnce([
+      {id:"housing",name:"Housing",amount:null,consumptionAmount:null,capitalAmount:null},
+      {id:"uncategorized",name:"Uncategorized",amount:40,consumptionAmount:40,capitalAmount:0},
+    ]).mockResolvedValueOnce([]);
+    mocks.fetchBudgetInsights.mockResolvedValue([]);
+    const data=await getBudgetData("2026-04",{personId:"all"});
+    expect(data.totals).toMatchObject({actualAmount:null,remainingAmount:null,usedPct:null,categoriesOverBudget:null});
+    expect(data.lines[0]).toMatchObject({actualAmount:null,consumptionAmount:null,capitalAmount:null});
+    expect(data.unclassifiedActuals).toEqual({amount:40,consumptionAmount:40,capitalAmount:0});
+  });
+  it("keeps personal plan metadata while exposing unplanned capital separately from consumption",async()=>{
+    mocks.requireAuth.mockResolvedValue("user-1");
+    mocks.queryResults.categories=[{id:"food",name:"Food",color:null,icon:null}];
+    mocks.queryResults.currencyRows=[{functionalCurrency:"AUD"}];
+    mocks.fetchCategoryActualAmounts.mockResolvedValueOnce([
+      {id:"food",name:"Food",color:null,icon:null,amount:100,consumptionAmount:100,capitalAmount:0},
+      {id:"principal",name:"Mortgage",color:null,icon:null,amount:600,consumptionAmount:0,capitalAmount:600},
+    ]).mockResolvedValueOnce([]);
+    mocks.fetchBudgetInsights.mockResolvedValue([]);
+    const data=await getBudgetData("2026-04");
+    expect(data.totals.actualAmount).toBe(700);
+    expect(data.lines.find(line=>line.categoryId==="principal")).toMatchObject({plannedAmount:0,consumptionAmount:0,capitalAmount:600});
+    expect(mocks.fetchBudgetInsights).toHaveBeenCalledWith("user-1",expect.objectContaining({categories:[],personId:undefined}));
   });
 
   it("getBudgetData maps category, budget, and actual rows into month totals", async () => {
@@ -326,16 +356,17 @@ describe("budget actions", () => {
       endDate: new Date(2026, 3, 30, 23, 59, 59, 999),
       accountIds: ["account-1", "account-2"],
       personId: undefined,
-      includeUncategorized: false,
+      includeUncategorized: true,
     });
     expect(mocks.fetchCategoryActualAmounts).toHaveBeenCalledWith("user-1", {
       startDate: new Date(2026, 2, 1),
       endDate: new Date(2026, 2, 31, 23, 59, 59, 999),
       accountIds: ["account-1", "account-2"],
       personId: undefined,
-      includeUncategorized: false,
+      includeUncategorized: true,
     });
     expect(mocks.fetchBudgetInsights).toHaveBeenCalledWith("user-1", {
+      personId: undefined,
       monthKey: "2026-04",
       startDate: new Date(2026, 3, 1),
       endDate: new Date(2026, 3, 30, 23, 59, 59, 999),
@@ -355,6 +386,7 @@ describe("budget actions", () => {
       currency: "USD",
       accountIds: ["account-1", "account-2"],
       personId: undefined,
+      unclassifiedActuals:{amount:0,consumptionAmount:0,capitalAmount:0},
       totals: {
         plannedAmount: 1200,
         actualAmount: 1000.35,
@@ -371,6 +403,7 @@ describe("budget actions", () => {
           categoryIcon: "restaurant",
           plannedAmount: 200,
           actualAmount: 250.25,
+          consumptionAmount:250.25,capitalAmount:0,
           previousMonthActualAmount: 180.45,
           remainingAmount: -50.25,
           varianceAmount: 50.25,
@@ -398,6 +431,7 @@ describe("budget actions", () => {
           categoryIcon: null,
           plannedAmount: 1000,
           actualAmount: 750.1,
+          consumptionAmount:750.1,capitalAmount:0,
           previousMonthActualAmount: 0,
           remainingAmount: 249.9,
           varianceAmount: -249.9,
@@ -412,6 +446,7 @@ describe("budget actions", () => {
           categoryIcon: "plane",
           plannedAmount: 0,
           actualAmount: 0,
+          consumptionAmount:0,capitalAmount:0,
           previousMonthActualAmount: 50,
           remainingAmount: 0,
           varianceAmount: 0,
@@ -423,7 +458,7 @@ describe("budget actions", () => {
     });
   });
 
-  it("passes the selected household person to actuals while keeping plans household-wide", async () => {
+  it("passes the selected household person to actuals while keeping plans personal", async () => {
     mocks.requireAuth.mockResolvedValue("user-1");
     mocks.queryResults.currencyRows = [{ functionalCurrency: "USD" }];
     mocks.fetchCategoryActualAmounts.mockResolvedValue([]);
@@ -434,7 +469,7 @@ describe("budget actions", () => {
     expect(data.personId).toBe("person-half");
     expect(mocks.fetchCategoryActualAmounts).toHaveBeenCalledWith("user-1", expect.objectContaining({
       personId: "person-half",
-      includeUncategorized: false,
+      includeUncategorized: true,
     }));
   });
 

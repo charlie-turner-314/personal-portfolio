@@ -55,13 +55,13 @@ export function buildConservativeSankey(
 
   if (totalIncome > totalExpense) {
     expenseCategories.push({
-      name: "Income above consumption",
+      name: "Calculated net inflow",
       total: totalIncome - totalExpense,
       categoryType: "expense",
     });
   } else if (totalExpense > totalIncome) {
     incomeCategories.push({
-      name: "Consumption above income",
+      name: "Calculated net outflow",
       total: totalExpense - totalIncome,
       categoryType: "income",
     });

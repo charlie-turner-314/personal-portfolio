@@ -136,3 +136,23 @@ rates available on or before the observation. Missing conversion or valuation is
 unknown, never zero. Complete net-worth totals become unavailable while the
 breakdown identifies its known values and missing permitted records. Cash history
 keeps gaps when an included economic share lacks a balance observation.
+
+## Reporting boundary implementation
+
+The selected permitted record set is the sole source for activity and its linked
+peers. Dates and selected accounts apply to all legs. Budgets use these same
+facts, comparing personal category movement plans while showing consumption and
+capital separately. A missing conversion is unavailable, including in plan
+actuals; refunds and investment returns reduce their own movement purpose.
+
+A closed, balanced, visible linked set can establish an economic redistribution
+from differences in dated shares. An incomplete set establishes only a boundary
+movement. Thus Charlie may see his 35,000 inflow and 35,000 principal allocation
+without learning Jessica's private source balance or transaction. Jessica can
+see the 35,000 redistribution out when both her source and joint destination
+are legitimately included. This difference in explanation is intentional: a
+private peer is never read to make another member's report balance.
+
+Sankey residuals are labelled calculated net inflow/outflow. They are differences
+between included movements, including capital and boundary transfers, rather
+than saving, funding requirements or independent cash balance observations.

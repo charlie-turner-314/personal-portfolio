@@ -1,28 +1,5 @@
-import { categoryAccess } from "@/lib/household/category-access";
-import { accountAccess } from "@/lib/household/account-access";
-import {
-  and,
-  desc,
-  eq,
-  gte,
-  inArray,
-  isNull,
-  lte,
-  or,
-  sql,
-  type SQLWrapper,
-} from "drizzle-orm";
-import { db } from "@/lib/db";
-import {
-  categories,
-  recurringTransactions,
-  transactions,
-  transactionLinks,
-} from "@/lib/db/schema";
-import {
-  buildLinkedExpenseAmountSql,
-  fetchCategoryActualAmounts,
-} from "@/lib/spending/category-actuals";
+import { fetchFinancialActivity } from "@/lib/reporting/activity-query";
+import { fetchCategoryActualAmounts, type CategoryActualAmount } from "./category-actuals";
 
 export type BudgetVarianceDriver = "one_off" | "recurring" | "mixed";
 
@@ -70,6 +47,7 @@ interface FetchBudgetInsightsOptions {
   endDate: Date;
   accountIds?: string[];
   categories: BudgetInsightCategoryInput[];
+  personId?:string;
 }
 
 interface DateWindow {
@@ -77,33 +55,11 @@ interface DateWindow {
   endDate: Date;
 }
 
-interface MerchantRow {
-  categoryId: string;
-  name: string | null;
-  amount: string | number | null;
-  transactionCount: number | string | null;
-}
-
-interface TransactionRow {
-  id: string;
-  categoryId: string;
-  description: string | null;
-  merchant: string | null;
-  bookedAt: Date;
-  amount: string | number | null;
-  recurringTransactionId: string | null;
-  recurringName: string | null;
-}
-
 interface DriverTransaction {
   amount: number;
   isRecurring: boolean;
 }
 
-interface TransactionContributorResult {
-  topTransactionsByCategory: Map<string, BudgetTransactionContributor[]>;
-  driverTransactionsByCategory: Map<string, DriverTransaction[]>;
-}
 
 function parseMoney(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number(value ?? 0);
@@ -149,9 +105,9 @@ function average(values: number[]): number | null {
 }
 
 function groupAmountsByCategory(
-  rows: { id: string; amount: number }[]
-): Map<string, number> {
-  return new Map(rows.map((row) => [row.id, parseMoney(row.amount)]));
+  rows: CategoryActualAmount[]
+): Map<string, number|null> {
+  return new Map(rows.map(row=>[row.id,row.amount===null?null:parseMoney(row.consumptionAmount??row.amount)]));
 }
 
 export function buildBudgetInsightExplanation({
@@ -242,166 +198,35 @@ export function resolveBudgetVarianceDriver(
   return "mixed";
 }
 
-function buildBaseConditions(
-  userId: string,
-  categoryIds: string[],
-  startDate: Date,
-  endDate: Date,
-  accountIds: string[]
-): SQLWrapper[] {
-  const conditions: SQLWrapper[] = [
-    accountAccess(transactions.accountId, userId),
-    eq(transactions.transactionType, "debit"),
-    eq(transactions.includeInAnalytics, true),
-    isNull(transactions.internalTransferId),
-    categoryAccess(userId),
-    eq(categories.categoryType, "expense"),
-    inArray(categories.id, categoryIds),
-    gte(transactions.bookedAt, startDate),
-    lte(transactions.bookedAt, endDate),
-    or(isNull(transactionLinks.linkRole), eq(transactionLinks.linkRole, "primary"))!,
-  ];
-
-  if (accountIds.length > 0) {
-    conditions.push(inArray(transactions.accountId, accountIds));
-  }
-
-  return conditions;
-}
-
-async function fetchTopMerchants(
-  userId: string,
-  categoryIds: string[],
-  startDate: Date,
-  endDate: Date,
-  accountIds: string[]
-): Promise<Map<string, BudgetMerchantContributor[]>> {
-  if (categoryIds.length === 0) {
-    return new Map();
-  }
-
-  const merchantNameSql = sql<string>`COALESCE(NULLIF(${transactions.merchant}, ''), NULLIF(${transactions.creditor}, ''), NULLIF(${transactions.description}, ''), 'Unknown merchant')`;
-  const linkedMerchantAmountSql = buildLinkedExpenseAmountSql({
-    userId,
-    startDate,
-    endDate,
-    accountIds,
-  });
-  const rows = await db
-    .select({
-      categoryId: categories.id,
-      name: merchantNameSql,
-      amount: linkedMerchantAmountSql,
-      transactionCount: sql<number>`COUNT(*)::int`,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))
-    .where(and(...buildBaseConditions(userId, categoryIds, startDate, endDate, accountIds)))
-    .groupBy(categories.id, merchantNameSql)
-    .orderBy(desc(linkedMerchantAmountSql)) as MerchantRow[];
-
-  const byCategory = new Map<string, BudgetMerchantContributor[]>();
-  for (const row of rows) {
-    const amount = parseMoney(row.amount);
-    if (amount <= 0) {
-      continue;
+async function fetchContributors(actor:string,categoryIds:string[],startDate:Date,endDate:Date,accountIds:string[],personId?:string) {
+  const activity=await fetchFinancialActivity(actor,{startDate,endDate,accountIds,personId});
+  const merchants=new Map<string,Map<string,{name:string;amount:number;transactionCount:number}>>();
+  const transactionsByCategory=new Map<string,Map<string,BudgetTransactionContributor>>();
+  const drivers=new Map<string,DriverTransaction[]>();
+  const unknownRecurring=new Set<string>();
+  for(const entry of activity.entries) {
+    if(entry.kind!=="consumption" || !categoryIds.includes(entry.categoryId)) continue;
+    const merchantName=entry.merchant||entry.description||"Unknown merchant";
+    const byMerchant=merchants.get(entry.categoryId)??new Map();
+    const merchant=byMerchant.get(merchantName)??{name:merchantName,amount:0,transactionCount:0};
+    merchant.amount+=entry.amount;merchant.transactionCount++;
+    byMerchant.set(merchantName,merchant);merchants.set(entry.categoryId,byMerchant);
+    if(entry.recurrenceKnown===false) unknownRecurring.add(entry.categoryId);
+    if(entry.transactionId) {
+      const byTransaction=transactionsByCategory.get(entry.categoryId)??new Map();
+      const transaction=byTransaction.get(entry.transactionId)??{id:entry.transactionId,description:entry.description??null,
+        merchant:entry.merchant??null,bookedAt:entry.date,amount:0,recurringName:entry.recurringName??null};
+      transaction.amount+=entry.amount;byTransaction.set(entry.transactionId,transaction);
+      transactionsByCategory.set(entry.categoryId,byTransaction);
     }
-
-    const list = byCategory.get(row.categoryId) ?? [];
-    if (list.length < 3) {
-      list.push({
-        name: row.name ?? "Unknown merchant",
-        amount,
-        transactionCount: Number(row.transactionCount ?? 0),
-      });
-      byCategory.set(row.categoryId, list);
-    }
+    const rows=drivers.get(entry.categoryId)??[];
+    rows.push({amount:entry.amount,isRecurring:!!entry.recurringName});drivers.set(entry.categoryId,rows);
   }
-
-  return byCategory;
-}
-
-async function fetchTransactionContributors(
-  userId: string,
-  categoryIds: string[],
-  startDate: Date,
-  endDate: Date,
-  accountIds: string[]
-): Promise<TransactionContributorResult> {
-  if (categoryIds.length === 0) {
-    return {
-      topTransactionsByCategory: new Map(),
-      driverTransactionsByCategory: new Map(),
-    };
-  }
-
-  const linkedTransactionAmountSql = buildLinkedExpenseAmountSql({
-    userId,
-    startDate,
-    endDate,
-    accountIds,
-    aggregate: false,
-  });
-  const rows = await db
-    .select({
-      id: transactions.id,
-      categoryId: categories.id,
-      description: transactions.description,
-      merchant: transactions.merchant,
-      bookedAt: transactions.bookedAt,
-      amount: linkedTransactionAmountSql,
-      recurringTransactionId: transactions.recurringTransactionId,
-      recurringName: recurringTransactions.name,
-    })
-    .from(transactions)
-    .innerJoin(
-      categories,
-      sql`${categories.id} = COALESCE(${transactions.categoryId}, ${transactions.categorySystemId})`
-    )
-    .leftJoin(transactionLinks, eq(transactions.id, transactionLinks.transactionId))
-    .leftJoin(
-      recurringTransactions,
-      eq(transactions.recurringTransactionId, recurringTransactions.id)
-    )
-    .where(and(...buildBaseConditions(userId, categoryIds, startDate, endDate, accountIds)))
-    .orderBy(desc(linkedTransactionAmountSql)) as TransactionRow[];
-
-  const topTransactionsByCategory = new Map<string, BudgetTransactionContributor[]>();
-  const driverTransactionsByCategory = new Map<string, DriverTransaction[]>();
-  for (const row of rows) {
-    const amount = parseMoney(row.amount);
-    if (amount <= 0) {
-      continue;
-    }
-
-    const contributor = {
-      id: row.id,
-      description: row.description,
-      merchant: row.merchant,
-      bookedAt: row.bookedAt.toISOString().slice(0, 10),
-      amount,
-      recurringName: row.recurringName,
-    };
-
-    const driverTransactions = driverTransactionsByCategory.get(row.categoryId) ?? [];
-    driverTransactions.push({
-      amount,
-      isRecurring: row.recurringTransactionId !== null,
-    });
-    driverTransactionsByCategory.set(row.categoryId, driverTransactions);
-
-    const topTransactions = topTransactionsByCategory.get(row.categoryId) ?? [];
-    if (topTransactions.length < 3) {
-      topTransactions.push(contributor);
-      topTransactionsByCategory.set(row.categoryId, topTransactions);
-    }
-  }
-
-  return { topTransactionsByCategory, driverTransactionsByCategory };
+  return {
+    topMerchants:new Map([...merchants].map(([id,rows])=>[id,[...rows.values()].filter(row=>row.amount>0).sort((a,b)=>b.amount-a.amount).slice(0,3)])),
+    topTransactionsByCategory:new Map([...transactionsByCategory].map(([id,rows])=>[id,[...rows.values()].filter(row=>row.amount>0).sort((a,b)=>b.amount-a.amount).slice(0,3)])),
+    driverTransactionsByCategory:drivers,unknownRecurring,
+  };
 }
 
 export async function fetchBudgetInsights(
@@ -412,6 +237,7 @@ export async function fetchBudgetInsights(
     endDate,
     accountIds,
     categories: overBudgetCategories,
+    personId,
   }: FetchBudgetInsightsOptions
 ): Promise<BudgetCategoryInsight[]> {
   if (overBudgetCategories.length === 0) {
@@ -423,7 +249,7 @@ export async function fetchBudgetInsights(
   const previousWindows = previousMonthWindows(monthKey, 3);
   const sameMonthLastYear = sameMonthLastYearWindow(monthKey);
 
-  const [previousRows, sameMonthLastYearRows, topMerchants, transactionContributors] =
+  const [previousRows, sameMonthLastYearRows, transactionContributors] =
     await Promise.all([
       Promise.all(
         previousWindows.map((window) =>
@@ -431,6 +257,7 @@ export async function fetchBudgetInsights(
             ...window,
             accountIds: normalizedAccountIds,
             includeUncategorized: false,
+            personId,
           })
         )
       ),
@@ -438,14 +265,14 @@ export async function fetchBudgetInsights(
         ...sameMonthLastYear,
         accountIds: normalizedAccountIds,
         includeUncategorized: false,
+        personId,
       }),
-      fetchTopMerchants(userId, categoryIds, startDate, endDate, normalizedAccountIds),
-      fetchTransactionContributors(
+      fetchContributors(
         userId,
         categoryIds,
         startDate,
         endDate,
-        normalizedAccountIds
+        normalizedAccountIds,personId
       ),
     ]);
 
@@ -455,10 +282,10 @@ export async function fetchBudgetInsights(
   return overBudgetCategories.map((category) => {
     const previousAmounts = previousByCategory.flatMap((rows) => {
       const amount = rows.get(category.categoryId);
-      return amount === undefined ? [] : [amount];
+      return amount == null ? [] : [amount];
     });
     const previousMonthAmount = previousByCategory[0]?.get(category.categoryId) ?? null;
-    const merchantContributors = topMerchants.get(category.categoryId) ?? [];
+    const merchantContributors = transactionContributors.topMerchants.get(category.categoryId) ?? [];
     const topTransactions =
       transactionContributors.topTransactionsByCategory.get(category.categoryId) ?? [];
     const sameMonthLastYearAmount =
@@ -479,7 +306,7 @@ export async function fetchBudgetInsights(
       previousThreeMonthAverage,
       sameMonthLastYearAmount,
       driverType,
-      explanation: buildBudgetInsightExplanation({
+      explanation: transactionContributors.unknownRecurring.has(category.categoryId) ? "Above your personal category plan. Recurring attribution is unavailable for some shared records." : buildBudgetInsightExplanation({
         categoryName: category.categoryName,
         plannedAmount: category.plannedAmount,
         actualAmount: category.actualAmount,
