@@ -8,6 +8,7 @@ import { SankeyFlowChart } from "@/components/charts/sankey-flow-chart";
 import { NetWorthTotals } from "@/components/household/net-worth-totals";
 import { AssetsOverviewCard } from "@/components/assets";
 import { PortfolioSummaryCard } from "@/components/investments/PortfolioSummaryCard";
+import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
 import { SearchButton } from "@/components/dashboard/search-button";
 import { UpcomingPlannedExpensesCard } from "@/components/dashboard/upcoming-planned-expenses-card";
@@ -165,11 +166,11 @@ async function DashboardContent({
           </div>
           <div data-walkthrough="walkthrough-savings">
           <KpiSparkCard
-            title="Savings Rate"
+            title="Saving from Income"
             value={data.savingsRate.percentage}
             valueFormat="percentage"
             currency={data.savingsRate.currency}
-            subtitle={`${formatCurrency(data.savingsRate.amount, data.savingsRate.currency, { showSign: true })} net savings · ${data.periodLabel.subtitle}`}
+            subtitle={`${formatCurrency(data.savingsRate.amount, data.savingsRate.currency, { showSign: true })} before allocations · ${data.periodLabel.subtitle}`}
             sparkData={[]}
           />
           </div>
@@ -197,6 +198,8 @@ async function DashboardContent({
           />
           </div>
         </div>
+
+        <CashFlowSummary data={data.cashFlow} currency={data.balance.currency} reconciliation={data.cashReconciliation} />
 
         {/* Row 3: Cash Flow Sankey */}
         <div className="grid min-w-0 grid-cols-1 gap-4">
