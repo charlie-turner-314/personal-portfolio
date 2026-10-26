@@ -1,24 +1,33 @@
+import { getTransactionsForExport } from "@/lib/actions/transactions";
 import type { TransactionWithRelations } from "@/lib/actions/transactions";
 
 /**
  * Export transactions to a CSV file and trigger download
  */
-export function exportTransactionsToCSV(
+export async function exportTransactionsToCSV(
   transactions: TransactionWithRelations[],
-  filename?: string
-): void {
+  filename?: string,
+  personId?:string
+): Promise<void> {
   if (transactions.length === 0) {
     return;
   }
+
+  transactions=await getTransactionsForExport(transactions.map(row=>row.id),personId);
 
   // Define CSV headers
   const headers = [
     "Date",
     "Description",
     "Merchant",
-    "Amount",
-    "Currency",
+    "Original bank amount",
+    "Bank currency",
+    "Attributed amount",
+    "Reporting currency",
+    "Economic share",
+    "Cash flow portions",
     "Category",
+    "Category ID",
     "Account",
     "Type",
     "Status",
@@ -31,12 +40,12 @@ export function exportTransactionsToCSV(
     const merchant = escapeCsvField(tx.merchant || "");
     const amount = tx.amount.toFixed(2);
     const currency = tx.currency || "EUR";
-    const category = escapeCsvField(tx.category?.name || "Uncategorized");
+    const category = escapeCsvField(tx.category?.name || tx.categorySystem?.name || "Uncategorized");
     const account = escapeCsvField(tx.account?.name || "Unknown");
     const type = tx.transactionType || (tx.amount < 0 ? "debit" : "credit");
     const status = tx.pending ? "Pending" : "Completed";
 
-    return [date, description, merchant, amount, currency, category, account, type, status];
+    return [date, description, merchant, amount, currency, tx.attributedAmount===null?"Unavailable":tx.attributedAmount?.toFixed(2)??"Unavailable",tx.reportingCurrency??"",String(tx.economicShare??""),escapeCsvField(JSON.stringify(tx.cashFlowParts??null)),category,tx.categoryId??tx.categorySystemId??"", account, type, status];
   });
 
   // Combine headers and rows

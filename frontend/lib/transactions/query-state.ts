@@ -20,6 +20,7 @@ export interface TransactionsQueryState {
   page: number;
   pageSize: number;
   search?: string;
+  personId?:string;
   category: string[];
   accountIds: string[];
   status: string[];
@@ -140,6 +141,7 @@ function parseInternal(searchParams: URLSearchParams): TransactionsQueryState {
     page,
     pageSize,
     search,
+    personId:searchParams.get("person")?.trim()||undefined,
     category,
     accountIds,
     status,
@@ -181,6 +183,8 @@ export function toTransactionsSearchParams(
   if (state.search) {
     params.set("search", state.search);
   }
+
+  if(state.personId) params.set("person",state.personId);
 
   state.category.forEach((id) => params.append("category", id));
   state.accountIds.forEach((id) => params.append("account", id));

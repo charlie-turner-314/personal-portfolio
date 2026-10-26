@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Sankey, Tooltip, Rectangle, ResponsiveContainer } from "recharts";
-import { useRouter } from "next/navigation";
+import { useRouter,useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
@@ -265,12 +265,14 @@ export function SankeyFlowChart({
   horizon,
 }: SankeyFlowChartProps) {
   const router = useRouter();
+  const personId=useSearchParams().get("person")??undefined;
   const [selectedCategory, setSelectedCategory] = React.useState<SelectedCategory | null>(null);
 
   const navigateToTransactions = React.useCallback(
     (categoryId?: string | null) => {
       if (!categoryId) return;
       const query = buildTransactionsDrilldownQuery({
+        personId,
         categoryId,
         accountIds,
         dateFrom,
@@ -279,7 +281,7 @@ export function SankeyFlowChart({
       });
       router.push(`/transactions?${query}`);
     },
-    [accountIds, dateFrom, dateTo, horizon, router]
+    [accountIds, dateFrom, dateTo, horizon, personId, router]
   );
 
   const selectedNode = selectedCategory?.key

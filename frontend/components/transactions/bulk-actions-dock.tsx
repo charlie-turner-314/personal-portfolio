@@ -35,6 +35,7 @@ import { filterSelectableCategories } from "@/lib/utils/category-utils";
 import { DeleteConfirmationDialog } from "./delete-confirmation-dialog";
 
 interface BulkActionsDockProps {
+  personId?:string;
   selectedCount: number;
   selectedIds: string[];
   selectedTransactions: TransactionWithRelations[];
@@ -48,6 +49,7 @@ interface BulkActionsDockProps {
 }
 
 export function BulkActionsDock({
+  personId,
   selectedCount,
   selectedIds,
   selectedTransactions,
@@ -104,14 +106,14 @@ export function BulkActionsDock({
     }
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (selectedTransactions.length === 0) {
       toast.error("No transactions to export");
       return;
     }
 
     try {
-      exportTransactionsToCSV(selectedTransactions);
+      await exportTransactionsToCSV(selectedTransactions,undefined,personId);
       toast.success(`Exported ${selectedTransactions.length} transactions`);
     } catch {
       toast.error("Failed to export transactions");

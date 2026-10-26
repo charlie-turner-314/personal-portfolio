@@ -1,5 +1,7 @@
 "use server";
 
+import { transactionReportingValue } from "@/lib/reporting/transaction-value";
+import { reportingCurrencyForUser } from "@/lib/household/reporting-currency";
 import { categoryAccess } from "@/lib/household/category-access";
 import { validateCashFlowPortions, type CashFlowPortion } from "@/lib/dashboard/cash-flow";
 import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
@@ -406,7 +408,10 @@ export interface TransactionWithRelations {
   merchant: string | null;
   creditor: string | null;
   debtor: string | null;
-  amount: number;
+  amount: number; // original signed bank amount, preserved for editing
+  attributedAmount?:number|null;
+  economicShare?:number;
+  reportingCurrency?:string;
   currency: string | null;
   categoryId: string | null;
   category: {
@@ -468,8 +473,10 @@ export interface TransactionsPageResult {
 }
 
 export interface FilteredTransactionTotals {
-  totalIn: number;
-  totalOut: number;
+  totalIn: number|null;
+  totalOut: number|null;
+  currency?:string;
+  missingConversions?:number;
 }
 
 /** Linked private resources must not leak through an otherwise shared transaction. */
@@ -488,7 +495,9 @@ async function sanitizeTransactionRelations<T extends TransactionRowWithRelation
   return rows.map((row) => {
     const propertyVisible = !!row.propertyId && propertySet.has(row.propertyId);
     const transferVisible = !!row.internalTransfer?.pocketAccount && pocketSet.has(row.internalTransfer.pocketAccount.id);
+    const generatedMirror=row.externalId?.startsWith("mirror-")??false;
     return { ...row,
+      ...(generatedMirror?{description:"Transfer",merchant:null,creditor:null,debtor:null}:{}),
       propertyId: propertyVisible ? row.propertyId : null, property: propertyVisible ? row.property : null,
       recurringTransactionId: row.recurringTransactionId && recurringSet.has(row.recurringTransactionId) ? row.recurringTransactionId : null,
       recurringTransaction: row.recurringTransactionId && recurringSet.has(row.recurringTransactionId) ? row.recurringTransaction : null,
@@ -508,9 +517,16 @@ function toNumberOrUndefined(value?: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+// Older generated mirrors embedded the private source account name in text.
+// Apply the same projection to search/sort as to serialization, preventing an
+// existence or ordering oracle through a sanitized result.
+const safeDescription=sql<string|null>`CASE WHEN ${transactions.externalId} LIKE 'mirror-%' THEN 'Transfer' ELSE ${transactions.description} END`;
+const safeMerchant=sql<string|null>`CASE WHEN ${transactions.externalId} LIKE 'mirror-%' THEN NULL ELSE ${transactions.merchant} END`;
+
 function resolveSortOrder(
   sort: TransactionSortField,
-  order: TransactionSortOrder
+  order: TransactionSortOrder,
+  actor?:string,personId?:string
 ) {
   if (sort === "categoryConfidence") {
     // Review unscored rows first, scored suggestions next, and manual choices last.
@@ -522,19 +538,20 @@ function resolveSortOrder(
     return [asc(group), order === "asc" ? asc(score) : desc(score), desc(transactions.bookedAt), desc(transactions.id)];
   }
   if (sort === "amount") {
+    const amount=actor?transactionReportingValue(actor,personId).amount:transactions.amount;
     return order === "asc"
-      ? [asc(transactions.amount), desc(transactions.bookedAt)]
-      : [desc(transactions.amount), desc(transactions.bookedAt)];
+      ? [asc(amount), desc(transactions.bookedAt)]
+      : [desc(amount), desc(transactions.bookedAt)];
   }
   if (sort === "description") {
     return order === "asc"
-      ? [asc(transactions.description), desc(transactions.bookedAt)]
-      : [desc(transactions.description), desc(transactions.bookedAt)];
+      ? [asc(safeDescription), desc(transactions.bookedAt)]
+      : [desc(safeDescription), desc(transactions.bookedAt)];
   }
   if (sort === "merchant") {
     return order === "asc"
-      ? [asc(transactions.merchant), desc(transactions.bookedAt)]
-      : [desc(transactions.merchant), desc(transactions.bookedAt)];
+      ? [asc(safeMerchant), desc(transactions.bookedAt)]
+      : [desc(safeMerchant), desc(transactions.bookedAt)];
   }
 
   return order === "asc"
@@ -550,6 +567,10 @@ interface TransactionRowWithRelations {
   creditor: string | null;
   debtor: string | null;
   amount: string;
+  externalId?:string|null;
+  attributedAmount?:string|null;
+  economicShare?:string;
+  reportingCurrency?:string;
   currency: string | null;
   categoryId: string | null;
   categorySystemId: string | null;
@@ -646,6 +667,7 @@ function mapTransactionRowsForUi(
         creditor: tx.creditor,
         debtor: tx.debtor,
         amount: parseFloat(tx.amount),
+        ...(tx.attributedAmount!==undefined?{attributedAmount:tx.attributedAmount===null?null:Number(tx.attributedAmount),economicShare:Number(tx.economicShare),reportingCurrency:tx.reportingCurrency}:{}),
         currency: tx.currency,
         categoryId: tx.categoryId,
         category: tx.category
@@ -833,8 +855,8 @@ async function buildTransactionsWhereClause(
   if (input.search) {
     conditions.push(
       or(
-        ilike(transactions.description, `%${input.search}%`),
-        ilike(transactions.merchant, `%${input.search}%`)
+        ilike(safeDescription, `%${input.search}%`),
+        ilike(safeMerchant, `%${input.search}%`)
       )!
     );
   }
@@ -866,15 +888,17 @@ async function buildTransactionsWhereClause(
     }
   }
 
+  const personalRecurringId=sql<string|null>`CASE WHEN EXISTS(SELECT 1 FROM recurring_transactions own_rule
+    WHERE own_rule.id=${transactions.recurringTransactionId} AND own_rule.user_id=${userId}) THEN ${transactions.recurringTransactionId} END`;
   const subscriptionIds = input.subscription.filter((value) => value !== "no_subscription");
   const includesNoSubscription = input.subscription.includes("no_subscription");
   if (subscriptionIds.length > 0 || includesNoSubscription) {
     const subscriptionConditions = [];
     if (subscriptionIds.length > 0) {
-      subscriptionConditions.push(inArray(transactions.recurringTransactionId, subscriptionIds));
+      subscriptionConditions.push(inArray(personalRecurringId, subscriptionIds));
     }
     if (includesNoSubscription) {
-      subscriptionConditions.push(isNull(transactions.recurringTransactionId));
+      subscriptionConditions.push(isNull(personalRecurringId));
     }
     conditions.push(or(...subscriptionConditions)!);
   }
@@ -888,10 +912,10 @@ async function buildTransactionsWhereClause(
   const minAmount = toNumberOrUndefined(input.minAmount);
   const maxAmount = toNumberOrUndefined(input.maxAmount);
   if (minAmount !== undefined) {
-    conditions.push(sql`ABS(${transactions.amount}) >= ${minAmount}`);
+    conditions.push(sql`(${transactionReportingValue(userId,input.personId).amount} IS NULL OR ABS(${transactionReportingValue(userId,input.personId).amount}) >= ${minAmount})`);
   }
   if (maxAmount !== undefined) {
-    conditions.push(sql`ABS(${transactions.amount}) <= ${maxAmount}`);
+    conditions.push(sql`(${transactionReportingValue(userId,input.personId).amount} IS NULL OR ABS(${transactionReportingValue(userId,input.personId).amount}) <= ${maxAmount})`);
   }
 
   return {
@@ -902,42 +926,7 @@ async function buildTransactionsWhereClause(
   };
 }
 
-export async function getTransactionsPage(
-  input: TransactionsQueryState
-): Promise<TransactionsPageResult> {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return {
-      rows: [],
-      totalCount: 0,
-      filteredTotals: null,
-      page: input.page,
-      pageSize: input.pageSize,
-    };
-  }
-
-  const {
-    whereClause,
-    resolvedFrom,
-    resolvedTo,
-    effectiveHorizon,
-  } = await buildTransactionsWhereClause(userId, input);
-  const shouldComputeFilteredTotals = hasActiveTransactionFilters(input);
-
-  const [countRows, rows, totalsRows] = await Promise.all([
-    db
-      .select({
-        count: sql<number>`COUNT(*)::int`,
-      })
-      .from(transactions)
-      .where(whereClause),
-    db.query.transactions.findMany({
-      where: whereClause,
-      orderBy: resolveSortOrder(input.sort, input.order),
-      limit: input.pageSize,
-      offset: (input.page - 1) * input.pageSize,
-      with: {
+const transactionDetailsRelations={
         account: {
           with: {
             logo: {
@@ -969,35 +958,69 @@ export async function getTransactionsPage(
             },
           },
         },
+      } as const;
+
+export async function getTransactionsPage(
+  input: TransactionsQueryState
+): Promise<TransactionsPageResult> {
+  const userId = await requireAuth();
+
+  if (!userId) {
+    return {
+      rows: [],
+      totalCount: 0,
+      filteredTotals: null,
+      page: input.page,
+      pageSize: input.pageSize,
+    };
+  }
+
+  const {
+    whereClause,
+    resolvedFrom,
+    resolvedTo,
+    effectiveHorizon,
+  } = await buildTransactionsWhereClause(userId, input);
+  const shouldComputeFilteredTotals = hasActiveTransactionFilters(input);
+  const filteredValues=db.$with("filtered_transaction_values").as(db.select({
+    amount:transactionReportingValue(userId,input.personId).amount.as("scope_amount"),
+  }).from(transactions).where(whereClause));
+
+  const [countRows, rows, totalsRows] = await Promise.all([
+    db
+      .select({
+        count: sql<number>`COUNT(*)::int`,
+      })
+      .from(transactions)
+      .where(whereClause),
+    db.query.transactions.findMany({
+      where: whereClause,
+      orderBy: resolveSortOrder(input.sort, input.order,userId,input.personId),
+      extras:{
+        attributedAmount:transactionReportingValue(userId,input.personId).amount.as("attributed_amount"),
+        economicShare:transactionReportingValue(userId,input.personId).share.as("economic_share"),
+        reportingCurrency:sql<string>`${reportingCurrencyForUser(userId)}`.as("reporting_currency"),
       },
+      limit: input.pageSize,
+      offset: (input.page - 1) * input.pageSize,
+      with: transactionDetailsRelations,
     }),
     shouldComputeFilteredTotals
-      ? db
-          .select({
-            totalIn: sql<string>`COALESCE(SUM(
-              CASE
-                WHEN ${transactions.transactionType} = 'credit' THEN ABS(${transactions.amount})
-                WHEN ${transactions.transactionType} IS NULL AND ${transactions.amount} > 0 THEN ${transactions.amount}
-                ELSE 0
-              END
-            ), 0)`,
-            totalOut: sql<string>`COALESCE(SUM(
-              CASE
-                WHEN ${transactions.transactionType} = 'debit' THEN ABS(${transactions.amount})
-                WHEN ${transactions.transactionType} IS NULL AND ${transactions.amount} < 0 THEN ABS(${transactions.amount})
-                ELSE 0
-              END
-            ), 0)`,
-          })
-          .from(transactions)
-          .where(whereClause)
+      ? db.with(filteredValues).select({
+          totalIn:sql<string|null>`CASE WHEN count(*) FILTER(WHERE scope_amount IS NULL)>0 THEN NULL ELSE coalesce(sum(greatest(scope_amount,0)),0) END`,
+          totalOut:sql<string|null>`CASE WHEN count(*) FILTER(WHERE scope_amount IS NULL)>0 THEN NULL ELSE coalesce(sum(greatest(-scope_amount,0)),0) END`,
+          currency:sql<string>`${reportingCurrencyForUser(userId)}`,
+          missingConversions:sql<number>`count(*) FILTER(WHERE scope_amount IS NULL)::int`,
+        }).from(filteredValues)
       : Promise.resolve([]),
   ]);
 
   const filteredTotals = shouldComputeFilteredTotals
     ? {
-        totalIn: Number.parseFloat(totalsRows[0]?.totalIn ?? "0"),
-        totalOut: Number.parseFloat(totalsRows[0]?.totalOut ?? "0"),
+        totalIn: totalsRows[0]?.totalIn===null?null:Number(totalsRows[0]?.totalIn??0),
+        totalOut: totalsRows[0]?.totalOut===null?null:Number(totalsRows[0]?.totalOut??0),
+        currency:String(totalsRows[0]?.currency??"EUR"),
+        missingConversions:totalsRows[0]?.missingConversions??0,
       }
     : null;
   const hydratedRows = await hydrateTransactionRowsWithResolvedAccountLogos(await sanitizeTransactionRelations(rows, userId));
@@ -1012,6 +1035,23 @@ export async function getTransactionsPage(
     resolvedTo: resolvedTo ? resolvedTo.toISOString().slice(0, 10) : undefined,
     effectiveHorizon,
   };
+}
+
+/** Export always refreshes authorized records; browser-held rows are not authority. */
+export async function getTransactionsForExport(ids:string[],personId?:string):Promise<TransactionWithRelations[]> {
+  const userId=await requireAuth();
+  if(!userId)throw new Error("Not authenticated");
+  const requested=[...new Set(ids)];
+  if(!requested.length||requested.length>1000)throw new Error("Select between one and 1,000 transactions");
+  const rows=await db.query.transactions.findMany({
+    where:and(accountAccess(transactions.accountId,userId),inArray(transactions.id,requested)),
+    extras:{attributedAmount:transactionReportingValue(userId,personId).amount.as("attributed_amount"),
+      economicShare:transactionReportingValue(userId,personId).share.as("economic_share"),
+      reportingCurrency:sql<string>`${reportingCurrencyForUser(userId)}`.as("reporting_currency")},
+    with:transactionDetailsRelations,
+  });
+  if(rows.length!==requested.length)throw new Error("Some selected records are no longer available. Refresh the selection before exporting.");
+  return mapTransactionRowsForUi(await hydrateTransactionRowsWithResolvedAccountLogos(await sanitizeTransactionRelations(rows,userId)),"export");
 }
 
 export async function getTransactions(): Promise<TransactionWithRelations[]> {

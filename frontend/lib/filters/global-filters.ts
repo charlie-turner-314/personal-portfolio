@@ -1,6 +1,7 @@
 export const GLOBAL_FILTER_STORAGE_KEY = "filters:global:v1";
 
 export interface GlobalFilters {
+  personId?:string;
   accountIds: string[];
   from?: string;
   to?: string;
@@ -25,11 +26,13 @@ export function parseGlobalFiltersFromSearchParams(
   searchParams: Pick<URLSearchParams, "get" | "getAll">
 ): GlobalFilters {
   const accountIds = parseAccountParams(searchParams);
+  const personId=searchParams.get("person")?.trim()||undefined;
   const from = searchParams.get("from")?.trim() || undefined;
   const to = searchParams.get("to")?.trim() || undefined;
   const horizon = from ? undefined : searchParams.get("horizon")?.trim() || undefined;
 
   return {
+    ...(personId?{personId}:{}),
     accountIds,
     from,
     to,
@@ -49,6 +52,7 @@ export function parseGlobalFiltersFromQueryString(
 
 export function hasGlobalFilters(filters: GlobalFilters): boolean {
   return Boolean(
+    filters.personId ||
     filters.accountIds.length > 0 ||
       filters.from ||
       filters.to ||
@@ -60,6 +64,7 @@ export function toGlobalFilterSearchParams(
   filters: GlobalFilters
 ): URLSearchParams {
   const params = new URLSearchParams();
+  if(filters.personId)params.set("person",filters.personId);
 
   filters.accountIds.forEach((accountId) => {
     params.append("account", accountId);

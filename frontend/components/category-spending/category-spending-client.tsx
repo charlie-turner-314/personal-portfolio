@@ -98,6 +98,7 @@ export function CategorySpendingClient({
     ) => {
       const queryString = buildCategorySpendingQuery({
         categoryIds: nextCategoryIds,
+        personId:query.personId,
         accountIds: query.accountIds,
         dateFrom: query.dateFrom,
         dateTo: query.dateTo,
@@ -116,6 +117,7 @@ export function CategorySpendingClient({
       }
     },
     [
+      query.personId,
       query.accountIds,
       query.dateFrom,
       query.dateTo,
@@ -214,6 +216,8 @@ export function CategorySpendingClient({
     <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
       <div className="flex items-center justify-between">
         <DashboardFilters accounts={accounts} />
+        <p className="text-xs text-muted-foreground">Consumption allocations in the selected view, including refunds. Capital and transfers are shown separately on the dashboard. Transaction details retain full bank amounts.</p>
+        {(data.missingConversions??0)>0&&<p role="status" className="text-sm text-muted-foreground">Known amounts only: currency conversion is missing for some current or comparison records.</p>}
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

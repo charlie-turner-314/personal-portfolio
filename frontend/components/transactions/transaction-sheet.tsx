@@ -275,6 +275,7 @@ export function TransactionSheet({
           <SheetTitle className="text-lg font-medium break-all">
             {transaction.description}
           </SheetTitle>
+          <p className="text-xs text-muted-foreground">Original bank amount</p>
           <div
             className={cn(
               "text-3xl font-semibold tracking-tight pt-2",
@@ -283,6 +284,7 @@ export function TransactionSheet({
           >
             {formatAmount(transaction.amount, transaction.currency || "EUR")}
           </div>
+          {transaction.attributedAmount!==undefined&&<p className="text-sm text-muted-foreground">Selected view: {transaction.attributedAmount===null?"Unavailable":formatAmount(transaction.attributedAmount,transaction.reportingCurrency||transaction.currency||"EUR")}</p>}
         </SheetHeader>
 
         <Separator className="my-4 shrink-0" />

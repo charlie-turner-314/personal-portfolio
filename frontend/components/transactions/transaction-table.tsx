@@ -54,6 +54,7 @@ const MANAGED_QUERY_KEYS = [
   "page",
   "pageSize",
   "search",
+  "person",
   "category",
   "account",
   "status",
@@ -88,7 +89,8 @@ function mapSortColumnIdToSortField(id: string): TransactionSortField {
   return "bookedAt";
 }
 
-function formatSummaryAmount(amount: number): string {
+function formatSummaryAmount(amount: number|null): string {
+  if(amount===null)return "Unavailable";
   return amount.toLocaleString("en-AU", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -320,6 +322,7 @@ export function TransactionTable({
 
           return (
             <BulkActionsDock
+              personId={queryState.personId}
               selectedCount={selectedCount}
               selectedIds={selectedIds}
               selectedTransactions={selectedTransactions}
@@ -348,15 +351,15 @@ export function TransactionTable({
           resolvedFilteredTotals ? (
             <div className="-mt-px flex flex-wrap items-center justify-end gap-x-8 gap-y-2 border-x border-b bg-muted/25 px-4 py-2">
               <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground">Total In</span>
+                <span className="text-muted-foreground">Movements in ({resolvedFilteredTotals.currency??"reporting currency"})</span>
                 <span className="font-mono font-medium text-emerald-700">
-                  +{formatSummaryAmount(resolvedFilteredTotals.totalIn)}
+                  {formatSummaryAmount(resolvedFilteredTotals.totalIn)}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground">Total Out</span>
+                <span className="text-muted-foreground">Movements out ({resolvedFilteredTotals.currency??"reporting currency"})</span>
                 <span className="font-mono font-medium text-rose-700">
-                  -{formatSummaryAmount(resolvedFilteredTotals.totalOut)}
+                  {formatSummaryAmount(resolvedFilteredTotals.totalOut)}
                 </span>
               </div>
             </div>

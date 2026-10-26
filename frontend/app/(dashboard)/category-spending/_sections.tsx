@@ -17,12 +17,14 @@ export async function CategorySpendingSection({
 }) {
   const [data, transactionsPage, accounts, categories] = await Promise.all([
     getCategorySpendingData({
+      personId:parsed.personId,
       accountIds: parsed.accountIds,
       dateFrom: parsed.dateFrom,
       dateTo: parsed.dateTo,
       horizon: parsed.effectiveHorizon,
     }),
     getCategorySpendingTransactionsPage({
+      personId:parsed.personId,
       accountIds: parsed.accountIds,
       dateFrom: parsed.dateFrom,
       dateTo: parsed.dateTo,

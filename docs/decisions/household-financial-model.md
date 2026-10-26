@@ -156,3 +156,21 @@ private peer is never read to make another member's report balance.
 Sankey residuals are labelled calculated net inflow/outflow. They are differences
 between included movements, including capital and boundary transfers, rather
 than saving, funding requirements or independent cash balance observations.
+
+## Transaction display and export
+
+A transaction's original bank amount/currency is immutable financial input for
+editing and purpose portions. Reports may attach a separate dated attributed
+amount converted to the viewer's currency. The transaction list shows both;
+amount filters/sort use the attributed amount. Unknown conversion remains
+unavailable even when an amount range is selected. Movement totals are cash
+movement totals, not an income or consumption classification.
+
+Category detail rows represent consumption portions, including refunds and
+linked netting, rather than all negative bank transactions. Their totals use the
+same entries as the category chart. Full bank facts remain available in details.
+
+CSV exports re-fetch every selected record using current permissions before
+creating a new file, reject partial authorization, and label original versus
+attributed amounts explicitly. Original explicit portions and classification
+IDs are retained in the file. Revocation cannot erase existing downloaded copies.
