@@ -1850,7 +1850,7 @@ export async function updateTransactionCashFlowPurpose(
     const error = validateCashFlowPortions(parts, Number(transaction.amount));
     if (error) return { success: false, error };
     // Balance adjustments and synthetic transfer legs must retain their accounting meaning.
-    if (transaction.internalTransferId||transaction.externalId?.startsWith("mirror-")) return { success: false, error: "Unlink the internal transfer before changing its purpose" };
+    if (transaction.externalId?.startsWith("mirror-")) return { success: false, error: "Generated transfer mirrors keep their transfer purpose. Edit the original bank record." };
     const categoryId = transaction.categoryId ?? transaction.categorySystemId;
     if (categoryId) {
       const category = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });

@@ -224,3 +224,19 @@ Generated mirror descriptions never need a private source account's name.
 New mirrors use generic text; legacy source text is preserved in storage but
 projected safely in API/MCP reads and search predicates. Personal guidance,
 enrichment and integration IDs are custodian context, not shared classification.
+
+## Automatic links and explicit original purposes
+
+An automatic transfer relationship does not prevent declaring the original bank
+record's purposes. Its visible derived mirror records the other leg; it is never
+a second allocation. Peer purpose checks apply the same selected dates/accounts
+and access boundary for manual and automatic groups. An isolated mirror remains
+a boundary movement and does not expose the original record's private purpose.
+Stored legacy annotations on a generated mirror remain audit data, while its
+reporting purpose stays Transfer. Ordinary original bank portions are preserved.
+
+Independent cash reconciliation must not use balances calculated from the same
+transactions. Existing daily-balance writers include such calculations. Additive
+observation provenance and writer auditing are required before final delivery;
+unknown legacy observations must fail closed for reconciliation, without losing
+or changing their recorded numeric values.

@@ -35,10 +35,13 @@ describe("cash-flow purpose authorization and validation", () => {
     expect(query.params).toContain("actor");
     expect(mocks.revalidate).toHaveBeenCalledWith("/");
   });
+  it("allows explicit purposes on the original bank record while retaining its automatic link",async()=>{
+    mocks.find.mockResolvedValue({amount:"-1000",internalTransferId:"link",externalId:"bank-original",categoryId:"housing"});
+    expect(await updateTransactionCashFlowPurpose("bank",[{kind:"capital",detail:"loan_principal",amount:600},{kind:"consumption",amount:400}])).toEqual({success:true});
+    expect(mocks.set.mock.calls[0][0]).not.toHaveProperty("internalTransferId");
+  });
   it("rejects invalid partial allocations, synthetic legs and balance adjustments", async () => {
     expect((await updateTransactionCashFlowPurpose("id", [{ kind: "capital", detail: "investment", amount: 2000 }])).success).toBe(false);
-    mocks.find.mockResolvedValue({ amount: "-1000", internalTransferId: "mirror" });
-    expect((await updateTransactionCashFlowPurpose("id", [{ kind: "capital", detail: "loan_principal", amount: 1000 }])).success).toBe(false);
     mocks.find.mockResolvedValue({ amount: "-1000", externalId:"mirror-private-source", internalTransferId:null });
     expect((await updateTransactionCashFlowPurpose("id", [{ kind: "capital", detail: "loan_principal", amount: 1000 }])).success).toBe(false);
     mocks.find.mockResolvedValue({ amount: "-1000", categoryId: "balance", internalTransferId: null });

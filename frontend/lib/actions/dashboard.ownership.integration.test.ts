@@ -40,6 +40,8 @@ INSERT INTO transactions VALUES
  ('private','private','owner','2026-10-01',99999,99999,'AUD','income',NULL,true,NULL),
  ('internal-mirror','savings','owner','2026-10-01',-462,-462,'AUD','transfer',NULL,false,NULL);
 INSERT INTO internal_transfers VALUES ('internal','internal-mirror');
+ALTER TABLE transactions ADD COLUMN external_id text;
+UPDATE transactions SET external_id='mirror-internal' WHERE id='internal-mirror';
 ALTER TABLE transactions ADD COLUMN merchant text;
 ALTER TABLE transactions ADD COLUMN description text;
 ALTER TABLE transactions ADD COLUMN recurring_transaction_id text;
@@ -222,6 +224,22 @@ describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL
       const boundary={startDate:new Date("2026-08-15"),endDate:new Date("2026-08-15T23:59:59Z")};
       expect(await fetchFinancialActivity("member",boundary)).toMatchObject({missingConversions:1});
       expect(await fetchCategoryActualAmounts("member",boundary)).toEqual([expect.objectContaining({id:"spend",amount:null,consumptionAmount:null,capitalAmount:null})]);
+    }finally {variant.sql="";}
+  });
+
+  it("uses one purpose boundary for automatic source/mirror legs without double-counting principal",async()=>{
+    variant.sql=`UPDATE transactions SET booked_at='2026-11-15',amount=-1000,functional_amount=-1000,category_id='spend',include_in_analytics=false,
+      cash_flow_parts='[{"kind":"capital","detail":"loan_principal","amount":600},{"kind":"consumption","amount":400}]'::jsonb WHERE id='internal';
+      UPDATE transactions SET booked_at='2026-11-16',amount=1000,functional_amount=1000 WHERE id='internal-mirror';`;
+    try {
+      const boundary={startDate:new Date("2026-11-15"),endDate:new Date("2026-11-16T23:59:59Z")};
+      expect(await getCashFlowSummary(boundary.startDate,boundary.endDate)).toMatchObject({savingsFromIncome:-200,loanPrincipal:300,transfersIn:0,transfersOut:0,explainedCashFlow:-500});
+      expect(await getCashFlowSummary(boundary.startDate,boundary.endDate,["shared"])).toMatchObject({loanPrincipal:300,transfersIn:0,explainedCashFlow:-500});
+      expect(await getCashFlowSummary(boundary.startDate,boundary.endDate,["savings"])).toMatchObject({loanPrincipal:0,boundaryTransfersIn:500,explainedCashFlow:500});
+      expect(await getCashFlowSummary(new Date("2026-11-16"),boundary.endDate)).toMatchObject({loanPrincipal:0,boundaryTransfersIn:500});
+      expect(await fetchCategoryActualAmounts("member",boundary)).toEqual([expect.objectContaining({id:"spend",amount:500,consumptionAmount:200,capitalAmount:300})]);
+      variant.sql+="DELETE FROM household_account_shares WHERE account_id='shared';";
+      expect(await getCashFlowSummary(boundary.startDate,boundary.endDate)).toMatchObject({loanPrincipal:0,boundaryTransfersIn:500});
     }finally {variant.sql="";}
   });
 

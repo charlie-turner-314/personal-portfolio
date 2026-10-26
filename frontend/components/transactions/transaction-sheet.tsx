@@ -414,7 +414,8 @@ export function TransactionSheet({
             </div>
           )}
 
-          {!isBalancingTransfer && !transaction.internalTransferId && !transaction.isGeneratedMirror && (
+          {transaction.isGeneratedMirror&&<p className="text-xs text-muted-foreground">Generated transfer mirror · reporting purpose is Transfer. Allocations are edited on the original bank record.</p>}
+          {!isBalancingTransfer && !transaction.isGeneratedMirror && (
             <CashFlowPurpose
               key={`${transaction.id}:${JSON.stringify(transaction.cashFlowParts)}`}
               transactionId={transaction.id} amount={transaction.amount} currency={transaction.currency || "EUR"}

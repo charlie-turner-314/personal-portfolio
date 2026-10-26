@@ -308,9 +308,16 @@ class FinancialActivity:
                     detail="Account coverage changed. Refresh this report.",
                 )
             category = txn.category if txn.category_id else txn.category_system
-            kind = txn.cash_flow_kind or (category.cash_flow_kind if category else None)
+            generated = (txn.external_id or "").startswith("mirror-")
+            parts = None if generated else txn.cash_flow_parts
+            kind = (
+                None
+                if generated
+                else txn.cash_flow_kind
+                or (category.cash_flow_kind if category else None)
+            )
             category_type = category.category_type if category else None
-            if txn.cash_flow_parts is None and kind is None and automatic:
+            if generated or (parts is None and kind is None and automatic):
                 category_type = "transfer"
             share = self.share(account, txn.booked_at.date())
             full = self.transaction_value(txn)
@@ -318,8 +325,7 @@ class FinancialActivity:
                 ZERO if share == ZERO else full * share if full is not None else None
             )
             link = links.get(txn.id)
-            generated = (txn.external_id or "").startswith("mirror-")
-            validate_portions(txn.cash_flow_parts, decimal(txn.amount))
+            validate_portions(parts, decimal(txn.amount))
             row = {
                 "id": str(txn.id),
                 "account_id": str(txn.account_id),
@@ -336,16 +342,20 @@ class FinancialActivity:
                 "color": category.color if category else None,
                 "icon": category.icon if category else None,
                 "cash_flow_kind": kind,
-                "cash_flow_parts": txn.cash_flow_parts,
-                "group_id": str(link.group_id) if link else None,
+                "cash_flow_parts": parts,
+                "group_id": (
+                    str(link.group_id)
+                    if link
+                    else str(automatic) if automatic else None
+                ),
                 "link_role": link.link_role if link else None,
                 "automatic_id": str(automatic) if automatic else None,
                 "merchant": None if generated else txn.merchant,
                 "description": "Transfer" if generated else txn.description,
             }
             records.append(row)
-            if link:
-                groups[str(link.group_id)].append(row)
+            if row["group_id"]:
+                groups[row["group_id"]].append(row)
         for row in records:
             peers = groups.get(row["group_id"], [])
             row["transfer_group_id"] = (

@@ -740,3 +740,102 @@ def test_automatic_mirrors_remain_boundary_facts_without_generated_private_text(
     )
     jessica = FinancialActivity(m.db, m.jessica).summarize(**boundary)
     assert jessica["ownership_transfers_out"] == D(50)
+
+
+def test_automatic_original_purposes_do_not_count_the_derived_mirror_again(model):
+    from app.models import InternalTransfer
+
+    m = model
+    loan = Account(
+        user_id=m.charlie, name="Joint loan", account_type="mortgage", currency="AUD"
+    )
+    m.db.add(loan)
+    m.db.flush()
+    m.db.add(
+        HouseholdAccountShare(
+            account_id=loan.id, member_user_id=m.jessica, granted_by_user_id=m.charlie
+        )
+    )
+    m.db.add_all(
+        [
+            AccountOwnershipAllocation(
+                account_id=loan.id,
+                person_id=m.cp,
+                effective_from=datetime(2000, 1, 1).date(),
+                share=D("0.5"),
+            ),
+            AccountOwnershipAllocation(
+                account_id=loan.id,
+                person_id=m.jp,
+                effective_from=datetime(2000, 1, 1).date(),
+                share=D("0.5"),
+            ),
+        ]
+    )
+    source = m.txn(
+        m.joint,
+        -1000,
+        "2026-08-15",
+        m.spend,
+        cash_flow_parts=[
+            {"kind": "capital", "detail": "loan_principal", "amount": 600},
+            {"kind": "consumption", "amount": 400},
+        ],
+    )
+    mirror = m.txn(loan, 1000, "2026-08-16", m.transfer)
+    mirror.external_id = f"mirror-{source.id}"
+    source.include_in_analytics = mirror.include_in_analytics = False
+    # Old invalid reporting annotations on a generated leg stay in source/audit
+    # storage but cannot turn a derived mirror into independent capital/income.
+    mirror.cash_flow_parts = [{"kind": "capital", "detail": "other", "amount": 1000}]
+    m.db.flush()
+    link = InternalTransfer(
+        user_id=m.charlie,
+        source_txn_id=source.id,
+        mirror_txn_id=mirror.id,
+        source_account_id=m.joint.id,
+        pocket_account_id=loan.id,
+        amount=D(1000),
+        currency="AUD",
+    )
+    m.db.add(link)
+    m.db.flush()
+    source.internal_transfer_id = link.id
+    m.db.flush()
+    boundary = dict(from_date="2026-08-15", to_date="2026-08-16")
+    summary = FinancialActivity(m.db, m.jessica).summarize(**boundary)
+    assert summary["expenses"] == D(200) and summary["loan_principal"] == D(300)
+    assert (
+        summary["transfers_in"]
+        == summary["transfers_out"]
+        == summary["other_capital"]
+        == 0
+    )
+    assert summary["explained_cash_flow"] == D(-500)
+    whole = FinancialActivity(m.db, m.jessica, scope="household").summarize(**boundary)
+    assert whole["expenses"] == D(400) and whole["loan_principal"] == D(600)
+    assert FinancialActivity(m.db, m.jessica).summarize(
+        **boundary, account_ids=[m.joint.id]
+    )["explained_cash_flow"] == D(-500)
+    mirror_only = FinancialActivity(m.db, m.jessica).summarize(
+        **boundary, account_ids=[loan.id]
+    )
+    assert (
+        mirror_only["boundary_transfers_in"] == D(500)
+        and mirror_only["loan_principal"] == 0
+    )
+    dated = FinancialActivity(m.db, m.jessica).summarize(
+        from_date="2026-08-16", to_date="2026-08-16"
+    )
+    assert dated["boundary_transfers_in"] == D(500)
+    m.db.query(HouseholdAccountShare).filter_by(account_id=m.joint.id).delete()
+    m.db.flush()
+    private_peer = FinancialActivity(m.db, m.jessica).summarize(**boundary)
+    assert (
+        private_peer["boundary_transfers_in"] == D(500)
+        and private_peer["loan_principal"] == 0
+    )
+    assert (
+        source.internal_transfer_id == link.id
+        and mirror.cash_flow_parts[0]["kind"] == "capital"
+    )

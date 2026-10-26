@@ -31,8 +31,10 @@ export function activityRecordBoundary(alias:string,actor:string,boundary:Activi
     ${ids.length?sql`AND ${field(alias,"account_id")} IN (${sql.join(ids.map(id=>sql`${id}`),sql`, `)})`:sql``}`;
 }
 
+const generatedMirror=(alias:string)=>sql`coalesce(${field(alias,"external_id")} LIKE 'mirror-%',false)`;
+
 function effectiveCategoryType(alias:string,categoryAlias:string):SQL {
-  return sql`CASE WHEN ${field(alias,"cash_flow_parts")} IS NULL
+  return sql`CASE WHEN ${generatedMirror(alias)} THEN 'transfer' WHEN ${field(alias,"cash_flow_parts")} IS NULL
     AND coalesce(${field(alias,"cash_flow_kind")},${field(categoryAlias,"cash_flow_kind")}) IS NULL
     AND ${internalReference(alias)} IS NOT NULL THEN 'transfer' ELSE ${field(categoryAlias,"category_type")} END`;
 }
@@ -45,14 +47,14 @@ export async function fetchFinancialActivityRows(actor:string,boundary:ActivityB
     id:transactions.id,
     accountId:transactions.accountId,
     bookedAt:transactions.bookedAt,
-    cashFlowKind:sql<string|null>`coalesce(${transactions.cashFlowKind},${categories.cashFlowKind})`.as("effective_kind"),
-    cashFlowParts:transactions.cashFlowParts,
+    cashFlowKind:sql<string|null>`CASE WHEN ${generatedMirror("transactions")} THEN NULL ELSE coalesce(${transactions.cashFlowKind},${categories.cashFlowKind}) END`.as("effective_kind"),
+    cashFlowParts:sql<import("@/lib/dashboard/cash-flow").CashFlowPortion[]|null>`CASE WHEN ${generatedMirror("transactions")} THEN NULL ELSE ${transactions.cashFlowParts} END`.as("cash_flow_parts"),
     nativeAmount:sql`${transactions.amount}`.as("native_amount"),
     categoryId:sql`${categories.id}`.as("category_id"),
     categoryName:sql`${categories.name}`.as("category_name"),
     categoryType:effectiveCategoryType("transactions","categories").as("category_type"),
     icon:categories.icon,color:categories.color,
-    groupId:sql`${transactionLinks.groupId}`.as("group_id"),
+    groupId:sql`coalesce(${transactionLinks.groupId},${internalReference("transactions")})`.as("group_id"),
     linkRole:sql`${transactionLinks.linkRole}`.as("link_role"),
     internalReference:internalReference("transactions").as("internal_reference"),
     economicShare:ownershipShareSql(scope,sql`transactions.account_id`,sql`transactions.booked_at`).as("economic_share"),
