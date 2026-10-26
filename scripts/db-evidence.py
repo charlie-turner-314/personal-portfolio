@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hash existing core-table columns without exposing financial or auth values."""
+"""Hash existing core/investment-table columns without exposing financial or auth values."""
 import hashlib
 import json
 import subprocess
@@ -13,10 +13,14 @@ def sql(query):
     ], input=query, text=True).strip()
 
 
-tables = ['users', 'auth_accounts', 'accounts', 'transactions', 'holdings', 'broker_trades']
+tables = ['users', 'auth_accounts', 'accounts', 'transactions', 'holdings', 'broker_trades',
+          'holding_valuations', 'account_balances', 'price_snapshots', 'investment_income_events',
+          'investment_activities', 'investment_source_records', 'investment_ingestion_runs',
+          'investment_cost_base_adjustments', 'investment_income_enrichments', 'cgt_allocations',
+          'investment_crypto_transfers', 'investment_crypto_transfer_lots']
 before = json.load(open(sys.argv[1])) if len(sys.argv) > 1 else None
 result = {}
-for table in tables:
+for table in before if before is not None else tables:
     columns = before[table]['columns'] if before else sql(
         "SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) "
         f"FROM information_schema.columns WHERE table_schema='public' AND table_name='{table}';")
