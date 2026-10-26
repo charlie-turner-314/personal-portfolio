@@ -74,7 +74,8 @@ test("saving stays independent of a partner contribution and explicit principal 
   await page.goto("/?horizon=30");
   await assertMetric("Saving from income", "-A$31,000");
   await assertMetric("Investments", "A$1,000");
-  await assertMetric("Transfers into your share", "A$35,000");
+  await assertMetric("Ownership transfers in", "A$35,000");
+  await expect(summary().getByRole("status")).toContainText("unavailable");
   await expect(page.getByText("Partner private cash", { exact: true })).toHaveCount(0);
   // Classify through the actual transaction UI, preserving category and money.
   await page.goto(`/transactions?search=Mortgage%20payment%20for%20purpose%20review&horizon=30`);
@@ -82,15 +83,41 @@ test("saving stays independent of a partner contribution and explicit principal 
   await expect(page.getByLabel("Cash-flow purpose")).toBeVisible();
   await page.getByLabel("Cash-flow purpose").selectOption("loan_principal");
   await page.getByRole("button", { name: "Save cash-flow purpose" }).click();
-  await expect.poll(() => psql(`SELECT cash_flow_kind FROM transactions WHERE id='${ids.principal}';`).trim()).toBe("loan_principal");
+  await expect.poll(() => psql(`SELECT cash_flow_parts->0->>'detail' FROM transactions WHERE id='${ids.principal}';`).trim()).toBe("loan_principal");
+  psql(`INSERT INTO account_balances(account_id,date,balance_in_account_currency,balance_in_functional_currency) VALUES
+    ('${ids.own}',CURRENT_DATE-31,10000,10000),('${ids.own}',CURRENT_DATE-1,13000,13000),
+    ('${ids.shared}',CURRENT_DATE-31,0,0),('${ids.shared}',CURRENT_DATE-1,0,0);`);
   await page.goto("/?horizon=30");
   await assertMetric("Saving from income", "A$4,000");
   await assertMetric("Loan principal", "A$35,000");
-  await assertMetric("Net reported cash flow", "A$3,000");
+  await assertMetric("Explained cash flow", "A$3,000");
+  await assertMetric("Recorded cash balance change", "A$3,000");
+  await assertMetric("Unreconciled difference", "A$0");
+  await expect(summary().getByRole("status")).toContainText("agree");
   await expect(page.getByText("Cash required", { exact: true })).toHaveCount(0);
   const preserved = psql(`SELECT amount || ':' || category_id::text FROM transactions WHERE id='${ids.principal}';`).trim();
   expect(preserved).toBe(`-70000.00:${ids.housing}`);
   await page.screenshot({ path: testInfo.outputPath("ownership-contributions.png"), fullPage: true });
+  // General portions: principal and interest, rather than a special principal remainder.
+  await page.goto(`/transactions?search=Mortgage%20payment%20for%20purpose%20review&horizon=30`);
+  await page.getByText("Mortgage payment for purpose review", { exact: true }).first().click();
+  await page.getByLabel("Cash-flow purpose").selectOption("split");
+  await page.getByLabel("Portion 1 amount (AUD)").fill("60000");
+  await page.getByLabel("Portion 2 amount (AUD)").fill("10000");
+  await page.getByRole("button", { name: "Save cash-flow purpose" }).click();
+  await expect.poll(() => psql(`SELECT jsonb_array_length(cash_flow_parts) FROM transactions WHERE id='${ids.principal}';`).trim()).toBe("2");
+  await page.goto("/?horizon=30");
+  await assertMetric("Saving from income", "-A$1,000");
+  await assertMetric("Loan principal", "A$30,000");
+  await assertMetric("Explained cash flow", "A$3,000");
+  // A missing transfer explanation remains a difference, never becomes earned income.
+  psql(`INSERT INTO transactions(user_id,account_id,amount,functional_amount,currency,description,booked_at,category_id)
+    VALUES (${o},'${ids.own}',500,500,'AUD','Unmatched transfer',CURRENT_DATE-1,'${ids.transfer}');
+    UPDATE account_balances SET balance_in_account_currency=13500,balance_in_functional_currency=13500 WHERE account_id='${ids.own}' AND date::date=CURRENT_DATE-1;`);
+  await page.reload();
+  await assertMetric("Recorded cash balance change", "A$3,500");
+  await assertMetric("Unreconciled difference", "A$500");
+  await expect(summary().getByRole("status")).toContainText("not fully reconciled");
   expect(errors).toEqual([]);
   await partnerContext.close();
 });

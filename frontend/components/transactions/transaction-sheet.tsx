@@ -413,10 +413,10 @@ export function TransactionSheet({
 
           {!isBalancingTransfer && !transaction.internalTransferId && (
             <CashFlowPurpose
-              key={`${transaction.id}:${transaction.cashFlowKind}:${transaction.cashFlowAllocationAmount}`}
+              key={`${transaction.id}:${JSON.stringify(transaction.cashFlowParts)}`}
               transactionId={transaction.id} amount={transaction.amount} currency={transaction.currency || "EUR"}
-              kind={transaction.cashFlowKind} allocationAmount={transaction.cashFlowAllocationAmount}
-              onSaved={(cashFlowKind, cashFlowAllocationAmount) => onUpdateTransaction?.(transaction.id, { cashFlowKind, cashFlowAllocationAmount })}
+              parts={transaction.cashFlowParts}
+              onSaved={cashFlowParts => onUpdateTransaction?.(transaction.id, { cashFlowParts })}
             />
           )}
 

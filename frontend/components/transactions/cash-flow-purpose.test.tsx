@@ -6,24 +6,24 @@ vi.mock("@/lib/actions/transactions", () => ({ updateTransactionCashFlowPurpose:
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 import { CashFlowPurpose } from "./cash-flow-purpose";
 
-describe("transaction cash-flow purpose", () => {
-  it("persists an explicit principal portion without changing the transaction or category", async () => {
+describe("transaction cash-flow portions", () => {
+  it("persists a mixed repayment as complete independent portions", async () => {
     mocks.save.mockResolvedValue({ success: true });
     const onSaved = vi.fn();
     render(<CashFlowPurpose transactionId="payment" amount={-1000} currency="AUD" onSaved={onSaved} />);
-    fireEvent.change(screen.getByLabelText("Cash-flow purpose"), { target: { value: "loan_principal" } });
-    fireEvent.change(screen.getByLabelText("Allocation portion (AUD)"), { target: { value: "600" } });
+    fireEvent.change(screen.getByLabelText("Cash-flow purpose"), { target: { value: "split" } });
+    fireEvent.change(screen.getByLabelText("Portion 1 amount (AUD)"), { target: { value: "600" } });
+    fireEvent.change(screen.getByLabelText("Portion 2 amount (AUD)"), { target: { value: "400" } });
     fireEvent.click(screen.getByRole("button", { name: "Save cash-flow purpose" }));
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("payment", "loan_principal", 600));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledWith("loan_principal", "600.00"));
-    expect(mocks.refresh).toHaveBeenCalled();
+    const parts = [{ kind: "capital", detail: "loan_principal", amount: 600 }, { kind: "consumption", amount: 400 }];
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("payment", parts));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(parts));
   });
-
-  it("can restore the category default and clear a prior allocation portion", async () => {
+  it("can restore the category default", async () => {
     mocks.save.mockResolvedValue({ success: true });
-    render(<CashFlowPurpose transactionId="reset" amount={-1000} currency="AUD" kind="loan_principal" allocationAmount="600.00" onSaved={vi.fn()} />);
+    render(<CashFlowPurpose transactionId="reset" amount={-1000} currency="AUD" parts={[{kind:"capital",detail:"loan_principal",amount:1000}]} onSaved={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("Cash-flow purpose"), { target: { value: "automatic" } });
     fireEvent.click(screen.getByRole("button", { name: "Save cash-flow purpose" }));
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("reset", null, null));
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("reset", null));
   });
 });

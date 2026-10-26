@@ -140,7 +140,7 @@ describe("cash flow separates consumption, allocations and ownership transfers",
   });
 
   it("retains interest as spending when only part of a repayment is principal", () => {
-    const result = summarizeActivity([row(-1000, { categoryType: "expense", cashFlowKind: "loan_principal", allocationFraction: "0.6" })]);
+    const result = summarizeActivity([row(-1000, { categoryType: "expense", cashFlowParts: [{ kind: "capital", detail: "loan_principal", amount: 600 }, { kind: "consumption", amount: 400 }] })]);
     expect(result).toMatchObject({ expenses: 400, loanPrincipal: 600 });
     expect(result.dailyData[0].expenses).toBe(400);
   });
@@ -178,4 +178,12 @@ describe("cash flow separates consumption, allocations and ownership transfers",
     ]);
     expect(result).toMatchObject({ missingConversions: 1, transfersIn: 0, transfersOut: 0 });
   });
+});
+
+it("uses the same capital rule for arbitrary complete portions without assuming a remainder", () => {
+  const result = summarizeActivity([row(-1000, { cashFlowParts: [
+    { kind: "consumption", amount: 100 }, { kind: "capital", detail: "investment", amount: 200 },
+    { kind: "capital", detail: "loan_principal", amount: 300 }, { kind: "capital", detail: "other", amount: 400 },
+  ] })]);
+  expect(result).toMatchObject({ expenses: 100, investments: 200, loanPrincipal: 300, otherCapital: 400, income: 0 });
 });

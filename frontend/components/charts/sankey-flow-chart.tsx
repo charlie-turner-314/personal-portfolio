@@ -371,6 +371,7 @@ export function SankeyFlowChart({
         {subtitle && (
           <p className="text-xs text-muted-foreground">{subtitle}</p>
         )}
+        <p className="text-xs text-muted-foreground">Connections distribute totals proportionally; they do not trace deposits to payments.</p>
         {selectedNode && selectedTotal !== null && (
           <p className="text-xs text-muted-foreground mt-1">
             <span className="font-medium text-foreground">

@@ -79,3 +79,27 @@ existing named-member salary/filter journeys passed. TypeScript and targeted
 ESLint checks passed (the existing category editor effect/entity warnings remain).
 Both migration runs preserved existing core-table hashes. Visual inspection
 shortened the Sankey transfer labels so they fit within the chart margin.
+
+## Minimal-model refinement and release approval
+
+The user approved main promotion and bypassing GitHub Actions on 26 October 2026.
+Local validation and existing-data safeguards remain required.
+
+Transactions now store complete native-currency portions: income, consumption,
+or capital. Capital details (investment, principal, other) use one arithmetic
+rule. There is no assumed spending remainder. The earlier provisional override
+is migrated to complete portions while preserving its original fields.
+
+The dashboard calls derived transfer amounts ownership transfers, without
+inferring a gift, loan or contributor. Explained cash flow is compared with
+independent, exact opening/closing snapshots of active visible bank/cash accounts.
+Missing boundary balances show unavailable; missing conversions show incomplete;
+a nonzero difference stays visible as unreconciled cash change. It never becomes
+personal overspending. Changes in credit facilities, ownership or balance
+adjustments can legitimately require further explanation.
+
+Chromium covers full and mixed payments, matching independent cash snapshots,
+and a deliberately unmatched transfer that leaves a visible difference. Separate
+PostgreSQL cases verify ownership, permissions, cash-only scope and missing exact
+boundary balances. The Sankey states that its proportional links do not trace
+individual deposits into payments.

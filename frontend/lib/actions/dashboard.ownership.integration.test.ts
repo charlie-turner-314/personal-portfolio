@@ -35,6 +35,7 @@ INSERT INTO transactions VALUES
  ('private','private','owner','2026-10-01',99999,99999,'AUD','income',NULL,true,NULL);
 ALTER TABLE categories ADD COLUMN cash_flow_kind text;
 UPDATE categories SET cash_flow_kind='investment' WHERE id='invest';
+ALTER TABLE transactions ADD COLUMN cash_flow_parts jsonb;
 ALTER TABLE transactions ADD COLUMN cash_flow_kind text;
 ALTER TABLE transactions ADD COLUMN cash_flow_allocation_amount numeric;
 INSERT INTO transactions(id,account_id,user_id,booked_at,amount,functional_amount,currency,category_id,include_in_analytics,cash_flow_kind) VALUES
@@ -60,6 +61,7 @@ INSERT INTO transactions(id,account_id,user_id,booked_at,amount,functional_amoun
 INSERT INTO transaction_links VALUES
  ('capital-primary','mixed-primary','primary'),('ordinary-secondary','mixed-primary','expense'),
  ('ordinary-primary','mixed-secondary','primary'),('capital-secondary','mixed-secondary','expense');
+UPDATE transactions SET cash_flow_parts='[{"kind":"capital","detail":"loan_principal","amount":1200},{"kind":"consumption","amount":800}]'::jsonb WHERE id='fx-principal';
 
 `;
 vi.mock("@/lib/db", async () => {
@@ -69,7 +71,7 @@ vi.mock("@/lib/db", async () => {
       const value = params[Number(n) - 1];
       return value === null ? "NULL" : typeof value === "boolean" ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
     });
-    const wrapped = `SELECT COALESCE(json_agg(json_build_array(date, cash_flow_kind, allocation_fraction, transfer_group_id, transfer_amount, category_id, category_name, category_type, icon, color, amount)), '[]') FROM (${literal}) rows(date, cash_flow_kind, allocation_fraction, transfer_group_id, transfer_amount, category_id, category_name, category_type, icon, color, amount);`;
+    const wrapped = `SELECT COALESCE(json_agg(json_build_array(date, cash_flow_kind, cash_flow_parts, native_amount, transfer_group_id, transfer_amount, category_id, category_name, category_type, icon, color, amount)), '[]') FROM (${literal}) rows(date, cash_flow_kind, cash_flow_parts, native_amount, transfer_group_id, transfer_amount, category_id, category_name, category_type, icon, color, amount);`;
     const output = execFileSync("docker", ["exec", "-i", process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER!, "psql", "-U", "postgres", "-d", "postgres", "-qAt", "-v", "ON_ERROR_STOP=1"], { input: fixture + wrapped + "ROLLBACK;", encoding: "utf8" });
     return { rows: JSON.parse(output.trim()) };
   }) };
@@ -101,34 +103,34 @@ describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL
       const result = await getCashFlowSummary(new Date("2026-07-01"), new Date("2026-07-31T23:59:59Z"));
       expect(result).toMatchObject({
         savingsFromIncome: 4000, loanPrincipal: 35000, investments: 0,
-        transfersIn: 35000, transfersOut: 0, netReportedCashFlow: 4000,
+        transfersIn: 35000, transfersOut: 0, explainedCashFlow: 4000,
       });
       const whole = await getCashFlowSummary(new Date("2026-07-01"), new Date("2026-07-31T23:59:59Z"), undefined, "all");
-      expect(whole).toMatchObject({ loanPrincipal: 70000, transfersIn: 70000, netReportedCashFlow: 4000 });
+      expect(whole).toMatchObject({ loanPrincipal: 70000, transfersIn: 70000, explainedCashFlow: 4000 });
       const filtered = await getCashFlowSummary(new Date("2026-07-01"), new Date("2026-07-31T23:59:59Z"), ["shared"]);
-      expect(filtered).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersIn: 35000, netReportedCashFlow: 0 });
+      expect(filtered).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersIn: 35000, explainedCashFlow: 0 });
       // July 12 principal does not depend on whether the July 9 deposit is in the window.
       const paymentOnly = await getCashFlowSummary(new Date("2026-07-12"), new Date("2026-07-13"));
-      expect(paymentOnly).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersIn: 0, netReportedCashFlow: -35000 });
+      expect(paymentOnly).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersIn: 0, explainedCashFlow: -35000 });
     } finally { actor.id = "member"; actor.householdPersonId = "linked"; }
   }, 20_000);
   it("shows Jessica's contribution out of her share without counting it twice", async () => {
     const result = await getCashFlowSummary(new Date("2026-07-01"), new Date("2026-07-31T23:59:59Z"));
-    expect(result).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersOut: 35000, netReportedCashFlow: -70000 });
+    expect(result).toMatchObject({ savingsFromIncome: 0, loanPrincipal: 35000, transfersOut: 35000, explainedCashFlow: -70000 });
     const whole = await getCashFlowSummary(new Date("2026-07-01"), new Date("2026-07-31T23:59:59Z"), undefined, "all");
-    expect(whole).toMatchObject({ loanPrincipal: 70000, transfersIn: 0, transfersOut: 0, netReportedCashFlow: -70000 });
+    expect(whole).toMatchObject({ loanPrincipal: 70000, transfersIn: 0, transfersOut: 0, explainedCashFlow: -70000 });
   });
 
   it("applies the dated share and native allocation fraction before FX reporting", async () => {
     expect(await getCashFlowSummary(new Date("2026-08-15"), new Date("2026-08-15T23:59:59Z"))).toMatchObject({
-      loanPrincipal: 150, savingsFromIncome: -100, netReportedCashFlow: -250,
+      loanPrincipal: 150, savingsFromIncome: -100, explainedCashFlow: -250,
     });
   });
   it("does not double-count a linked expense reimbursement as a contribution", async () => {
     actor.id = "owner"; actor.householdPersonId = undefined;
     try {
       expect(await getCashFlowSummary(new Date("2026-08-16"), new Date("2026-08-16T23:59:59Z"))).toMatchObject({
-        savingsFromIncome: -85, transfersIn: 0, transfersOut: 0, netReportedCashFlow: -85,
+        savingsFromIncome: -85, transfersIn: 0, transfersOut: 0, explainedCashFlow: -85,
       });
     } finally { actor.id = "member"; actor.householdPersonId = "linked"; }
   });
@@ -137,7 +139,7 @@ describe.skipIf(!container)("member dashboard attribution on isolated PostgreSQL
     ["2026-08-17", -20, 100], ["2026-08-18", -100, 20],
   ])("reports each purpose once in mixed linked groups on %s", async (day, saving, investment) => {
     expect(await getCashFlowSummary(new Date(day), new Date(day + "T23:59:59Z"))).toMatchObject({
-      savingsFromIncome: saving, investments: investment, netReportedCashFlow: -120,
+      savingsFromIncome: saving, investments: investment, explainedCashFlow: -120,
     });
   });
 

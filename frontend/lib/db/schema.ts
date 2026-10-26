@@ -712,7 +712,8 @@ export const transactions = pgTable(
     categorizationInstructions: text("categorization_instructions"), // User instructions for AI categorization
     enrichmentData: jsonb("enrichment_data"), // Enriched merchant info, logos, etc.
     recurringTransactionId: uuid("recurring_transaction_id").references(() => recurringTransactions.id, { onDelete: "set null" }), // Link to recurring transaction label
-    cashFlowKind: varchar("cash_flow_kind", { length: 20 }), // null = category default; activity, investment, loan_principal
+    cashFlowParts: jsonb("cash_flow_parts").$type<import("@/lib/dashboard/cash-flow").CashFlowPortion[]>(),
+    cashFlowKind: varchar("cash_flow_kind", { length: 20 }), // legacy; null = category default; activity, investment, loan_principal
     cashFlowAllocationAmount: decimal("cash_flow_allocation_amount", { precision: 15, scale: 2 }), // native currency; null = full amount
     includeInAnalytics: boolean("include_in_analytics").default(true).notNull(), // Whether to include in analytics (charts, KPIs, etc.)
     csvImportId: uuid("csv_import_id").references(() => csvImports.id, { onDelete: "set null" }), // Source CSV import (null for manual/bank-synced transactions)
@@ -720,6 +721,7 @@ export const transactions = pgTable(
     updatedAt: timestamp("updated_at").defaultNow(),
   },
   (table) => [
+    check("transactions_cash_flow_parts_check", sql`${table.cashFlowParts} IS NULL OR (jsonb_typeof(${table.cashFlowParts})='array' AND jsonb_array_length(${table.cashFlowParts}) BETWEEN 1 AND 20)`),
     check("transactions_cash_flow_kind_check", sql`${table.cashFlowKind} IS NULL OR ${table.cashFlowKind} IN ('activity','investment','loan_principal')`),
     check("transactions_cash_flow_allocation_check", sql`${table.cashFlowAllocationAmount} IS NULL OR
       (${table.cashFlowKind} IS NOT NULL AND ${table.cashFlowKind} IN ('investment','loan_principal') AND

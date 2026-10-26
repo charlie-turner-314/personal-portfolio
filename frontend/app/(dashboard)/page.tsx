@@ -199,7 +199,7 @@ async function DashboardContent({
           </div>
         </div>
 
-        <CashFlowSummary data={data.cashFlow} currency={data.balance.currency} />
+        <CashFlowSummary data={data.cashFlow} currency={data.balance.currency} reconciliation={data.cashReconciliation} />
 
         {/* Row 3: Cash Flow Sankey */}
         <div className="grid min-w-0 grid-cols-1 gap-4">
