@@ -208,6 +208,9 @@ test("multi-account CSV confirms aliases, imports transfer pairs and detects rei
     await expect(page.getByText(expectedDescription, { exact: true }).first()).toBeVisible();
   }).toPass({ timeout: 60_000 });
   await page.goto("/transactions/import");
+  // The account selector appears after client hydration and its account fetch.
+  // Uploading into the SSR file input earlier can lose the React change event.
+  await expect(page.getByRole("combobox")).toBeVisible();
   await upload();
   await expect(page.getByRole("button", { name: "Import 0 Transactions", exact: true })).toBeDisabled();
 });
