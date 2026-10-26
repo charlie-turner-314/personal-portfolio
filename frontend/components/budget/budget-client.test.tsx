@@ -107,7 +107,7 @@ describe("BudgetClient", () => {
     }
     expect(mocks.saveBudgetLines).not.toHaveBeenCalled();
     expect(mocks.toastInfo).toHaveBeenCalledWith(
-      "Last month's spending added to your plan. Save when you're ready."
+      "Last month's included category movements added to your personal plan. Save when you're ready."
     );
   });
 
@@ -127,6 +127,6 @@ describe("BudgetClient", () => {
       expect(input).toHaveValue(150);
     }
     expect(mocks.saveBudgetLines).not.toHaveBeenCalled();
-    expect(mocks.toastInfo).toHaveBeenCalledWith("No spending found last month");
+    expect(mocks.toastInfo).toHaveBeenCalledWith("No included category movements found last month");
   });
 });

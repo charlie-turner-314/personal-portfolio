@@ -29,17 +29,19 @@ describe("cached data layer", () => {
     vi.clearAllMocks();
   });
 
-  it("dedupes getCachedUserCategories within a single request via React.cache", async () => {
+  it("projects shared definitions without private guidance and rechecks independent calls", async () => {
     const { getAuthenticatedSession } = await import("@/lib/household/financial-auth");
-    (getAuthenticatedSession as ReturnType<typeof vi.fn>).mockResolvedValue({
-      user: { id: "user-1" },
-    });
-
-    const { getCachedUserCategories } = await import("../cached");
-
-    const a = await getCachedUserCategories();
-    const b = await getCachedUserCategories();
-
-    expect(a).toBe(b);
+    vi.mocked(getAuthenticatedSession).mockResolvedValue({user:{id:"user-1"}} as Awaited<ReturnType<typeof getAuthenticatedSession>>);
+    const {db}=await import("@/lib/db");
+    vi.mocked(db.query.categories.findMany).mockResolvedValueOnce([{
+      id:"category",name:"Housing",userId:"other",categoryType:"expense",cashFlowKind:"loan_principal",
+      selectionHidden:false,categorizationInstructions:"PRIVATE INSTRUCTION",description:"PRIVATE DETAIL",parentId:"private-parent",
+    }] as never).mockResolvedValueOnce([]);
+    const {getCachedUserCategories}=await import("../cached");
+    const first=await getCachedUserCategories();
+    expect(first).toMatchObject([{id:"category",name:"Housing",cashFlowKind:"loan_principal",hideFromSelection:false,parentId:null,categorizationInstructions:null,description:null}]);
+    expect(JSON.stringify(first)).not.toContain("PRIVATE");
+    expect(await getCachedUserCategories()).toEqual([]);
+    expect(db.query.categories.findMany).toHaveBeenCalledTimes(2);
   });
 });

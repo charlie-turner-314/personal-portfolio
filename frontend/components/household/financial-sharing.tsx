@@ -29,6 +29,11 @@ export function FinancialSharing() {
         const response = await fetch("/api/household/sharing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, phase: "preview" }) });
         const review = await response.json();
         if (!response.ok) throw new Error(review.error || "Could not preview sharing");
+        const plan=review?.preview;
+        if(typeof review?.confirmation!=="string" || !review.confirmation || !plan || plan.action!=="share-account" || typeof plan.accountPolicy!=="string" ||
+          ![plan.accounts,plan.properties,plan.recipients,plan.revokedRecipients,plan.categoryMappings,plan.categoryConflicts,plan.effects].every(Array.isArray)) {
+          throw new Error("Could not load a complete access preview. No sharing change was submitted.");
+        }
         setPending({ ...review, body });
       } catch (error) { setError(error instanceof Error ? error.message : "Could not preview sharing"); }
       finally { setBusy(false); }
@@ -63,7 +68,7 @@ export function FinancialSharing() {
     <p className="text-sm text-muted-foreground">Your accounts, properties, net worth and bank connections are private by default. Choose who can view and edit each account and property. Sharing never gives access to your bank connection or token.</p>
     <p className="text-sm text-muted-foreground">Ownership percentages affect totals. Sharing separately controls who can see and edit each account or property.</p>
     {pending && <TransitionReview review={pending} busy={busy} memberName={id => data?.members.find(member => member.id === id)?.name ?? "Household member"} onConfirm={() => void save(pending.body, pending.confirmation)} onCancel={() => setPending(null)} />}
-    {busy && <p role="status" className="text-sm text-muted-foreground">Saving sharing settings…</p>}
+    {busy && <p role="status" className="text-sm text-muted-foreground">{!pending && !draft ? "Preparing access review…" : "Saving sharing settings…"}</p>}
     {error && <p role="alert" className="text-destructive">{error}</p>}
     {!data && !error && <p>Loading sharing settings…</p>}
     {data && !data.members.length && <p className="text-sm">Invite someone to your household to share an account.</p>}
