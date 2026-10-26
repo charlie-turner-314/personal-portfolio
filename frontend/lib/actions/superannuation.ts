@@ -1,6 +1,8 @@
 "use server";
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { convertReportingAmount, reportingCurrencyForUser } from "@/lib/household/reporting-currency";
+
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath, updateTag } from "next/cache";
 import { db } from "@/lib/db";
 import {
@@ -165,16 +167,20 @@ export async function addSuperBalanceSnapshot(
     return { success: false, error: "Enter a valid date and non-negative balance" };
   }
   const balance = input.balance.toFixed(2);
+  const currency = reportingCurrencyForUser(userId);
+  const functional = convertReportingAmount(sql`${balance}::numeric`,sql`${record.account.currency}`,currency,sql`${input.date}::date`);
+  const provenance={balanceSource:"manual",accountCurrency:record.account.currency,functionalCurrency:currency};
   await db.insert(accountBalances).values({
+    ...provenance,
     accountId,
     date: new Date(`${input.date}T12:00:00.000Z`),
     balanceInAccountCurrency: balance,
-    balanceInFunctionalCurrency: balance,
+    balanceInFunctionalCurrency: functional,
   }).onConflictDoUpdate({
     target: [accountBalances.accountId, accountBalances.date],
-    set: { balanceInAccountCurrency: balance, balanceInFunctionalCurrency: balance, updatedAt: new Date() },
+    set: { ...provenance, balanceInAccountCurrency: balance, balanceInFunctionalCurrency: functional, updatedAt: new Date() },
   });
-  await db.update(accounts).set({ functionalBalance: balance, updatedAt: new Date() }).where(eq(accounts.id, accountId));
+  await db.update(accounts).set({ functionalBalance: functional, updatedAt: new Date() }).where(and(eq(accounts.id, accountId),sql`NOT EXISTS (SELECT 1 FROM account_balances newer WHERE newer.account_id=${accountId} AND newer.date::date>${input.date}::date)`));
   revalidateSuperPaths(userId, accountId);
   return { success: true };
 }

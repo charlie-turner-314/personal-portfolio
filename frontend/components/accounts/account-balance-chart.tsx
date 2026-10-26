@@ -105,6 +105,7 @@ export function AccountBalanceChart({
   const chartRef = useRef<HTMLDivElement>(null);
   const [axis, setAxis] = useState(0);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [valueUnavailable, setValueUnavailable] = useState(false);
   const [currentDate, setCurrentDate] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<Horizon>("90D");
   const skipPersistRef = useRef(true);
@@ -162,7 +163,7 @@ export function AccountBalanceChart({
     }
 
     // Create a map of existing data by date string
-    const dataMap = new Map<string, number>();
+    const dataMap = new Map<string, number | null>();
     for (const point of data) {
       const dateKey = format(parseISO(point.date), "yyyy-MM-dd");
       dataMap.set(dateKey, point.balance);
@@ -186,7 +187,7 @@ export function AccountBalanceChart({
       }
 
       // For gaps in data after earliest date, find the most recent balance
-      let lastBalance = 0;
+      let lastBalance: number | null = null;
       for (let i = allDates.indexOf(date) - 1; i >= 0; i--) {
         const prevKey = format(allDates[i], "yyyy-MM-dd");
         const prevBalance = dataMap.get(prevKey);
@@ -244,7 +245,8 @@ export function AccountBalanceChart({
     if (chartRef.current && chartData.length > 0) {
       const width = chartRef.current.getBoundingClientRect().width;
       springX.jump(width);
-      springY.jump(chartData[chartData.length - 1].balance);
+      setValueUnavailable(chartData[chartData.length - 1].balance === null);
+      springY.jump(chartData[chartData.length - 1].balance ?? 0);
       setCurrentDate(chartData[chartData.length - 1].date);
       setIsInitialized(true);
     }
@@ -334,7 +336,7 @@ export function AccountBalanceChart({
                   className="text-white text-xs font-semibold px-2 py-1 font-mono min-w-16 text-right"
                   style={{ backgroundColor: "#047857" }}
                 >
-                  {formatCurrencyValue(springY.get())}
+                  {valueUnavailable ? "Unavailable" : formatCurrencyValue(springY.get())}
                 </div>
                 {currentDate && (
                   <div className="text-[10px] text-muted-foreground mt-0.5">
@@ -358,15 +360,17 @@ export function AccountBalanceChart({
                 const dataValue = state.activePayload?.[0]?.value;
                 const dataDate = state.activePayload?.[0]?.payload?.date;
                 if (x && dataValue !== undefined) {
+                  setValueUnavailable(dataValue === null);
                   springX.set(x);
-                  springY.set(dataValue as number);
+                  if (typeof dataValue === "number") springY.set(dataValue);
                   if (dataDate) setCurrentDate(dataDate);
                 }
               }}
               onMouseLeave={() => {
                 if (chartRef.current && chartData.length > 0) {
                   springX.set(chartRef.current.getBoundingClientRect().width);
-                  springY.jump(chartData[chartData.length - 1].balance);
+                  setValueUnavailable(chartData[chartData.length - 1].balance === null);
+                  springY.jump(chartData[chartData.length - 1].balance ?? 0);
                   setCurrentDate(chartData[chartData.length - 1].date);
                 }
               }}

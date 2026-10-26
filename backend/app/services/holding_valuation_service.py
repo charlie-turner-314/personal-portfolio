@@ -86,11 +86,17 @@ class HoldingValuationService:
             row = AccountBalance(
                 account_id=account.id,
                 date=on,
+                balance_source="valuation",
+                account_currency=account.currency,
+                functional_currency=(self.db.get(User, account.user_id).functional_currency or account.currency or "EUR"),
                 balance_in_account_currency=total_account_ccy,
                 balance_in_functional_currency=total_user,
             )
             self.db.add(row)
-        else:
+        elif row.balance_source in ("valuation", "calculated"):
+            row.balance_source = "valuation"
+            row.account_currency = account.currency
+            row.functional_currency = self.db.get(User, account.user_id).functional_currency or account.currency or "EUR"
             row.balance_in_account_currency = total_account_ccy
             row.balance_in_functional_currency = total_user
         account.balance_available = total_account_ccy

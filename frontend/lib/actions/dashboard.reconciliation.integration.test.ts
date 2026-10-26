@@ -22,6 +22,13 @@ INSERT INTO account_ownership_allocations VALUES ('shared','self','1900-01-01',0
 INSERT INTO account_balances VALUES ('shared','2026-09-30',1000),('shared','2026-10-30',1400),('own','2026-09-30',500),('own','2026-10-30',700),('missing','2026-09-29',900),('missing','2026-10-30',1000),('private','2026-09-30',100000),('private','2026-10-30',200000);
 ALTER TABLE account_balances ADD COLUMN balance_in_account_currency numeric;
 UPDATE account_balances SET balance_in_account_currency=balance_in_functional_currency;
+ALTER TABLE account_balances ADD COLUMN id text DEFAULT 'snapshot';
+ALTER TABLE account_balances ADD COLUMN account_currency text DEFAULT 'AUD';
+ALTER TABLE account_balances ADD COLUMN functional_currency text DEFAULT 'AUD';
+ALTER TABLE account_balances ADD COLUMN balance_source text DEFAULT 'statement';
+INSERT INTO accounts(id,user_id,account_type,is_active,name,currency) VALUES('estimated','owner','cash',true,'Estimated','AUD');
+INSERT INTO account_balances(account_id,date,balance_in_account_currency,balance_in_functional_currency,balance_source) VALUES
+ ('estimated','2026-09-30',100,100,'calculated'),('estimated','2026-10-30',200,200,'calculated');
 `;
 vi.mock("@/lib/db", async () => {
   const { drizzle } = await import("drizzle-orm/pg-proxy");
@@ -48,8 +55,11 @@ describe.skipIf(!container)("recorded cash boundary balances",()=>{
     expect(await getRecordedCashChange(from,to,["shared","own","loan"])).toEqual({recordedChange:400,missingAccounts:0});
     expect(await getRecordedCashChange(from,to,["shared"],"all")).toEqual({recordedChange:400,missingAccounts:0});
   },20_000);
+  it("requires independently supplied balances rather than transaction-derived estimates",async()=>{
+    expect(await getRecordedCashChange(from,to,["estimated"])).toEqual({recordedChange:null,missingAccounts:1});
+  },20_000);
   it("does not substitute an older snapshot or zero for a missing opening balance",async()=>{
-    expect(await getRecordedCashChange(from,to)).toEqual({recordedChange:null,missingAccounts:1});
+    expect(await getRecordedCashChange(from,to)).toEqual({recordedChange:null,missingAccounts:2});
     expect(await getRecordedCashChange(from,new Date("2026-10-29"),["own"])).toEqual({recordedChange:null,missingAccounts:1});
   },20_000);
 });

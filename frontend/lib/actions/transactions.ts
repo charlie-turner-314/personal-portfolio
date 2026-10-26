@@ -1,14 +1,15 @@
 "use server";
 
+import { nativeBalanceEstimate } from "@/lib/balances/estimate";
 import { requireReportingCoverage } from "@/lib/reporting/coverage";
 import { transactionReportingValue } from "@/lib/reporting/transaction-value";
-import { reportingCurrencyForUser } from "@/lib/household/reporting-currency";
+import { convertReportingAmount, reportingCurrencyForUser } from "@/lib/household/reporting-currency";
 import { categoryAccess } from "@/lib/household/category-access";
 import { validateCashFlowPortions, type CashFlowPortion } from "@/lib/dashboard/cash-flow";
 import { reportingCategoryFilter } from "@/lib/categories/reporting-sql";
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { revalidatePath } from "next/cache";
-import { eq, and, desc, inArray, notInArray, sql, gte, lte, gt, asc, ne, or, ilike, isNull } from "drizzle-orm";
+import { eq, and, desc, inArray, notInArray, sql, gte, lte, asc, ne, or, ilike, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { transactions, accounts, categories, accountBalances, properties, recurringTransactions } from "@/lib/db/schema";
 import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
@@ -33,171 +34,34 @@ export interface CreateTransactionInput {
   merchant?: string;
 }
 
-/**
- * Recalculates account_balances records from a given date.
- * Stops at the earlier of:
- * - The next balancing transfer date (exclusive - day before)
- * - The most recent date in account_balances table (if no balancing transfers ahead)
- *
- * @param accountId - The account to recalculate balances for
- * @param fromDate - The starting date for recalculation
- * @param startingBalance - The account's starting balance
- * @param excludeTransactionId - Optional transaction ID to exclude (when deleting)
- */
+/** Refresh derived daily estimates after an edit. Recorded observations remain
+ * intact and reset subsequent estimates; source names never define anchors. */
 async function recalculateAccountBalancesFromDate(
   accountId: string,
   fromDate: Date,
   startingBalance: number,
   excludeTransactionId?: string
 ): Promise<void> {
-  // Normalize fromDate to start of day
-  const startDate = new Date(fromDate);
-  startDate.setHours(0, 0, 0, 0);
-
-  // Get the "Balancing Transfer" category ID for this account's user
-  const account = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
-  });
-
-  if (!account) {
-    console.error("Account not found for balance recalculation");
-    return;
-  }
-
-  const balancingCategory = await db.query.categories.findFirst({
-    where: and(
-      eq(categories.userId, account.userId),
-      eq(categories.name, "Balancing Transfer")
-    ),
-  });
-
-  // Find the next balancing transfer AFTER fromDate
-  // Use the original fromDate (exact timestamp), not startDate (beginning of day)
-  // This ensures we don't find the transaction we just created as the "next" one
-  let nextBalancingTransferDate: Date | null = null;
-  if (balancingCategory) {
-    const conditions = [
-      eq(transactions.accountId, accountId),
-      eq(transactions.categoryId, balancingCategory.id),
-      gt(transactions.bookedAt, fromDate)
-    ];
-
-    // Exclude the transaction being deleted if provided
-    if (excludeTransactionId) {
-      conditions.push(ne(transactions.id, excludeTransactionId));
-    }
-
-    const nextBalancingTransfer = await db.query.transactions.findFirst({
-      where: and(...conditions),
-      orderBy: [asc(transactions.bookedAt)],
-    });
-
-    if (nextBalancingTransfer) {
-      nextBalancingTransferDate = new Date(nextBalancingTransfer.bookedAt);
-    }
-  }
-
-  // Find the most recent balance date in account_balances
-  const mostRecentBalance = await db.query.accountBalances.findFirst({
-    where: eq(accountBalances.accountId, accountId),
-    orderBy: [desc(accountBalances.date)],
-  });
-
-  // Determine end date for recalculation
-  let endDate: Date;
+  const account = await db.query.accounts.findFirst({where:eq(accounts.id,accountId)});
+  if (!account) return;
+  const currentDate = new Date(fromDate);
+  currentDate.setUTCHours(0,0,0,0);
   const today = new Date();
-  today.setHours(23, 59, 59, 999);
-
-  if (nextBalancingTransferDate) {
-    // Stop the day BEFORE the next balancing transfer
-    endDate = new Date(nextBalancingTransferDate);
-    endDate.setDate(endDate.getDate() - 1);
-    endDate.setHours(23, 59, 59, 999);
-  } else if (mostRecentBalance) {
-    // No balancing transfer ahead
-    const mostRecentDate = new Date(mostRecentBalance.date);
-    mostRecentDate.setHours(23, 59, 59, 999);
-
-    // Use the later of: most recent balance date OR today
-    // This handles the case where we're adding a balancing transfer after existing records
-    if (mostRecentDate >= startDate) {
-      endDate = mostRecentDate;
-    } else {
-      // Most recent balance is before our start date, recalculate to today
-      endDate = today;
-    }
-  } else {
-    // Fallback to today (initial setup case)
-    endDate = today;
-  }
-
-  // Ensure we don't go past today
-  if (endDate > today) {
-    endDate = today;
-  }
-
-  // Iterate through each day from fromDate to endDate
-  const currentDate = new Date(startDate);
-
-  while (currentDate <= endDate) {
-    // Calculate balance up to end of this day
-    const endOfDay = new Date(currentDate);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    // Build conditions for balance calculation, excluding the deleted transaction
-    const balanceConditions = [
-      eq(transactions.accountId, accountId),
-      lte(transactions.bookedAt, endOfDay)
-    ];
-
-    if (excludeTransactionId) {
-      balanceConditions.push(ne(transactions.id, excludeTransactionId));
-    }
-
-    const balanceResult = await db
-      .select({
-        total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(and(...balanceConditions));
-
-    const transactionSum = parseFloat(balanceResult[0]?.total || "0");
-    const balanceOnDate = startingBalance + transactionSum;
-
-    // Normalize date to midnight for storage (matching backend behavior)
-    const dateForStorage = new Date(currentDate);
-    dateForStorage.setHours(0, 0, 0, 0);
-
-    // Check if a record exists for this date
-    const existingRecord = await db.query.accountBalances.findFirst({
-      where: and(
-        eq(accountBalances.accountId, accountId),
-        eq(accountBalances.date, dateForStorage)
-      ),
-    });
-
-    if (existingRecord) {
-      // Update existing record
-      await db
-        .update(accountBalances)
-        .set({
-          balanceInAccountCurrency: balanceOnDate.toFixed(2),
-          balanceInFunctionalCurrency: balanceOnDate.toFixed(2),
-          updatedAt: new Date(),
-        })
-        .where(eq(accountBalances.id, existingRecord.id));
-    } else {
-      // Insert new record
-      await db.insert(accountBalances).values({
-        accountId,
-        date: dateForStorage,
-        balanceInAccountCurrency: balanceOnDate.toFixed(2),
-        balanceInFunctionalCurrency: balanceOnDate.toFixed(2),
-      });
-    }
-
-    // Move to next day
-    currentDate.setDate(currentDate.getDate() + 1);
+  today.setUTCHours(0,0,0,0);
+  const functionalCurrency = reportingCurrencyForUser(account.userId);
+  while (currentDate <= today) {
+    const day=currentDate.toISOString().slice(0,10);
+    // A recorded end-of-day value resets the estimate. Neither unknown legacy
+    // rows nor supplied observations are overwritten by recalculation.
+    // COUNT only real activity rows: an empty lateral join is not a missing FX.
+    const correctedNative=nativeBalanceEstimate(accountId,account.currency,startingBalance,day,excludeTransactionId);
+    const values={balanceInAccountCurrency:correctedNative,
+      balanceInFunctionalCurrency:convertReportingAmount(correctedNative,sql`${account.currency}`,functionalCurrency,sql`${day}::date`),
+      balanceSource:"calculated",accountCurrency:account.currency,functionalCurrency};
+    await db.insert(accountBalances).values({accountId,date:new Date(currentDate),...values})
+      .onConflictDoUpdate({target:[accountBalances.accountId,accountBalances.date],set:{...values,updatedAt:new Date()},
+        setWhere:eq(accountBalances.balanceSource,"calculated")});
+    currentDate.setUTCDate(currentDate.getUTCDate()+1);
   }
 }
 

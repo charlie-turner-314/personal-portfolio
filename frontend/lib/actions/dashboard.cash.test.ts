@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.session.mockResolvedValue({ user: { id: "current-user" } });
   mocks.execute.mockImplementation(async (query: string) => ({
-    rows: query.includes('order by "accounts"."name"') ? [["selected-account","Selected",null,"checking","AUD",true]] : query.includes('"functional_currency"') ? [["AUD"]] : [["3250"]],
+    rows: query.includes('order by "accounts"."name"') ? [["selected-account","Selected",null,"checking","AUD",true]] : !query.includes("SUM") && query.includes('"functional_currency"') ? [["AUD"]] : [["3250"]],
   }));
 });
 
@@ -115,6 +115,10 @@ describe.runIf(process.env.CASH_TEST_POSTGRES_CONTAINER)("cash SQL on PostgreSQL
       ALTER TABLE accounts ADD COLUMN currency text DEFAULT 'AUD';
       ALTER TABLE account_balances ADD COLUMN balance_in_account_currency numeric;
       UPDATE account_balances SET balance_in_account_currency=balance_in_functional_currency;
+ALTER TABLE account_balances ADD COLUMN id text DEFAULT 'snapshot';
+ALTER TABLE account_balances ADD COLUMN account_currency text DEFAULT 'AUD';
+ALTER TABLE account_balances ADD COLUMN functional_currency text DEFAULT 'AUD';
+ALTER TABLE account_balances ADD COLUMN balance_source text DEFAULT 'statement';
       CREATE TEMP TABLE users(id text,functional_currency text);
       INSERT INTO users VALUES ('current-user','AUD'),('other-user','AUD');
       INSERT INTO people(id,user_id,kind) VALUES ('person-half', 'current-user', 'self');

@@ -491,12 +491,14 @@ def test_independent_cash_reconciliation_needs_exact_boundaries(model):
     m.db.add_all(
         [
             AccountBalance(
+                balance_source="statement", account_currency="AUD", functional_currency="AUD",
                 account_id=m.joint.id,
                 date=datetime(2026, 6, 30),
                 balance_in_account_currency=D(1000),
                 balance_in_functional_currency=D(1000),
             ),
             AccountBalance(
+                balance_source="statement", account_currency="AUD", functional_currency="AUD",
                 account_id=m.joint.id,
                 date=datetime(2026, 7, 31),
                 balance_in_account_currency=D(1800),

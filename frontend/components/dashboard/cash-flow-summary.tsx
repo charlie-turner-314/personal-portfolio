@@ -46,7 +46,7 @@ export function CashFlowSummary({ data, currency, reconciliation }: { data: Cash
         {reconciliation?.status === "matched" ? "Recorded cash balances agree with explained flows." :
           reconciliation?.status === "difference" ? "Cash is not fully reconciled. The difference may include unmatched transfers, balance adjustments, credit facilities or ownership changes; it is not a measure of personal overspending." :
           reconciliation?.status === "incomplete" ? "Cash reconciliation is incomplete while currency conversions are missing." :
-          "Cash balance change is unavailable: exact opening and closing balances are needed for every selected active bank/cash account."}
+          "Cash balance change is unavailable: independent opening and closing bank, statement or manual balances with known currencies are needed for every selected active bank/cash account."}
       </p>
       <p className="text-xs text-muted-foreground">
         Saving from income is income minus everyday expenses, including loan interest.
@@ -56,7 +56,7 @@ export function CashFlowSummary({ data, currency, reconciliation }: { data: Cash
       <p className="text-xs text-muted-foreground">
         Ownership redistribution uses balanced, visible linked legs and their dated shares. A missing, private, unselected or out-of-period counterpart is a boundary movement; it establishes no gift, loan or funding relationship.
         Explained cash flow is saving minus capital allocations plus net boundary and ownership movements.
-        Recorded cash change uses independent daily balances; a difference stays visible rather than being called a funding gap.
+        Recorded cash change excludes calculated estimates and unverified legacy balances; a difference stays visible rather than being called a funding gap.
       </p>
     </CardContent>
   </Card>;

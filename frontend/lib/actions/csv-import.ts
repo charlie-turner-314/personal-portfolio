@@ -1,5 +1,7 @@
 "use server";
 
+import { convertReportingAmount, reportingCurrencyForUser } from "@/lib/household/reporting-currency";
+
 import { accountAccess } from "@/lib/household/account-access";
 import { createHash } from "node:crypto";
 import { discoverAccountAliases, routeAccountRow, type AccountRouting } from "@/lib/import/account-routing";
@@ -1886,7 +1888,10 @@ export async function importSuperStatement(
             accountId: account.id,
             date: new Date(`${date}T12:00:00.000Z`),
             balanceInAccountCurrency: balance.toFixed(2),
-            balanceInFunctionalCurrency: balance.toFixed(2),
+            balanceSource: "statement",
+            accountCurrency: account.currency,
+            functionalCurrency: reportingCurrencyForUser(userId),
+            balanceInFunctionalCurrency: convertReportingAmount(sql`${balance.toFixed(2)}::numeric`,sql`${account.currency}`,reportingCurrencyForUser(userId),sql`${date}::date`),
           }).onConflictDoNothing().returning({ id: accountBalances.id });
           if (inserted.length > 0) {
             balanceSnapshotsImported += 1;

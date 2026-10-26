@@ -33,10 +33,8 @@ export function transactionAmountInReportingCurrency(alias: string, actorUserId:
 export function snapshotBalanceInReportingCurrency(balanceAlias:string,accountAlias:string,actor:string):SQL<string|null> {
   const field=(alias:string,name:string)=>sql`${sql.identifier(alias)}.${sql.identifier(name)}`;
   const target=reportingCurrencyForUser(actor);
-  const source=reportingCurrencyForUser(field(accountAlias,"user_id"));
-  const native=convertReportingAmount(field(balanceAlias,"balance_in_account_currency"),field(accountAlias,"currency"),target,field(balanceAlias,"date"));
-  const functional=convertReportingAmount(field(balanceAlias,"balance_in_functional_currency"),source,target,field(balanceAlias,"date"));
-  return sql<string|null>`CASE WHEN ${field(accountAlias,"currency")}=${target} THEN ${field(balanceAlias,"balance_in_account_currency")}
-    WHEN ${source}=${target} THEN ${field(balanceAlias,"balance_in_functional_currency")}
-    ELSE coalesce(${native},${functional}) END`;
+  const nativeSource=sql`coalesce(${field(balanceAlias,"account_currency")},${field(accountAlias,"currency")})`;
+  const native=convertReportingAmount(field(balanceAlias,"balance_in_account_currency"),nativeSource,target,field(balanceAlias,"date"));
+  const functional=convertReportingAmount(field(balanceAlias,"balance_in_functional_currency"),field(balanceAlias,"functional_currency"),target,field(balanceAlias,"date"));
+  return sql<string|null>`coalesce(${native},${functional})`;
 }

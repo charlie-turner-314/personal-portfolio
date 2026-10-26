@@ -1138,6 +1138,9 @@ class DemoSeedService:
                     total_user += value_user
                     total_acct += value_acct
                 self.db.add(AccountBalance(
+                    balance_source="calculated",
+                    account_currency=account.currency,
+                    functional_currency="EUR",
                     account_id=account.id,
                     date=day,
                     balance_in_account_currency=total_acct,
@@ -1218,6 +1221,9 @@ class DemoSeedService:
                 total_user += value_user
                 total_acct += value_acct
             self.db.add(AccountBalance(
+                balance_source="calculated",
+                account_currency=account.currency,
+                functional_currency="EUR",
                 account_id=account.id,
                 date=day,
                 balance_in_account_currency=total_acct,

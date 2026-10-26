@@ -1,8 +1,10 @@
 "use server";
 
+import { nativeBalanceEstimate } from "@/lib/balances/estimate";
+import { convertReportingAmount } from "@/lib/household/reporting-currency";
 import { accountAccess } from "@/lib/household/account-access";
 import { revalidatePath, updateTag } from "next/cache";
-import { eq, and, lte, gte, lt, desc, sql, inArray, max } from "drizzle-orm";
+import { eq, and, gte, desc, sql, inArray, max } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { accounts, accountBalances, transactions, recurringTransactions, subscriptionSuggestions, superAccounts, csvImports, householdAccountShares, type NewAccount } from "@/lib/db/schema";
 import { requireAuth, getAuthenticatedSession } from "@/lib/household/financial-auth";
@@ -498,7 +500,7 @@ export async function getAccountById(accountId: string) {
 
 export interface BalanceHistoryPoint {
   date: string;
-  balance: number;
+  balance: number | null;
 }
 
 export async function getAccountBalanceHistory(
@@ -542,149 +544,31 @@ export async function getAccountBalanceHistory(
     }
   }
 
-  // Try to get balance history from accountBalances table
-  const balanceHistory = await db.query.accountBalances.findMany({
-    where: startDate
-      ? and(
-          eq(accountBalances.accountId, accountId),
-          gte(accountBalances.date, startDate)
-        )
-      : eq(accountBalances.accountId, accountId),
-    orderBy: [desc(accountBalances.date)],
-  });
-
-  if (balanceHistory.length > 0) {
-    // Reverse to get chronological order (oldest first)
-    return balanceHistory.reverse().map((b) => ({
-      date: b.date.toISOString().split("T")[0],
-      balance: parseFloat(b.balanceInAccountCurrency),
-    }));
-  }
-
-  // Fallback: Calculate running balance from transactions
-  const startingBalance = parseFloat(account.startingBalance || "0");
-  const effectiveStartDate = startDate || new Date();
-  effectiveStartDate.setHours(0, 0, 0, 0);
-  const txResults = await db
-    .select({
-      date: sql<string>`DATE(${transactions.bookedAt})`,
-      dailySum: sql<string>`SUM(${transactions.amount})`,
-    })
-    .from(transactions)
-    .where(
-      and(
-        eq(transactions.accountId, accountId),
-        gte(transactions.bookedAt, effectiveStartDate)
-      )
-    )
-    .groupBy(sql`DATE(${transactions.bookedAt})`)
-    .orderBy(sql`DATE(${transactions.bookedAt})`);
-
-  // Build running balance for each day
-  const result: BalanceHistoryPoint[] = [];
-  let runningBalance = startingBalance;
-
-  // Get sum of all transactions before start date
-  const priorSum = await db
-    .select({
-      total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-    })
-    .from(transactions)
-    .where(
-      and(
-        eq(transactions.accountId, accountId),
-        lt(transactions.bookedAt, effectiveStartDate)
-      )
-    );
-
-  runningBalance += parseFloat(priorSum[0]?.total || "0");
-
-  // Create a map of date -> daily sum
-  const dailySums = new Map<string, number>();
-  for (const tx of txResults) {
-    dailySums.set(tx.date, parseFloat(tx.dailySum));
-  }
-
-  // Fill in all dates from startDate to today
-  const currentDate = new Date(effectiveStartDate);
-  const today = new Date();
-  today.setHours(23, 59, 59, 999);
-
-  while (currentDate <= today) {
-    const dateStr = currentDate.toISOString().split("T")[0];
-    const dailyChange = dailySums.get(dateStr) || 0;
-    runningBalance += dailyChange;
-    result.push({
-      date: dateStr,
-      balance: runningBalance,
-    });
-    currentDate.setDate(currentDate.getDate() + 1);
-  }
-
-  return result;
+  const balanceHistory = await db.select({
+    date: accountBalances.date,
+    balance: convertReportingAmount(sql`${accountBalances.balanceInAccountCurrency}`,
+      sql`coalesce(${accountBalances.accountCurrency},${account.currency})`,sql`${account.currency}`,accountBalances.date),
+  }).from(accountBalances).where(and(eq(accountBalances.accountId,accountId),
+    startDate ? gte(accountBalances.date,startDate) : undefined)).orderBy(accountBalances.date);
+  if(balanceHistory.length) return balanceHistory.map(row=>({
+    date:row.date.toISOString().slice(0,10),balance:row.balance===null?null:Number(row.balance),
+  }));
+  const from=startDate??new Date(account.createdAt??new Date());
+  const rows=await db.select({
+    date:sql<string>`to_char(balance_days.day,'YYYY-MM-DD')`,
+    balance:nativeBalanceEstimate(accountId,account.currency,account.startingBalance??"0",sql`balance_days.day`),
+  }).from(sql`generate_series(${from.toISOString()}::date,CURRENT_DATE,interval '1 day') AS balance_days(day)`);
+  return rows.map(row=>({date:row.date,balance:row.balance===null?null:Number(row.balance)}));
 }
 
-export async function getAccountBalanceOnDate(
-  accountId: string,
-  date: Date
-): Promise<{ balance: number; found: boolean }> {
-  const userId = await requireAuth();
-
-  if (!userId) {
-    return { balance: 0, found: false };
-  }
-
-  // Verify the account belongs to the user
-  const account = await db.query.accounts.findFirst({
-    where: and(eq(accounts.id, accountId), accountAccess(accounts.id, userId)),
-  });
-
-  if (!account) {
-    return { balance: 0, found: false };
-  }
-
-  // First try to get balance from account_balances table
-  const balanceRecord = await db.query.accountBalances.findFirst({
-    where: and(
-      eq(accountBalances.accountId, accountId),
-      lte(accountBalances.date, date)
-    ),
-    orderBy: [desc(accountBalances.date)],
-  });
-
-  if (balanceRecord) {
-    return {
-      balance: parseFloat(balanceRecord.balanceInAccountCurrency),
-      found: true,
-    };
-  }
-
-  // No pre-computed balance found, calculate from transactions
-  // Sum all transactions up to and including the selected date
-  const startingBalance = parseFloat(account.startingBalance || "0");
-
-  // Set end of day for the date comparison to include all transactions on that day
-  const endOfDay = new Date(date);
-  endOfDay.setHours(23, 59, 59, 999);
-
-  const result = await db
-    .select({
-      total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-    })
-    .from(transactions)
-    .where(
-      and(
-        eq(transactions.accountId, accountId),
-        lte(transactions.bookedAt, endOfDay)
-      )
-    );
-
-  const transactionSum = parseFloat(result[0]?.total || "0");
-
-  return {
-    balance: startingBalance + transactionSum,
-    found: true,
-  };
+export async function getAccountBalanceOnDate(accountId:string,date:Date):Promise<{balance:number|null;found:boolean}> {
+  const userId=await requireAuth();
+  if(!userId) return {balance:null,found:false};
+  const account=await db.query.accounts.findFirst({where:and(eq(accounts.id,accountId),accountAccess(accounts.id,userId))});
+  if(!account) return {balance:null,found:false};
+  const [row]=await db.select({balance:nativeBalanceEstimate(accountId,account.currency,account.startingBalance??"0",date.toISOString().slice(0,10))}).from(sql`(SELECT 1) seed`);
+  const balance=row?.balance==null?null:Number(row.balance);
+  return {balance,found:balance!==null};
 }
 
 export async function recalculateAccountTimeseries(

@@ -733,8 +733,11 @@ class AccountBalance(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(DateTime, nullable=False, index=True)  # Date of the balance snapshot
-    balance_in_account_currency = Column(Numeric(15, 2), nullable=False)  # Balance in account's currency
-    balance_in_functional_currency = Column(Numeric(15, 2), nullable=False)  # Balance converted to functional currency
+    balance_source = Column(String, nullable=False, default="legacy", server_default="legacy")
+    account_currency = Column(String(3), nullable=True)
+    functional_currency = Column(String(3), nullable=True)
+    balance_in_account_currency = Column(Numeric(15, 2), nullable=True)  # Balance in account's currency
+    balance_in_functional_currency = Column(Numeric(15, 2), nullable=True)  # Balance converted to functional currency
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

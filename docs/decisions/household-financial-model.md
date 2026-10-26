@@ -240,3 +240,26 @@ transactions. Existing daily-balance writers include such calculations. Additive
 observation provenance and writer auditing are required before final delivery;
 unknown legacy observations must fail closed for reconciliation, without losing
 or changing their recorded numeric values.
+
+## Balance provenance implementation decision (before schema change)
+
+Daily balance caches contain both supplied observations and transaction-derived
+estimates. Add explicit balance_source and currency-unit metadata to those rows.
+Sources bank, statement and manual can support independent reconciliation;
+calculated, valuation and legacy cannot. Existing rows become legacy, never
+retroactively certified. Preserve their original rows in an idempotent revision
+archive as well as leaving migration-time numeric values untouched. New missing
+conversions/calculations use nullable values, never native-as-functional fallbacks.
+
+Calculated writers must not overwrite supplied independent observations or
+unknown legacy values. They may calculate later estimates from a usable dated
+anchor plus subsequent transactions, with each transaction converted into the
+account's currency at its own date. Estimates/carry-forwards stay calculated.
+Statement/manual writers identify their provenance persistently; account
+consolidation copies it. Unknown legacy records remain available as historical
+recorded values, with explicit limitations, and cannot prove reconciliation.
+
+Exact opening/closing reconciliation accepts only independent-source rows in
+the actor's currently permitted accounts, then converts native/declared functional
+units and applies ownership at each boundary. Current/history balances may show
+recorded or estimated values but must not call those estimates independent.

@@ -50,11 +50,11 @@ export function UpdateBalanceDialog({
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [balancingCategoryId, setBalancingCategoryId] = useState<string | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [balanceOnDate, setBalanceOnDate] = useState<number>(0);
+  const [balanceOnDate, setBalanceOnDate] = useState<number | null>(null);
 
   const currency = account.currency || "EUR";
   const newBalanceValue = parseFloat(newBalance) || 0;
-  const difference = newBalanceValue - balanceOnDate;
+  const difference = balanceOnDate === null ? null : newBalanceValue - balanceOnDate;
 
   // Fetch balance for a specific date
   const fetchBalanceForDate = useCallback(async (date: Date) => {
@@ -65,11 +65,11 @@ export function UpdateBalanceDialog({
     } catch (error) {
       console.error("Failed to fetch balance:", error);
       // Fallback to current balance
-      setBalanceOnDate(parseFloat(account.functionalBalance || "0"));
+      setBalanceOnDate(null);
     } finally {
       setIsLoadingBalance(false);
     }
-  }, [account.id, account.functionalBalance]);
+  }, [account.id]);
 
   // Fetch the "Balancing Transfer" category and initial balance on mount
   useEffect(() => {
@@ -96,7 +96,8 @@ export function UpdateBalanceDialog({
     fetchBalanceForDate(date);
   };
 
-  const formatCurrencyValue = (value: number, showSign: boolean = false) => {
+  const formatCurrencyValue = (value: number | null, showSign: boolean = false) => {
+    if(value === null) return "Unavailable";
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency,
@@ -200,7 +201,7 @@ export function UpdateBalanceDialog({
               />
             </div>
 
-            {newBalance !== "" && difference !== 0 && (
+            {newBalance !== "" && difference !== null && difference !== 0 && (
               <div className="space-y-2 rounded-md border p-3">
                 <Label className="text-sm text-muted-foreground">Adjustment Amount</Label>
                 <div

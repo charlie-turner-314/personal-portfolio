@@ -115,13 +115,12 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
   const normalizedAccountIds = normalizeAccountIds(accountIds);
   if (normalizedAccountIds?.length) conditions.push(inArray(accounts.id, normalizedAccountIds));
 
-  // New manual accounts may not have daily snapshots yet. Their current
-  // functional balance is authoritative until a snapshot is available.
-  const balance = sql`COALESCE((
+  // Current balance is a fallback only when no snapshot exists.
+  const balance = sql`CASE WHEN EXISTS (SELECT 1 FROM account_balances ab WHERE ab.account_id=${accounts.id} AND ab.date::date<=CURRENT_DATE) THEN (
     SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab
     WHERE ab.account_id = ${accounts.id} AND ab.date::date <= CURRENT_DATE
     ORDER BY ab.date DESC LIMIT 1
-  ), ${convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrencyForUser(session.user.id),sql`CURRENT_DATE`)})`;
+  ) ELSE ${convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrencyForUser(session.user.id),sql`CURRENT_DATE`)} END`;
   const share = ownershipShareSql(ownershipScope, accounts.id, sql`CURRENT_DATE`);
   const [result, currency] = await Promise.all([
     db.select({ total: sql<string | null>`CASE WHEN count(*) FILTER(WHERE (${share})>0 AND (${balance}) IS NULL)>0 THEN NULL
@@ -154,7 +153,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   // account without a snapshot on a particular day does not disappear. Never
   // mix whole-portfolio net-worth snapshots into this cash-only series.
   const currentBalance = convertReportingAmount(sql`accounts.functional_balance`,reportingCurrencyForUser(sql`accounts.user_id`),reportingCurrencyForUser(session.user.id),day);
-  const value = sql`coalesce(cash_balance.value,CASE WHEN ${day}::date=CURRENT_DATE THEN ${currentBalance} END)`;
+  const value = sql`CASE WHEN cash_balance.id IS NOT NULL THEN cash_balance.value WHEN ${day}::date=CURRENT_DATE THEN ${currentBalance} END`;
   const result = await db.select({
     date: sql<string>`TO_CHAR(${day}, 'YYYY-MM-DD')`,
     value: sql<string | null>`CASE WHEN count(*) FILTER(WHERE (${share})>0 AND (${value}) IS NULL)>0 THEN NULL
@@ -163,7 +162,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
     .innerJoin(sql`generate_series(${startDate.toISOString()}::date,
       LEAST(${endDate.toISOString()}::date, CURRENT_DATE), interval '1 day') AS cash_days(day)`, sql`true`)
     .leftJoin(sql`LATERAL (
-      SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} AS value FROM account_balances ab
+      SELECT ab.id, ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} AS value FROM account_balances ab
       WHERE ab.account_id = ${accounts.id} AND ab.date::date <= ${day}::date
       ORDER BY ab.date DESC LIMIT 1
     ) AS cash_balance`, sql`true`)
@@ -192,9 +191,9 @@ export async function getRecordedCashChange(startDate: Date, endDate: Date, acco
     change: sql<string>`sum(COALESCE(boundary.closing,0) * ${closingShare} - COALESCE(boundary.opening,0) * ${openingShare})`,
   }).from(accounts).leftJoin(sql`LATERAL (
     SELECT (SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab WHERE ab.account_id = ${accounts.id}
-      AND ab.date::date = ${from}::date - 1 ORDER BY ab.date DESC LIMIT 1) opening,
+      AND ab.balance_source IN ('bank','statement','manual') AND ab.account_currency IS NOT NULL AND ab.date::date = ${from}::date - 1 ORDER BY ab.date DESC LIMIT 1) opening,
     (SELECT ${snapshotBalanceInReportingCurrency("ab","accounts",session.user.id)} FROM account_balances ab WHERE ab.account_id = ${accounts.id}
-      AND ab.date::date = ${to}::date ORDER BY ab.date DESC LIMIT 1) closing
+      AND ab.balance_source IN ('bank','statement','manual') AND ab.account_currency IS NOT NULL AND ab.date::date = ${to}::date ORDER BY ab.date DESC LIMIT 1) closing
   ) boundary`, sql`true`).where(and(...conditions));
   return { recordedChange: !row?.count || row.missing ? null : Number(row.change), missingAccounts: row?.missing ?? 0 };
 }

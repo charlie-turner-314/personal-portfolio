@@ -12,6 +12,7 @@ from app.models import (
     SuperAccount,
     Transaction,
 )
+from app.services.balance_observations import INDEPENDENT_BALANCE_SOURCES
 from app.services.financial_access import property_access, account_access
 from app.services.financial_activity import FinancialActivity, ZERO, decimal
 from app.services.net_worth_service import is_liability_account_type
@@ -35,29 +36,26 @@ def recorded_account_balance(
         if exact
         else query.filter(func.date(AccountBalance.date) <= observation)
     )
+    if exact:
+        query = query.filter(
+            AccountBalance.balance_source.in_(INDEPENDENT_BALANCE_SOURCES),
+            AccountBalance.account_currency.isnot(None),
+        )
     snapshot = query.order_by(AccountBalance.date.desc()).first()
     if snapshot is not None:
         snapshot_date = snapshot.date.date()
-        if account.currency == activity.currency:
-            full = activity.convert(
-                snapshot.balance_in_account_currency, account.currency, snapshot_date
-            )
-        elif activity.currency_for(account.user_id) == activity.currency:
+        native_currency = snapshot.account_currency or account.currency
+        full = activity.convert(
+            snapshot.balance_in_account_currency, native_currency, snapshot_date
+        )
+        # Historical functional values may predate a currency preference change.
+        # Unlabelled legacy conversions cannot supply an assumed unit.
+        if full is None and snapshot.functional_currency:
             full = activity.convert(
                 snapshot.balance_in_functional_currency,
-                activity.currency_for(account.user_id),
+                snapshot.functional_currency,
                 snapshot_date,
             )
-        else:
-            full = activity.convert(
-                snapshot.balance_in_account_currency, account.currency, snapshot_date
-            )
-            if full is None:
-                full = activity.convert(
-                    snapshot.balance_in_functional_currency,
-                    activity.currency_for(account.user_id),
-                    snapshot_date,
-                )
     elif on is None and not exact:
         full = activity.convert(
             account.functional_balance,

@@ -971,8 +971,11 @@ export const accountBalances = pgTable(
       .references(() => accounts.id, { onDelete: "cascade" })
       .notNull(),
     date: timestamp("date").notNull(), // Date of the balance snapshot
-    balanceInAccountCurrency: decimal("balance_in_account_currency", { precision: 15, scale: 2 }).notNull(), // Balance in account's currency
-    balanceInFunctionalCurrency: decimal("balance_in_functional_currency", { precision: 15, scale: 2 }).notNull(), // Balance converted to functional currency
+    balanceSource: text("balance_source").notNull().default("legacy"),
+    accountCurrency: varchar("account_currency", { length: 3 }),
+    functionalCurrency: varchar("functional_currency", { length: 3 }),
+    balanceInAccountCurrency: decimal("balance_in_account_currency", { precision: 15, scale: 2 }), // Balance in account's currency
+    balanceInFunctionalCurrency: decimal("balance_in_functional_currency", { precision: 15, scale: 2 }), // Balance converted to functional currency
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },

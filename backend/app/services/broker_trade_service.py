@@ -808,6 +808,9 @@ def backfill_history(
             bal_rows.append({
                 "account_id": account.id,
                 "date": d,
+                "balance_source": "valuation",
+                "account_currency": account.currency,
+                "functional_currency": user_currency,
                 "balance_in_account_currency": acct_total,
                 "balance_in_functional_currency": functional_total,
             })
@@ -821,7 +824,11 @@ def backfill_history(
                 set_={
                     "balance_in_account_currency": stmt.excluded.balance_in_account_currency,
                     "balance_in_functional_currency": stmt.excluded.balance_in_functional_currency,
+                    "balance_source": "valuation",
+                    "account_currency": stmt.excluded.account_currency,
+                    "functional_currency": stmt.excluded.functional_currency,
                 },
+                where=AccountBalance.balance_source.in_(("calculated", "valuation")),
             )
             db.execute(stmt)
             bal_count += len(chunk)
