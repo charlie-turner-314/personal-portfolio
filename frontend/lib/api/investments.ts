@@ -58,7 +58,7 @@ export type PortfolioAccount = {
 
 export type PortfolioSummary = {
   total_value: string;
-  total_value_today_change: string;
+  total_value_today_change: string | null;
   currency: string;
   accounts: PortfolioAccount[];
   allocation_by_type: Record<string, string>;

@@ -456,3 +456,51 @@ def test_incomplete_ibkr_lots_preserve_source_and_do_not_break_portfolio(client,
     result = client.get("/api/investments/holdings")
     assert result.status_code == 200, result.text
     assert result.json()[0]["cost_basis_user_currency"] is None
+
+
+def test_today_change_uses_recorded_native_currency_and_marks_unknown_history(client, db):
+    from datetime import timedelta
+    from app.models import User
+    db.get(User, 'u1').functional_currency = 'AUD'
+    account, _ = position(db)
+    today = date.today()
+    prior = AccountBalance(account_id=account.id, date=today-timedelta(days=1), account_currency='USD', balance_in_account_currency=100, balance_in_functional_currency=999)
+    current = AccountBalance(account_id=account.id, date=today, account_currency='AUD', balance_in_account_currency=200, balance_in_functional_currency=888)
+    db.add_all([prior, current]); db.commit()
+    with patch('app.services.exchange_rate_service.ExchangeRateService.get_exchange_rate', return_value=Decimal('1.5')):
+        result = client.get('/api/investments/portfolio/summary')
+    assert result.status_code == 200, result.text
+    assert Decimal(result.json()['total_value_today_change']) == 50
+    prior.account_currency = None; db.commit()
+    result = client.get('/api/investments/portfolio/summary')
+    assert result.status_code == 200, result.text
+    assert result.json()['total_value_today_change'] is None
+
+
+def test_holdings_read_query_count_does_not_grow_per_position(client, db):
+    from sqlalchemy import event
+    from app.models import User
+    db.get(User, 'u1').functional_currency = 'AUD'
+    account, holding = position(db)
+    db.add(HoldingValuation(holding_id=holding.id, date=date.today(), quantity=10, price=100, value_user_currency=1000, value_currency='AUD'))
+    db.commit()
+    queries = []
+    def count_sql(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith('SELECT'):
+            queries.append(statement)
+    connection = db.get_bind()
+    event.listen(connection, 'before_cursor_execute', count_sql)
+    try:
+        assert client.get('/api/investments/holdings').status_code == 200
+        baseline = len(queries)
+        for index in range(20):
+            row = Holding(user_id='u1', account_id=account.id, symbol=f'BATCH-{index}', currency='AUD', instrument_type='equity', quantity=1, source='manual')
+            db.add(row); db.flush()
+            db.add(HoldingValuation(holding_id=row.id, date=date.today(), quantity=1, price=10, value_user_currency=10, value_currency='AUD'))
+        db.commit(); queries.clear()
+        result = client.get('/api/investments/holdings')
+        assert result.status_code == 200, result.text
+        assert len(result.json()) == 21
+        assert len(queries) <= baseline + 2
+    finally:
+        event.remove(connection, 'before_cursor_execute', count_sql)

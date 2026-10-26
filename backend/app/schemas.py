@@ -519,7 +519,7 @@ class ManualPriceCreate(BaseModel):
 
 class PortfolioSummary(BaseModel):
     total_value: Decimal
-    total_value_today_change: Decimal
+    total_value_today_change: Optional[Decimal]
     currency: str
     accounts: list[dict]
     allocation_by_type: dict[str, Decimal]

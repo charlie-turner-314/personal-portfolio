@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.db_helpers import get_user_id
 from app.services.investment_scope import InvestmentScope
-from app.services.financial_access import account_access, value_in_actor_currency as _value_in_actor_currency
+from app.services.financial_access import account_access
 from app.integrations.price_provider import get_price_provider
 from app.integrations.coinspot_adapter import (
     CoinSpotAdapter,
@@ -1430,21 +1430,25 @@ def _latest_valuation_map(db, user_id):
     return {row.holding_id: row for row in rows}
 
 
-def _valuation_in_actor_currency(db, valuation, owner_user_id, actor_user_id):
-    source = valuation.value_currency
+def _recorded_amount_in_currency(db, amount, source, target, on, rates):
     if not source:
         raise HTTPException(status_code=503, detail="Historical valuation currency is unverified. Refresh current prices or rebuild history from source records.")
-    actor = db.query(User).filter_by(id=actor_user_id).one()
-    target = actor.functional_currency or "AUD"
-    if source == target:
-        return Decimal(valuation.value_user_currency)
+    amount = Decimal(amount)
+    if source == target or not amount:
+        return amount
     from app.services.exchange_rate_service import ExchangeRateService
-    converted = ExchangeRateService(db=db).convert_amount(
-        Decimal(valuation.value_user_currency), source, target, valuation.date
-    )
-    if converted is None:
+    key = (source, target, on)
+    if key not in rates:
+        rates[key] = ExchangeRateService(db=db).get_exchange_rate(source, target, on)
+    rate = rates[key]
+    if rate is None or not Decimal(rate).is_finite() or Decimal(rate) <= 0:
         raise HTTPException(status_code=503, detail="Valuation FX is unavailable")
-    return converted
+    return (amount * Decimal(rate)).quantize(Decimal("0.01"))
+
+
+def _valuation_in_actor_currency(db, valuation, owner_user_id, actor_user_id, target=None, rates=None):
+    target = target or db.get(User, actor_user_id).functional_currency or "AUD"
+    return _recorded_amount_in_currency(db, valuation.value_user_currency, valuation.value_currency, target, valuation.date, rates if rates is not None else {})
 
 
 @router.get("/holdings", response_model=list[HoldingResponse])
@@ -1470,6 +1474,7 @@ def list_holdings(
         query = query.filter(Holding.account_id == account_id)
 
     valuations = _latest_valuation_map(db, user_id)
+    valuation_rates = {}
     account_types = dict(db.query(Account.id, Account.account_type).filter(account_access(Account.id, user_id)).all())
     from app.services.investment_cost_basis import InvestmentCostBasis
     basis = InvestmentCostBasis(db, list(account_types), fx_svc, user_currency)
@@ -1495,7 +1500,7 @@ def list_holdings(
                 source=h.source,
                 current_price=latest_val.price if latest_val and latest_val.quote_currency else None,
                 current_value_user_currency=(
-                    _valuation_in_actor_currency(db, latest_val, h.user_id, user_id) * share if latest_val and latest_val.value_currency else None
+                    _valuation_in_actor_currency(db, latest_val, h.user_id, user_id, user_currency, valuation_rates) * share if latest_val and latest_val.value_currency else None
                 ),
                 cost_basis_user_currency=cost_basis_user * share if cost_basis_user is not None else None,
                 ownership_share=share,
@@ -1674,6 +1679,7 @@ def portfolio_summary(
     )
 
     valuations = _latest_valuation_map(db, user_id)
+    valuation_rates = {}
     account_holdings = {}
     for holding in db.query(Holding).filter(account_access(Holding.account_id, user_id), Holding.archived_at.is_(None)).all():
         account_holdings.setdefault(holding.account_id, []).append(holding)
@@ -1685,6 +1691,11 @@ def portfolio_summary(
     allocation_by_type: dict[str, Decimal] = {}
     allocation_by_currency: dict[str, Decimal] = {}
     accounts_payload: list[dict] = []
+    change_complete = True
+    ranked_balances = db.query(AccountBalance.id.label("id"), func.row_number().over(partition_by=AccountBalance.account_id, order_by=AccountBalance.date.desc()).label("rank")).filter(AccountBalance.account_id.in_([account.id for account in accounts]), AccountBalance.date <= date.today()).subquery()
+    recent_balances = {}
+    for balance in db.query(AccountBalance).join(ranked_balances, AccountBalance.id == ranked_balances.c.id).filter(ranked_balances.c.rank <= 2).order_by(AccountBalance.date.desc()).all():
+        recent_balances.setdefault(balance.account_id, []).append(balance)
 
     for account in accounts:
         # Account total = sum of latest valuations across its holdings.
@@ -1701,7 +1712,7 @@ def portfolio_summary(
                 priced_holdings += 1
                 if latest.quote_date:
                     valuation_dates.append(latest.quote_date)
-                visible_value = _valuation_in_actor_currency(db, latest, account.user_id, user_id) * share
+                visible_value = _valuation_in_actor_currency(db, latest, account.user_id, user_id, currency, valuation_rates) * share
                 account_value += visible_value
                 allocation_by_type[h.instrument_type] = (
                     allocation_by_type.get(h.instrument_type, Decimal("0"))
@@ -1714,31 +1725,18 @@ def portfolio_summary(
 
         total_value += account_value
 
-        # Today change: today's snapshot vs the immediately prior snapshot.
-        # Skip if no snapshot for today (e.g. weekend, holiday, missed Celery run)
-        # so we don't surface a stale delta as "today's" movement.
-        today_iso = date.today()
-        latest_balance = (
-            db.query(AccountBalance)
-            .filter(
-                AccountBalance.account_id == account.id,
-                AccountBalance.date == today_iso,
-            )
-            .order_by(desc(AccountBalance.date))
-            .first()
-        )
-        if latest_balance is not None:
-            prior_balance = (
-                db.query(AccountBalance)
-                .filter(
-                    AccountBalance.account_id == account.id,
-                    AccountBalance.date < today_iso,
-                )
-                .order_by(desc(AccountBalance.date))
-                .first()
-            )
-            if prior_balance is not None:
-                today_change += _value_in_actor_currency(db, latest_balance.balance_in_functional_currency, account.user_id, user_id, latest_balance.date) * scope.share(account.id, latest_balance.date.date() if isinstance(latest_balance.date, datetime) else latest_balance.date) - _value_in_actor_currency(db, prior_balance.balance_in_functional_currency, account.user_id, user_id, prior_balance.date) * scope.share(account.id, prior_balance.date.date() if isinstance(prior_balance.date, datetime) else prior_balance.date)
+        # Only compare verified native-currency observations, never amounts
+        # interpreted using the owner's current reporting-currency preference.
+        recent = recent_balances.get(account.id, [])
+        if holdings and scope.share(account.id, date.today()) != 0:
+            if len(recent) < 2 or recent[0].date.date() != date.today():
+                change_complete = False
+            else:
+                try:
+                    amounts = [_recorded_amount_in_currency(db, balance.balance_in_account_currency, balance.account_currency, currency, balance.date.date(), valuation_rates) * scope.share(account.id, balance.date.date()) for balance in recent]
+                    today_change += amounts[0] - amounts[1]
+                except HTTPException:
+                    change_complete = False
 
         accounts_payload.append(
             {
@@ -1755,7 +1753,7 @@ def portfolio_summary(
 
     return PortfolioSummary(
         total_value=total_value,
-        total_value_today_change=today_change,
+        total_value_today_change=today_change if change_complete else None,
         currency=currency,
         accounts=accounts_payload,
         allocation_by_type=allocation_by_type,
@@ -1799,8 +1797,10 @@ def holding_history(
         .order_by(HoldingValuation.date.asc())
         .all()
     )
+    valuation_rates = {}
+    target_currency = db.get(User, user_id).functional_currency or "AUD"
     return [
-        ValuationPoint(date=r.date, value=_valuation_in_actor_currency(db, r, holding.user_id, user_id) * scope.share(holding.account_id, r.date))
+        ValuationPoint(date=r.date, value=_valuation_in_actor_currency(db, r, holding.user_id, user_id, target_currency, valuation_rates) * scope.share(holding.account_id, r.date))
         for r in rows
     ]
 
