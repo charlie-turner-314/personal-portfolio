@@ -67,12 +67,18 @@ test("Australian investment import, fractional NAV, ownership, FY and mixed curr
   const account = sql(`SELECT id FROM accounts WHERE user_id=${u} AND name='AU statement account'`);
   const holding = sql(`SELECT id FROM holdings WHERE user_id=${u} AND symbol=${quote(symbol)}`);
 
+  await page.route("**/api/investments/symbols/search?**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    try { await route.fulfill({ json: [] }); } catch { /* The lookup can be cancelled after navigation. */ }
+  });
   await page.goto("/investments/connect");
   await page.getByRole("button", { name: "Add manually", exact: true }).click();
   await page.getByRole("combobox", { name: "Account", exact: true }).click();
   await page.getByRole("option", { name: "+ Create new account…", exact: true }).click();
   await page.getByLabel("New account name", { exact: true }).fill("AU managed fund");
+  const slowLookup = page.waitForRequest((request) => request.url().includes("/api/investments/symbols/search?"));
   await page.getByPlaceholder("Search symbol or name…").fill(fundSymbol);
+  await slowLookup;
   await page.getByRole("button", { name: "Managed fund", exact: true }).click();
   await page.getByLabel("Quantity", { exact: true }).fill("2.5");
   await expect(page.getByRole("combobox", { name: "Currency", exact: true })).toContainText("AUD");
