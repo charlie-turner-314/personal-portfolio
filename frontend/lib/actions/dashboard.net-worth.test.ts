@@ -12,7 +12,7 @@ vi.mock("@/lib/db", () => ({ db: { select: (selection: Record<string, unknown>) 
   mocks.selections.push(selection);
   return { from: (table: Parameters<typeof getTableName>[0]) => {
     const result = Promise.resolve(mocks.rows[getTableName(table)] || []);
-    const chain = { leftJoin: () => chain, where: () => chain, limit: () => chain, then: result.then.bind(result) };
+    const chain = { orderBy:()=>chain,leftJoin: () => chain, where: () => chain, limit: () => chain, then: result.then.bind(result) };
     return chain;
   } };
 } } }));

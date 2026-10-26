@@ -1,3 +1,5 @@
+import { hasUnavailableAccountSelection,ReportingSelectionNotice } from "@/components/reporting/selection-notice";
+import { toTransactionsSearchParams } from "@/lib/transactions/query-state";
 import { CategorySpendingClient } from "@/components/category-spending/category-spending-client";
 import {
   getCategorySpendingData,
@@ -15,7 +17,9 @@ export async function CategorySpendingSection({
   parsed: ParsedCategorySpendingQueryParams;
   tableQueryState: TransactionsQueryState;
 }) {
-  const [data, transactionsPage, accounts, categories] = await Promise.all([
+  const accounts=await getUserAccounts();
+  if(hasUnavailableAccountSelection(accounts,parsed.accountIds))return <ReportingSelectionNotice clearHref={`/category-spending?${toTransactionsSearchParams({...tableQueryState,accountIds:[],page:1})}`} />;
+  const [data, transactionsPage, categories] = await Promise.all([
     getCategorySpendingData({
       personId:parsed.personId,
       accountIds: parsed.accountIds,
@@ -35,7 +39,6 @@ export async function CategorySpendingSection({
       sort: parsed.sort,
       order: parsed.order,
     }),
-    getUserAccounts(),
     getUserCategories(),
   ]);
 

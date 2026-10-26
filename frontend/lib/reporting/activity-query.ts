@@ -1,3 +1,4 @@
+import { requireReportingCoverage } from "./coverage";
 import { eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { categories, transactions, transactionLinks } from "@/lib/db/schema";
@@ -99,5 +100,6 @@ export async function fetchFinancialActivityRows(actor:string,boundary:ActivityB
 }
 
 export async function fetchFinancialActivity(actor:string,boundary:ActivityBoundary) {
-  return summarizeActivity(await fetchFinancialActivityRows(actor,boundary));
+  const coverage=await requireReportingCoverage(actor,boundary.accountIds);
+  return {...summarizeActivity(await fetchFinancialActivityRows(actor,boundary)),coverage};
 }

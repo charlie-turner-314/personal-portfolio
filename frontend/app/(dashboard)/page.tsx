@@ -1,3 +1,4 @@
+import { hasUnavailableAccountSelection,ReportingSelectionNotice } from "@/components/reporting/selection-notice";
 import { cache, Suspense } from "react";
 import { formatCurrency } from "@/lib/utils";
 import { Header } from "@/components/layout/header";
@@ -104,11 +105,16 @@ async function DashboardContent({
 
   filters.horizon = horizonValue;
 
-  // Fetch data in parallel
-  const [data, accounts] = await Promise.all([
-    getDashboardData(filters),
-    getUserAccounts(),
-  ]);
+  const accounts=await getUserAccounts();
+  if(hasUnavailableAccountSelection(accounts,accountIds)) {
+    const clear=new URLSearchParams();
+    if(personId)clear.set("person",personId);
+    if(dateFromParam)clear.set("from",dateFromParam);
+    if(dateToParam)clear.set("to",dateToParam);
+    if(horizonValue)clear.set("horizon",String(horizonValue));
+    return <ReportingSelectionNotice clearHref={`/?${clear}`} />;
+  }
+  const data=await getDashboardData(filters);
 
   const accountSubtitle = !accountIds?.length
     ? "Bank and cash accounts · net of overdrafts"

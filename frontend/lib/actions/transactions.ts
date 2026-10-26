@@ -1,5 +1,6 @@
 "use server";
 
+import { requireReportingCoverage } from "@/lib/reporting/coverage";
 import { transactionReportingValue } from "@/lib/reporting/transaction-value";
 import { reportingCurrencyForUser } from "@/lib/household/reporting-currency";
 import { categoryAccess } from "@/lib/household/category-access";
@@ -815,6 +816,7 @@ async function buildTransactionsWhereClause(
   input: TransactionsQueryState
 ): Promise<ResolvedTransactionsWhereClause> {
   const normalizedAccountIds = normalizeAccountIds(input.accountIds);
+  if(normalizedAccountIds.length)await requireReportingCoverage(userId,normalizedAccountIds);
   const conditions = [accountAccess(transactions.accountId, userId)];
 
   if (normalizedAccountIds.length > 0) {

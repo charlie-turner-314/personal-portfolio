@@ -1,4 +1,5 @@
 "use server";
+import { requireReportingCoverage } from "@/lib/reporting/coverage";
 
 import { fetchFinancialActivity } from "@/lib/reporting/activity-query";
 import { convertReportingAmount, reportingCurrencyForUser, snapshotBalanceInReportingCurrency } from "@/lib/household/reporting-currency";
@@ -6,10 +7,10 @@ import { reconcileCashMovement } from "@/lib/dashboard/cash-flow";
 
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { db } from "@/lib/db";
-import { accounts, transactions, categories, users, properties, vehicles, superAccounts } from "@/lib/db/schema";
+import { accounts, transactions, users, properties, vehicles, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { getCachedUserAccounts } from "@/lib/data/cached";
-import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
+import { eq, sql, and, desc, inArray } from "drizzle-orm";
 import { summarizeActivity, activitySankey, cashFlowMetrics } from "@/lib/dashboard/activity";
 import {
   buildIncomeExpenseBuckets,
@@ -102,6 +103,7 @@ export async function getTotalBalance(accountIds?: string[], personId?: string) 
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return { total: 0, currency: "EUR" };
 
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
   const ownershipScope = personId === "all" ? undefined : personId ?? {
     userId: session.user.id, householdPersonId: session.householdPersonId,
   };
@@ -134,6 +136,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return [];
 
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
   const ownershipScope = personId === "all" ? undefined : personId ?? {
     userId: session.user.id, householdPersonId: session.householdPersonId,
   };
@@ -174,6 +177,7 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
 export async function getRecordedCashChange(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
   const session = await getAuthenticatedSession();
   if (!session?.user?.id) return { recordedChange: null, missingAccounts: 0 };
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
   const scope = personId === "all" ? undefined : personId ?? { userId: session.user.id, householdPersonId: session.householdPersonId };
   const from = startDate.toISOString().slice(0, 10), to = endDate.toISOString().slice(0, 10);
   const openingShare = ownershipShareSql(scope, accounts.id, sql`${from}::date - 1`);
@@ -251,6 +255,7 @@ export async function getAssetsOverview(accountIds?: string[], personId?: string
     return emptyNetWorthOverview();
   }
 
+  if(accountIds?.length)await requireReportingCoverage(session.user.id,accountIds);
   const ownershipScope = personId === "all" ? undefined : personId ?? {
     userId: session.user.id, householdPersonId: session.householdPersonId,
   };

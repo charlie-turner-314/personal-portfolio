@@ -8,7 +8,7 @@ const fixture = `
 BEGIN;
 CREATE TEMP TABLE users(id text, functional_currency text);
 CREATE TEMP TABLE exchange_rates(base_currency text,target_currency text,rate numeric,date date);
-CREATE TEMP TABLE accounts(consolidated_into_account_id text, id text, user_id text, is_active boolean);
+CREATE TEMP TABLE accounts(consolidated_into_account_id text, id text, user_id text, is_active boolean,name text,institution text,account_type text,currency text);
 CREATE TEMP TABLE household_memberships(member_user_id text, owner_user_id text, person_id text);
 CREATE TEMP TABLE household_account_shares(account_id text, member_user_id text, granted_by_user_id text);
 CREATE TEMP TABLE people(id text, user_id text, kind text, linked_user_id text);
@@ -23,6 +23,7 @@ CREATE TEMP TABLE transactions(id text, account_id text, user_id text, booked_at
  include_in_analytics boolean, internal_transfer_id text);
 INSERT INTO users VALUES ('member','AUD'),('owner','AUD');
 INSERT INTO accounts(id,user_id,is_active) VALUES ('shared','owner',true),('savings','owner',true),('own','member',true),('private','owner',true);
+UPDATE accounts SET name=id,account_type='checking',currency='AUD';
 INSERT INTO household_memberships VALUES ('member','owner','linked');
 INSERT INTO household_account_shares VALUES ('shared','member','owner'),('savings','member','owner');
 INSERT INTO people(id,user_id,kind) VALUES ('linked','owner','member'),('owner-self','owner','self'),('own-self','member','self');
@@ -80,7 +81,8 @@ vi.mock("@/lib/db", async () => {
       const value = params[Number(n) - 1];
       return value === null ? "NULL" : typeof value === "boolean" ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
     });
-    const wrapped = `SELECT COALESCE(json_agg(json_build_array(date, cash_flow_kind, cash_flow_parts, native_amount, transfer_group_id, transfer_amount, category_id, category_name, category_type, icon, color, amount, transfer_full_amount, transaction_id, account_id, merchant, description, recurring_name, recurrence_known)), '[]') FROM (${literal}) rows(date, cash_flow_kind, cash_flow_parts, native_amount, transfer_group_id, transfer_amount, category_id, category_name, category_type, icon, color, amount, transfer_full_amount, transaction_id, account_id, merchant, description, recurring_name, recurrence_known);`;
+    const fields=query.includes('"financial_records"')?"date, cash_flow_kind, cash_flow_parts, native_amount, transfer_group_id, transfer_amount, category_id, category_name, category_type, icon, color, amount, transfer_full_amount, transaction_id, account_id, merchant, description, recurring_name, recurrence_known":"id, name, institution, account_type, currency, is_active";
+    const wrapped = `SELECT COALESCE(json_agg(json_build_array(${fields})), '[]') FROM (${literal}) rows(${fields});`;
     const output = execFileSync("docker", ["exec", "-i", process.env.OWNERSHIP_TEST_POSTGRES_CONTAINER!, "psql", "-U", "postgres", "-d", "postgres", "-qAt", "-v", "ON_ERROR_STOP=1"], { input: fixture + variant.sql + wrapped + "ROLLBACK;", encoding: "utf8" });
     return { rows: JSON.parse(output.trim()) };
   }) };

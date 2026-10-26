@@ -1,3 +1,4 @@
+import { getReportingCoverage } from "@/lib/reporting/coverage";
 import { categoryAccess, categoryDefinitionForActor, categorySelectionHidden } from "@/lib/household/category-access";
 // Cached read layer. NOT a "use server" module.
 // Two cache layers:
@@ -10,7 +11,7 @@ import { cache } from "react";
 import { unstable_cache } from "next/cache";
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, categories, users, householdAccountShares } from "@/lib/db/schema";
+import { accounts, users, householdAccountShares } from "@/lib/db/schema";
 import { getAuthenticatedSession as getFinancialSession } from "@/lib/household/financial-auth";
 import { getAuthenticatedSession } from "@/lib/auth-helpers";
 import { resolveMissingAccountLogos } from "@/lib/actions/account-logos";
@@ -49,18 +50,8 @@ export const getCachedUserCategories = cache(async () => {
 
 // ---------- Accounts (slim, for filter dropdowns) ----------
 
-async function fetchAccountsForUser(userId: string) {
-  return db
-    .select({
-      id: accounts.id,
-      name: accounts.name,
-      institution: accounts.institution,
-      accountType: accounts.accountType,
-      currency: accounts.currency,
-    })
-    .from(accounts)
-    .where(and(accountAccess(accounts.id, userId), eq(accounts.isActive, true)))
-    .orderBy(accounts.name);
+async function fetchAccountsForUser(userId:string) {
+  return (await getReportingCoverage(userId)).accounts;
 }
 
 const getCachedAccountsByUser = fetchAccountsForUser;

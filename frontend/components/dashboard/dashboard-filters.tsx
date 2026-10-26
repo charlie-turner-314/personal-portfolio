@@ -20,6 +20,7 @@ import { PersonFilter } from "./person-filter";
 
 interface Account {
   id: string;
+  isActive?:boolean|null;
   name: string;
   institution: string | null;
   accountType: string;
@@ -169,6 +170,7 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
       <span className="text-xs text-muted-foreground">
         Cash flow and cash balances · {selectedPersonId === "all" ? "whole accounts" : selectedPersonId ? "selected person's share" : "my ownership share"}
       </span>
+      <p className="w-full text-xs text-muted-foreground">Activity account coverage: {(selectedAccountIds.length?accounts.filter(account=>selectedAccountSet.has(account.id)):accounts).map(account=>`${account.name}${account.isActive===false?" (closed)":""}`).join(", ")||"No permitted accounts"}. Other private accounts are excluded. Cash balances use active bank/cash accounts.</p>
       <Popover open={accountsOpen} onOpenChange={setAccountsOpen}>
         <PopoverTrigger
           className={cn(
@@ -214,7 +216,7 @@ export function DashboardFilters({ accounts }: DashboardFiltersProps) {
                   checked={selectedAccountSet.has(account.id)}
                   className="pointer-events-none"
                 />
-                <span className="truncate">{account.name}</span>
+                <span className="truncate">{account.name}{account.isActive===false?" (closed)":""}</span>
               </button>
             ))}
           </div>

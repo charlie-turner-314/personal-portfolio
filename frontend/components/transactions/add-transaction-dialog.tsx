@@ -63,7 +63,7 @@ export function AddTransactionDialog({ open, onOpenChange, categories: propCateg
   useEffect(() => {
     if (open) {
       const loadData = async () => {
-        const accountsData = await getUserAccounts();
+        const accountsData = (await getUserAccounts()).filter(account=>account.isActive!==false);
         setAccounts(accountsData);
 
         // Use prop categories if available, otherwise fetch

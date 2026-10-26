@@ -174,3 +174,17 @@ CSV exports re-fetch every selected record using current permissions before
 creating a new file, reject partial authorization, and label original versus
 attributed amounts explicitly. Original explicit portions and classification
 IDs are retained in the file. Revocation cannot erase existing downloaded copies.
+
+## Explicit coverage and unavailable selections
+
+Historical activity includes a custodian's closed accounts; closing an account
+does not erase its records. Household access always follows the current explicit
+grant, so past membership or a revoked grant cannot expose historical records.
+Current cash/net-worth balances use active accounts, separately labelled from
+historical activity coverage.
+
+An explicit selection containing an unavailable account is rejected as a whole.
+It cannot silently become a subset with zero for the missing account. The same
+response applies to withdrawn, private and nonexistent IDs and contains no
+private name or total. Report pages offer a clear-filter link that preserves
+other context. Every final record query still enforces live account access.

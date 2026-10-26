@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.session.mockResolvedValue({ user: { id: "current-user" } });
   mocks.execute.mockImplementation(async (query: string) => ({
-    rows: query.includes('"functional_currency"') ? [["AUD"]] : [["3250"]],
+    rows: query.includes('order by "accounts"."name"') ? [["selected-account","Selected",null,"checking","AUD",true]] : query.includes('"functional_currency"') ? [["AUD"]] : [["3250"]],
   }));
 });
 

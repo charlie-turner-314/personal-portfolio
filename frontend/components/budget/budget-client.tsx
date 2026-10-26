@@ -85,6 +85,7 @@ interface BudgetAccount {
   name: string;
   institution: string | null;
   accountType: string;
+  isActive?:boolean|null;
 }
 
 type HouseholdPerson = { id: string; name: string };
@@ -439,8 +440,8 @@ export function BudgetClient({
   const canApplyPlanForward = data.monthKey >= new Date().toISOString().slice(0, 7);
   const accountTriggerText = isAllAccountsSelected ? "All accounts" : "Accounts";
   const actualScopeText = isAllAccountsSelected
-    ? "Actuals include your permitted accounts; other private accounts are outside this report."
-    : `Actuals filtered to ${data.accountIds.length} account${data.accountIds.length === 1 ? "" : "s"}.`;
+    ? `Actuals cover: ${accounts.map(account=>`${account.name}${account.isActive===false?" (closed)":""}`).join(", ")||"No permitted accounts"}. Other private accounts are excluded.`
+    : `Actuals cover: ${accounts.filter(account=>data.accountIds.includes(account.id)).map(account=>`${account.name}${account.isActive===false?" (closed)":""}`).join(", ")}.`;
 
   const attributionScopeText = data.personId==="all"?" Household view counts each included record once. Plans remain personal."
     : data.personId?" Actuals use the selected person’s economic share. Plans remain personal.":" My view uses your economic share. Plans remain personal.";

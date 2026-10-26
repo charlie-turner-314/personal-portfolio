@@ -116,11 +116,22 @@ describe.skipIf(!url)("transaction scope over real migrated PostgreSQL",()=>{
       expect(data.categories.find(row=>row.id===category)).toMatchObject({amount:50,deltaAmount:-50});
     }finally {await db.delete(schema.transactions).where(eq(schema.transactions.id,otherTx));await db.delete(schema.categories).where(eq(schema.categories.id,otherCategory));}
   });
+  it("keeps a custodian's closed account history in coverage but denies stale/private selections",async()=>{
+    const {getReportingCoverage}=await import("@/lib/reporting/coverage");
+    await db.update(schema.accounts).set({isActive:false}).where(eq(schema.accounts.id,own));
+    try {
+      expect((await getReportingCoverage(member)).accounts.find(account=>account.id===own)).toMatchObject({isActive:false,name:"Own"});
+      expect((await page(params({account:own}))).rows.map(row=>row.id)).toEqual([ownTx]);
+      await expect(page(params({account:privateAccount}))).rejects.toThrow("no longer available");
+      await expect(categoryData({accountIds:[privateAccount],dateFrom:"2026-01-01",dateTo:"2026-12-31"})).rejects.toThrow("no longer available");
+    }finally {await db.update(schema.accounts).set({isActive:true}).where(eq(schema.accounts.id,own));}
+  });
   it("rechecks current account grants on every request",async()=>{
     await db.delete(schema.householdAccountShares).where(eq(schema.householdAccountShares.accountId,joint));
     const data=await page(params());
     expect(data.rows.map(row=>row.id)).toEqual([ownTx]);
     expect(data.filteredTotals).toMatchObject({totalIn:40,totalOut:0});
     await expect(exportRows([second])).rejects.toThrow("no longer available");
+    await expect(page(params({account:joint}))).rejects.toThrow("no longer available");
   });
 });
