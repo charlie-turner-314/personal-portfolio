@@ -55,13 +55,13 @@ export function buildConservativeSankey(
 
   if (totalIncome > totalExpense) {
     expenseCategories.push({
-      name: "Savings",
+      name: "Cash retained",
       total: totalIncome - totalExpense,
       categoryType: "expense",
     });
   } else if (totalExpense > totalIncome) {
     incomeCategories.push({
-      name: "Funding Gap",
+      name: "Cash required",
       total: totalExpense - totalIncome,
       categoryType: "income",
     });

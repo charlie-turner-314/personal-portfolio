@@ -9,6 +9,7 @@ import { requireAuth } from "@/lib/household/financial-auth";
 import { getCachedUserCategories, CACHE_TAGS } from "@/lib/data/cached";
 
 export interface CategoryCreateInput {
+  cashFlowKind?: "investment" | "loan_principal" | null;
   name: string;
   categoryType: "expense" | "income" | "transfer";
   color: string;
@@ -18,6 +19,7 @@ export interface CategoryCreateInput {
 }
 
 export interface CategoryInput {
+  cashFlowKind?: "investment" | "loan_principal" | null;
   name: string;
   categoryType: "expense" | "income" | "transfer";
   color: string;
@@ -29,6 +31,7 @@ export interface CategoryInput {
 }
 
 export interface CategoryUpdateInput {
+  cashFlowKind?: "investment" | "loan_principal" | null;
   name?: string;
   color?: string;
   icon?: string;
@@ -45,6 +48,10 @@ export async function createCategory(
     return { success: false, error: "Not authenticated" };
   }
 
+  if (input.cashFlowKind != null && !["investment", "loan_principal"].includes(input.cashFlowKind)) {
+    return { success: false, error: "Invalid cash-flow purpose" };
+  }
+  if (input.cashFlowKind && input.categoryType !== "expense") return { success: false, error: "Only expense categories can default to allocations" };
   try {
     // Check for duplicate name in the same category type
     const existing = await db.query.categories.findFirst({
@@ -67,6 +74,7 @@ export async function createCategory(
       icon: input.icon,
       description: input.description?.trim() || null,
       categorizationInstructions: input.categorizationInstructions?.trim() || null,
+      cashFlowKind: input.cashFlowKind ?? null,
       isSystem: false,
     };
 
@@ -105,10 +113,15 @@ export async function updateCategory(
       return { success: false, error: "Category not found" };
     }
 
+    if (input.cashFlowKind != null && (!["investment", "loan_principal"].includes(input.cashFlowKind) || existing.categoryType !== "expense")) {
+      return { success: false, error: "Invalid cash-flow purpose for this category" };
+    }
+
     // System categories accept description/categorization_instructions updates
     // (user-tailored context) but reject structural changes.
     if (existing.isSystem) {
       const attemptingStructuralChange =
+        (input.cashFlowKind !== undefined && input.cashFlowKind !== existing.cashFlowKind) ||
         (input.name !== undefined && input.name.trim() !== existing.name) ||
         (input.color !== undefined && input.color !== existing.color) ||
         (input.icon !== undefined && input.icon !== existing.icon);
@@ -154,6 +167,7 @@ export async function updateCategory(
     await db
       .update(categories)
       .set({
+        ...(input.cashFlowKind !== undefined && { cashFlowKind: input.cashFlowKind }),
         ...(input.name && { name: input.name.trim() }),
         ...(input.color && { color: input.color }),
         ...(input.icon && { icon: input.icon }),

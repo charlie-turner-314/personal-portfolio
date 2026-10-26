@@ -1,12 +1,14 @@
 "use server";
 
+import { reconcileCashMovement } from "@/lib/dashboard/cash-flow";
+
 import { accountAccess, propertyAccess } from "@/lib/household/account-access";
 import { db } from "@/lib/db";
 import { accounts, transactions, categories, users, properties, vehicles, transactionLinks, superAccounts } from "@/lib/db/schema";
 import { getAuthenticatedSession } from "@/lib/household/financial-auth";
 import { getCachedUserAccounts } from "@/lib/data/cached";
 import { eq, sql, gte, lte, and, desc, inArray, isNull } from "drizzle-orm";
-import { summarizeActivity, activitySankey } from "@/lib/dashboard/activity";
+import { summarizeActivity, activitySankey, cashFlowMetrics } from "@/lib/dashboard/activity";
 import {
   buildIncomeExpenseBuckets,
   resolveIncomeExpenseGrouping,
@@ -168,6 +170,31 @@ export async function getBalanceHistory(startDate: Date, endDate: Date, accountI
   return result.map(row => ({ date: row.date, value: parseFloat(row.value || "0") }));
 }
 
+/** Exact recorded boundary snapshots only; missing data must never become zero. */
+export async function getRecordedCashChange(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
+  const session = await getAuthenticatedSession();
+  if (!session?.user?.id) return { recordedChange: null, missingAccounts: 0 };
+  const scope = personId === "all" ? undefined : personId ?? { userId: session.user.id, householdPersonId: session.householdPersonId };
+  const from = startDate.toISOString().slice(0, 10), to = endDate.toISOString().slice(0, 10);
+  const openingShare = ownershipShareSql(scope, accounts.id, sql`${from}::date - 1`);
+  const closingShare = ownershipShareSql(scope, accounts.id, sql`${to}::date`);
+  const conditions = [accountAccess(accounts.id, session.user.id), eq(accounts.isActive, true), inArray(accounts.accountType, [...CASH_ACCOUNT_TYPE_VALUES]),
+    sql`(${openingShare} > 0 OR ${closingShare} > 0)`];
+  const selectedIds = normalizeAccountIds(accountIds);
+  if (selectedIds?.length) conditions.push(inArray(accounts.id, selectedIds));
+  const [row] = await db.select({
+    count: sql<number>`count(*)::int`,
+    missing: sql<number>`count(*) FILTER (WHERE (${openingShare} > 0 AND boundary.opening IS NULL) OR (${closingShare} > 0 AND boundary.closing IS NULL))::int`,
+    change: sql<string>`sum(COALESCE(boundary.closing,0) * ${closingShare} - COALESCE(boundary.opening,0) * ${openingShare})`,
+  }).from(accounts).leftJoin(sql`LATERAL (
+    SELECT (SELECT balance_in_functional_currency FROM account_balances ab WHERE ab.account_id = ${accounts.id}
+      AND ab.date::date = ${from}::date - 1 ORDER BY ab.date DESC LIMIT 1) opening,
+    (SELECT balance_in_functional_currency FROM account_balances ab WHERE ab.account_id = ${accounts.id}
+      AND ab.date::date = ${to}::date ORDER BY ab.date DESC LIMIT 1) closing
+  ) boundary`, sql`true`).where(and(...conditions));
+  return { recordedChange: !row?.count || row.missing ? null : Number(row.change), missingAccounts: row?.missing ?? 0 };
+}
+
 // All activity widgets share classification and linked-transaction semantics.
 // A LEFT JOIN is essential: categorization enriches activity, never gates it.
 async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
@@ -190,12 +217,38 @@ async function getActivitySummary(startDate: Date, endDate: Date, accountIds?: s
   const linkedAmountInCurrency = sql`COALESCE(t2.functional_amount, CASE WHEN t2.currency = ${userCurrency} THEN t2.amount END)`;
   const rows = await db.select({
     date: sql<string>`DATE(${transactions.bookedAt})`,
+    cashFlowKind: sql<string | null>`COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind})`,
+    cashFlowParts: transactions.cashFlowParts,
+    nativeAmount: transactions.amount,
+    transferGroupId: sql<string | null>`CASE WHEN NOT EXISTS (
+      SELECT 1 FROM ${transactionLinks} transfer_peer
+      JOIN ${transactions} peer ON peer.id = transfer_peer.transaction_id
+      LEFT JOIN ${categories} peer_category ON peer_category.id = COALESCE(peer.category_id, peer.category_system_id)
+      WHERE transfer_peer.group_id = ${transactionLinks.groupId}
+        AND ${accountAccess(sql.raw("peer.account_id"), session.user.id)}
+        AND (peer_category.category_type IS DISTINCT FROM 'transfer'
+          OR peer.cash_flow_parts IS NOT NULL
+          OR COALESCE(peer.cash_flow_kind, peer_category.cash_flow_kind) IS NOT NULL)
+    ) THEN ${transactionLinks.groupId} END`,
+    transferAmount: sql<string | null>`${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}`,
     categoryId: categories.id,
     categoryName: categories.name,
     categoryType: categories.categoryType,
     icon: categories.icon,
     color: categories.color,
+    // A group containing an explicit allocation is reported per leg, so a
+    // linked ordinary expense is neither swallowed nor counted twice.
     amount: sql<string | null>`CASE
+      WHEN ${transactions.cashFlowParts} IS NOT NULL OR COALESCE(${transactions.cashFlowKind}, ${categories.cashFlowKind}) IN ('investment', 'loan_principal')
+        OR EXISTS (
+          SELECT 1 FROM ${transactionLinks} allocation_link
+          JOIN ${transactions} allocation_peer ON allocation_peer.id = allocation_link.transaction_id
+          LEFT JOIN ${categories} allocation_category ON allocation_category.id = COALESCE(allocation_peer.category_id, allocation_peer.category_system_id)
+          WHERE allocation_link.group_id = ${transactionLinks.groupId}
+            AND ${accountAccess(sql.raw("allocation_peer.account_id"), session.user.id)}
+            AND (allocation_peer.cash_flow_parts IS NOT NULL OR COALESCE(allocation_peer.cash_flow_kind, allocation_category.cash_flow_kind) IN ('investment', 'loan_principal'))
+        )
+        THEN ${amountInCurrency} * ${ownershipShareSql(ownershipScope, transactions.accountId, transactions.bookedAt)}
       WHEN ${transactionLinks.linkRole} = 'primary' AND ${transactionLinks.groupId} IS NOT NULL THEN
         (
           SELECT CASE WHEN COUNT(*) FILTER (WHERE ${linkedAmountInCurrency} IS NULL) > 0 THEN NULL
@@ -408,6 +461,8 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   if (!session?.user?.id) {
     return {
+      cashReconciliation: reconcileCashMovement(0, null, 0),
+      cashFlow: { savingsFromIncome: 0, investments: 0, loanPrincipal: 0, otherCapital: 0, transfersIn: 0, transfersOut: 0, explainedCashFlow: 0 },
       activityMissingConversions: 0,
       balance: { total: 0, currency: "EUR" },
       balanceHistory: [],
@@ -470,11 +525,12 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   const currency = await getUserCurrency(session.user.id);
 
-  const [balance, balanceHistory, activity, upcomingPlannedExpenses] = await Promise.all([
+  const [balance, balanceHistory, activity, upcomingPlannedExpenses, recordedCash] = await Promise.all([
     getTotalBalance(normalizedAccountIds, filters.personId),
     getBalanceHistory(startDate, endDate, normalizedAccountIds, filters.personId),
     getActivitySummary(startDate, endDate, normalizedAccountIds, filters.personId),
     getUpcomingPlannedExpenses({ days: 90, accountIds: normalizedAccountIds }),
+    getRecordedCashChange(startDate, endDate, normalizedAccountIds, filters.personId),
   ]);
   const periodSpending = { total: activity.expenses, currency };
   const periodIncome = { total: activity.income, currency };
@@ -491,6 +547,7 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
 
   // Calculate savings rate (income - expenses = potential savings)
   const savingsAmount = periodIncome.total - periodSpending.total;
+  const cashFlow = cashFlowMetrics(activity);
   const savingsPercentage = periodIncome.total > 0
     ? (savingsAmount / periodIncome.total) * 100
     : 0;
@@ -589,6 +646,8 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
     : getHorizonPeriodLabel(horizonDays);
 
   return {
+    cashFlow,
+    cashReconciliation: reconcileCashMovement(cashFlow.explainedCashFlow, recordedCash.recordedChange, recordedCash.missingAccounts, activity.missingConversions),
     activityMissingConversions: activity.missingConversions,
     balance,
     balanceHistory,
@@ -613,4 +672,8 @@ export async function getDashboardData(filters: DashboardFilters = {}) {
       label: `${monthNames[endDate.getMonth()]} ${endDate.getFullYear()}`,
     },
   };
+}
+
+export async function getCashFlowSummary(startDate: Date, endDate: Date, accountIds?: string[], personId?: string) {
+  return cashFlowMetrics(await getActivitySummary(startDate, endDate, accountIds, personId));
 }

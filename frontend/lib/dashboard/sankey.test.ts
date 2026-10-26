@@ -55,7 +55,7 @@ describe("buildConservativeSankey", () => {
       [{ categoryId: "e1", categoryName: "Rent", total: 2500, categoryType: "expense" }]
     );
 
-    const savingsNode = result.nodes.find((node) => node.name === "Savings");
+    const savingsNode = result.nodes.find((node) => node.name === "Cash retained");
     expect(savingsNode).toBeDefined();
     expect(savingsNode?.categoryId).toBeUndefined();
     expect(savingsNode?.categoryType).toBe("expense");
@@ -72,7 +72,7 @@ describe("buildConservativeSankey", () => {
       [{ categoryId: "e1", categoryName: "Rent", total: 1900, categoryType: "expense" }]
     );
 
-    const fundingGapNode = result.nodes.find((node) => node.name === "Funding Gap");
+    const fundingGapNode = result.nodes.find((node) => node.name === "Cash required");
     expect(fundingGapNode).toBeDefined();
     expect(fundingGapNode?.categoryId).toBeUndefined();
     expect(fundingGapNode?.categoryType).toBe("income");

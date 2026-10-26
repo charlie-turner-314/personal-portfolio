@@ -89,7 +89,7 @@ test("uncategorised activity, gross property, debt and unequal ownership reconci
   await money(page, "Total Liabilities", "-A$520,000");
   await money(page, "30-Day Spending", "A$1,000");
   await money(page, "30-Day Income", "A$5,000");
-  await expect(card(page, "Savings Rate")).toContainText("80.0%");
+  await expect(card(page, "Saving from Income")).toContainText("80.0%");
   const netWorth = page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]').getByText("Net Worth", { exact: true }) });
   await expect(netWorth).toContainText("A$255,000");
   await expect(netWorth).toContainText("A$775,000");

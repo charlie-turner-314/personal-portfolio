@@ -95,7 +95,7 @@ describe("dashboard activity queries", () => {
     mocks.results.push(fixture);
     expect((await getSankeyData(from, to)).nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "Uncategorized expenses", total: 150 }),
-      expect.objectContaining({ name: "Savings", total: 850 }),
+      expect.objectContaining({ name: "Cash retained", total: 850 }),
     ]));
   });
 });
