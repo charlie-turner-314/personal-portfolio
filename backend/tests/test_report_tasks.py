@@ -202,3 +202,204 @@ def test_send_report_run_db_failure_during_transition_does_not_raise():
             _cleanup_user(db, user_id)
         db.rollback()
         db.close()
+
+
+def _seed_shared_report(db):
+    from decimal import Decimal
+    from app.models import (
+        Account,
+        AccountOwnershipAllocation,
+        HouseholdAccountShare,
+        HouseholdMembership,
+        Person,
+    )
+
+    owner = User(id=f"queue-owner-{uuid.uuid4()}", email=f"{uuid.uuid4()}@example.test")
+    reader = User(
+        id=f"queue-reader-{uuid.uuid4()}", email=f"{uuid.uuid4()}@example.test"
+    )
+    db.add_all([owner, reader])
+    db.flush()
+    op = Person(user_id=owner.id, name="Owner", kind="self")
+    rp = Person(
+        user_id=owner.id, name="Reader", kind="member", linked_user_id=reader.id
+    )
+    db.add_all([op, rp])
+    db.flush()
+    db.add(
+        HouseholdMembership(
+            member_user_id=reader.id, owner_user_id=owner.id, person_id=rp.id
+        )
+    )
+    account = Account(
+        user_id=owner.id,
+        name="Joint",
+        account_type="checking",
+        currency="EUR",
+        functional_balance=Decimal(100),
+    )
+    db.add(account)
+    db.flush()
+    db.add(
+        HouseholdAccountShare(
+            account_id=account.id, member_user_id=reader.id, granted_by_user_id=owner.id
+        )
+    )
+    db.add_all(
+        [
+            AccountOwnershipAllocation(
+                account_id=account.id,
+                person_id=op.id,
+                effective_from=datetime(2000, 1, 1).date(),
+                share=Decimal("0.5"),
+            ),
+            AccountOwnershipAllocation(
+                account_id=account.id,
+                person_id=rp.id,
+                effective_from=datetime(2000, 1, 1).date(),
+                share=Decimal("0.5"),
+            ),
+        ]
+    )
+    report = Report(
+        user_id=reader.id,
+        name="Queue",
+        account_ids=[str(account.id)],
+        frequency="WEEKLY",
+        recipient_emails=["old@example.test"],
+        is_active=True,
+    )
+    db.add(report)
+    db.flush()
+    run = ReportRun(
+        report_id=report.id,
+        status="SCHEDULED",
+        recipient_emails=report.recipient_emails,
+    )
+    db.add(run)
+    db.commit()
+    return [owner.id, reader.id], account.id, report.id, run.id
+
+
+def _cleanup_shared_report(db, users):
+    db.rollback()
+    db.query(User).filter(User.id.in_(users)).delete(synchronize_session=False)
+    db.commit()
+
+
+def test_revocation_during_render_prevents_delivery():
+    from app.models import HouseholdAccountShare
+
+    db = SessionLocal()
+    users = []
+    try:
+        users, account_id, _, run_id = _seed_shared_report(db)
+
+        def revoke(*args, **kwargs):
+            with SessionLocal() as change:
+                change.query(HouseholdAccountShare).filter_by(
+                    account_id=account_id
+                ).delete()
+                change.commit()
+            return MagicMock(
+                returncode=0,
+                stdout='{"html":"old financial copy","text":"old financial copy"}',
+                stderr="",
+            )
+
+        adapter = MagicMock()
+        with patch.object(
+            report_tasks.subprocess, "run", side_effect=revoke
+        ), patch.object(report_tasks, "get_mail_adapter", return_value=adapter):
+            report_tasks.send_report_run(str(run_id))
+        db.expire_all()
+        run = db.get(ReportRun, run_id)
+        assert run.status == "FAILED" and "no longer available" in run.error_message
+        adapter.send.assert_not_called()
+    finally:
+        if users:
+            _cleanup_shared_report(db, users)
+        db.close()
+
+
+def test_queued_household_departure_denies_before_render():
+    from app.models import HouseholdMembership
+
+    db = SessionLocal()
+    users = []
+    try:
+        users, _, _, run_id = _seed_shared_report(db)
+        db.query(HouseholdMembership).filter_by(member_user_id=users[1]).delete()
+        db.commit()
+        adapter = MagicMock()
+        with patch.object(report_tasks.subprocess, "run") as render, patch.object(
+            report_tasks, "get_mail_adapter", return_value=adapter
+        ):
+            report_tasks.send_report_run(str(run_id))
+        db.expire_all()
+        assert db.get(ReportRun, run_id).status == "FAILED"
+        render.assert_not_called()
+        adapter.send.assert_not_called()
+    finally:
+        if users:
+            _cleanup_shared_report(db, users)
+        db.close()
+
+
+def test_recipients_are_refreshed_after_render_and_stale_financial_values_are_rejected():
+    from app.models import Account
+    from decimal import Decimal
+
+    db = SessionLocal()
+    users = []
+    try:
+        users, account_id, report_id, run_id = _seed_shared_report(db)
+
+        def replace_recipient(*args, **kwargs):
+            with SessionLocal() as change:
+                change.query(Report).filter_by(id=report_id).update(
+                    {"recipient_emails": ["current@example.test"]}
+                )
+                change.commit()
+            return MagicMock(
+                returncode=0, stdout='{"html":"safe","text":"safe"}', stderr=""
+            )
+
+        adapter = MagicMock()
+        with patch.object(
+            report_tasks.subprocess, "run", side_effect=replace_recipient
+        ), patch.object(report_tasks, "get_mail_adapter", return_value=adapter):
+            report_tasks.send_report_run(str(run_id))
+        adapter.send.assert_called_once()
+        assert adapter.send.call_args.kwargs["to"] == ["current@example.test"]
+        other = ReportRun(
+            report_id=report_id,
+            status="SCHEDULED",
+            recipient_emails=["current@example.test"],
+        )
+        db.add(other)
+        db.commit()
+        other_id = other.id
+
+        def change_balance(*args, **kwargs):
+            with SessionLocal() as change:
+                change.query(Account).filter_by(id=account_id).update(
+                    {"functional_balance": Decimal(200)}
+                )
+                change.commit()
+            return MagicMock(
+                returncode=0, stdout='{"html":"stale","text":"stale"}', stderr=""
+            )
+
+        adapter.reset_mock()
+        with patch.object(
+            report_tasks.subprocess, "run", side_effect=change_balance
+        ), patch.object(report_tasks, "get_mail_adapter", return_value=adapter):
+            report_tasks.send_report_run(str(other_id))
+        db.expire_all()
+        assert db.get(ReportRun, other_id).status == "FAILED"
+        adapter.send.assert_not_called()
+    finally:
+        if users:
+            _cleanup_shared_report(db, users)
+        db.close()

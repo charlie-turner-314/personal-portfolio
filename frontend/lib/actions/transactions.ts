@@ -460,6 +460,7 @@ export interface TransactionWithRelations {
   cashFlowKind?: string | null;
   cashFlowAllocationAmount?: string | null;
   includeInAnalytics: boolean;
+  isGeneratedMirror?:boolean;
 }
 
 export interface TransactionsPageResult {
@@ -667,6 +668,7 @@ function mapTransactionRowsForUi(
         merchant: tx.merchant,
         creditor: tx.creditor,
         debtor: tx.debtor,
+        isGeneratedMirror:tx.externalId?.startsWith("mirror-")??false,
         amount: parseFloat(tx.amount),
         ...(tx.attributedAmount!==undefined?{attributedAmount:tx.attributedAmount===null?null:Number(tx.attributedAmount),economicShare:Number(tx.economicShare),reportingCurrency:tx.reportingCurrency}:{}),
         currency: tx.currency,
@@ -1848,7 +1850,7 @@ export async function updateTransactionCashFlowPurpose(
     const error = validateCashFlowPortions(parts, Number(transaction.amount));
     if (error) return { success: false, error };
     // Balance adjustments and synthetic transfer legs must retain their accounting meaning.
-    if (transaction.internalTransferId) return { success: false, error: "Unlink the internal transfer before changing its purpose" };
+    if (transaction.internalTransferId||transaction.externalId?.startsWith("mirror-")) return { success: false, error: "Unlink the internal transfer before changing its purpose" };
     const categoryId = transaction.categoryId ?? transaction.categorySystemId;
     if (categoryId) {
       const category = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });

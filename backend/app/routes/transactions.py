@@ -6,6 +6,7 @@ from uuid import UUID
 from datetime import datetime
 from enum import Enum
 
+from app.services.transaction_projection import api_transaction,transaction_description_sql,transaction_merchant_sql
 from app.services.financial_access import category_access
 from app.database import get_db
 from app.models import Transaction, Account, Category
@@ -71,17 +72,16 @@ def list_transactions(
     if category_id:
         # Match effective category: user override first, otherwise AI-assigned fallback
         query = query.filter(
-            (Transaction.category_id == category_id) |
-            and_(
+            (Transaction.category_id == category_id)
+            | and_(
                 Transaction.category_id.is_(None),
-                Transaction.category_system_id == category_id
+                Transaction.category_system_id == category_id,
             )
         )
 
     if uncategorized:
         query = query.filter(
-            Transaction.category_id.is_(None),
-            Transaction.category_system_id.is_(None)
+            Transaction.category_id.is_(None), Transaction.category_system_id.is_(None)
         )
 
     if from_date:
@@ -94,8 +94,8 @@ def list_transactions(
         search_term = f"%{search}%"
         query = query.filter(
             or_(
-                Transaction.description.ilike(search_term),
-                Transaction.merchant.ilike(search_term),
+                transaction_description_sql().ilike(search_term),
+                transaction_merchant_sql().ilike(search_term),
             )
         )
 
@@ -109,7 +109,7 @@ def list_transactions(
     if sort_by:
         order_func = asc if sort_order == SortOrder.asc else desc
         if sort_by == SortBy.description:
-            query = query.order_by(order_func(Transaction.description))
+            query = query.order_by(order_func(transaction_description_sql()))
         elif sort_by == SortBy.account:
             query = query.join(Account).order_by(order_func(Account.name))
         elif sort_by == SortBy.category:
@@ -127,24 +127,12 @@ def list_transactions(
 
     result = []
     for txn in transactions:
-        txn_dict = {
-            "id": txn.id,
-            "account_id": txn.account_id,
-            "external_id": txn.external_id,
-            "transaction_type": txn.transaction_type,
-            "amount": txn.amount,
-            "currency": txn.currency,
-            "description": txn.description,
-            "merchant": txn.merchant,
-            "category_id": txn.category_id,
-            "category_system_id": txn.category_system_id,
-            "booked_at": txn.booked_at,
-            "pending": txn.pending,
-            "categorization_instructions": txn.categorization_instructions,
-            "enrichment_data": txn.enrichment_data,
-            "created_at": txn.created_at,
-            "updated_at": txn.updated_at,
-            "category_name": txn.category.name if txn.category else None,
+        txn_dict = api_transaction(txn, user_id).model_dump() | {
+            "category_name": (
+                (txn.category or txn.category_system).name
+                if (txn.category or txn.category_system)
+                else None
+            ),
             "account_name": txn.account.name,
         }
         result.append(TransactionWithDetails(**txn_dict))
@@ -180,46 +168,66 @@ def get_spending_by_category(
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)
 def get_transaction(
-    transaction_id: UUID,
-    user_id: Optional[str] = None,
-    db: Session = Depends(get_db)
+    transaction_id: UUID, user_id: Optional[str] = None, db: Session = Depends(get_db)
 ):
     """Get a specific transaction by ID."""
     user_id = get_user_id(user_id)
-    transaction = db.query(Transaction).filter(
-        Transaction.id == transaction_id,
-        account_access(Transaction.account_id, user_id)
-    ).first()
+    transaction = (
+        db.query(Transaction)
+        .filter(
+            Transaction.id == transaction_id,
+            account_access(Transaction.account_id, user_id),
+        )
+        .first()
+    )
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    return transaction
+    return api_transaction(transaction, user_id)
 
 
 @router.post("/", response_model=TransactionResponse, status_code=201)
 def create_transaction(
     transaction: TransactionCreate,
     user_id: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Create a new transaction."""
     user_id = get_user_id(user_id)
     # Verify account exists and belongs to user
-    account = db.query(Account).filter(
-        Account.id == transaction.account_id,
-        account_access(Account.id, user_id)
-    ).first()
+    account = (
+        db.query(Account)
+        .filter(
+            Account.id == transaction.account_id, account_access(Account.id, user_id)
+        )
+        .first()
+    )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
     # Verify category exists if provided
     if transaction.category_id:
-        category = db.query(Category).filter(
-            Category.id == transaction.category_id,
-            category_access(user_id)
-        ).first()
+        category = (
+            db.query(Category)
+            .filter(Category.id == transaction.category_id, category_access(user_id))
+            .first()
+        )
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
 
+    if account.user_id != user_id and transaction.categorization_instructions:
+        raise HTTPException(
+            status_code=403,
+            detail="Personal guidance is managed by the account custodian",
+        )
+    if transaction.category_system_id:
+        if (
+            not db.query(Category)
+            .filter(
+                Category.id == transaction.category_system_id, category_access(user_id)
+            )
+            .first()
+        ):
+            raise HTTPException(status_code=404, detail="Category not found")
     transaction_data = transaction.model_dump()
     # Collaborators write into the canonical account; their login never takes
     # ownership of its financial history.
@@ -230,7 +238,7 @@ def create_transaction(
     db.add(db_transaction)
     db.commit()
     db.refresh(db_transaction)
-    return db_transaction
+    return api_transaction(db_transaction, user_id)
 
 
 @router.patch("/{transaction_id}", response_model=TransactionResponse)
@@ -238,30 +246,60 @@ def update_transaction(
     transaction_id: UUID,
     updates: TransactionUpdate,
     user_id: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Update a transaction."""
     user_id = get_user_id(user_id)
-    transaction = db.query(Transaction).filter(
-        Transaction.id == transaction_id,
-        account_access(Transaction.account_id, user_id)
-    ).first()
+    transaction = (
+        db.query(Transaction)
+        .filter(
+            Transaction.id == transaction_id,
+            account_access(Transaction.account_id, user_id),
+        )
+        .first()
+    )
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     update_data = updates.model_dump(exclude_unset=True)
+    if transaction.user_id != user_id and any(
+        field in update_data
+        for field in ("categorization_instructions", "enrichment_data")
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Personal guidance and enrichment are managed by the account custodian",
+        )
+    if update_data.get("category_system_id"):
+        if (
+            not db.query(Category)
+            .filter(
+                Category.id == update_data["category_system_id"],
+                category_access(user_id),
+            )
+            .first()
+        ):
+            raise HTTPException(status_code=404, detail="Category not found")
     if "category_id" in update_data:
         if update_data["category_id"]:
-            category = db.query(Category).filter(Category.id == update_data["category_id"], category_access(user_id)).first()
+            category = (
+                db.query(Category)
+                .filter(
+                    Category.id == update_data["category_id"], category_access(user_id)
+                )
+                .first()
+            )
             if not category:
                 raise HTTPException(status_code=404, detail="Category not found")
-        transaction.category_verified_at = datetime.utcnow() if update_data["category_id"] else None
+        transaction.category_verified_at = (
+            datetime.utcnow() if update_data["category_id"] else None
+        )
     for field, value in update_data.items():
         setattr(transaction, field, value)
 
     db.commit()
     db.refresh(transaction)
-    return transaction
+    return api_transaction(transaction, user_id)
 
 
 @router.patch("/{transaction_id}/category", response_model=TransactionResponse)
@@ -269,21 +307,26 @@ def assign_category(
     transaction_id: UUID,
     category_data: CategoryAssign,
     user_id: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Assign a category to a transaction (user override)."""
     user_id = get_user_id(user_id)
-    transaction = db.query(Transaction).filter(
-        Transaction.id == transaction_id,
-        account_access(Transaction.account_id, user_id)
-    ).first()
+    transaction = (
+        db.query(Transaction)
+        .filter(
+            Transaction.id == transaction_id,
+            account_access(Transaction.account_id, user_id),
+        )
+        .first()
+    )
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    category = db.query(Category).filter(
-        Category.id == category_data.category_id,
-        category_access(user_id)
-    ).first()
+    category = (
+        db.query(Category)
+        .filter(Category.id == category_data.category_id, category_access(user_id))
+        .first()
+    )
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
@@ -292,7 +335,7 @@ def assign_category(
     transaction.category_verified_at = datetime.utcnow()
     db.commit()
     db.refresh(transaction)
-    return transaction
+    return api_transaction(transaction, user_id)
 
 
 @router.delete("/{transaction_id}", status_code=204)

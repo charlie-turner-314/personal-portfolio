@@ -10,13 +10,16 @@ async function main() {
     reportName: input.report_name,
     generatedAt: input.generated_at,
     periodLabel: input.period_label ?? "",
+    scopeLabel:input.scope_label,
+    coverageNote:input.coverage_note,
     totalBalance: input.total_balance ?? null,
     totalCurrency: input.total_currency ?? "EUR",
     // Payload is snake_case; BalanceItem is camelCase. This is the boundary.
     accounts: (input.accounts ?? []).map((a: Record<string, unknown>) => ({
       name: a.name,
       institution: a.institution ?? null,
-      balance: a.balance,
+      balance: a.balance??null,
+      balanceLabel:a.balance_label,
       currency: a.currency,
       logoUrl: a.logo_url ?? null,
     })),

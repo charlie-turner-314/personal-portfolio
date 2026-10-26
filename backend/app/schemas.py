@@ -179,6 +179,8 @@ class CategoryAssign(BaseModel):
 
 
 class TransactionResponse(TransactionBase):
+    cash_flow_kind: Optional[str] = None
+    cash_flow_parts: Optional[list[dict]] = None
     id: UUID
     external_id: Optional[str] = None
     category_id: Optional[UUID] = None

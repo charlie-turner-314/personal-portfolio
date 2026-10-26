@@ -205,3 +205,22 @@ transactions. Current cash excludes loans/cards; liabilities and gross assets
 are independently attributed. Holding values replace their account's valuation,
 and missing holding values/FX make complete totals unavailable. A current
 financial summary explicitly labels its balance date separately from flow dates.
+
+## Personal newsletters and delivery-time access
+
+Newsletter reports explicitly show the named report owner's economic view and
+permitted account coverage. Current cash totals use active cash accounts;
+liabilities and investment values retain their own labels. Consumption and income
+filters use classified portions, while movement lists preserve both attributed
+values and original bank units. Missing values remain unavailable.
+
+A queued run and rendered email are snapshots, not continuing authorization.
+Before sending, the worker refreshes recipients and report configuration and
+rebuilds the financial payload under live access. If access or displayed financial
+facts changed, it fails the run for a fresh retry instead of sending the stale
+copy. Already delivered/downloaded copies cannot be revoked.
+
+Generated mirror descriptions never need a private source account's name.
+New mirrors use generic text; legacy source text is preserved in storage but
+projected safely in API/MCP reads and search predicates. Personal guidance,
+enrichment and integration IDs are custodian context, not shared classification.

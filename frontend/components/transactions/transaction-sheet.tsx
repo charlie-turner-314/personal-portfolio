@@ -414,7 +414,7 @@ export function TransactionSheet({
             </div>
           )}
 
-          {!isBalancingTransfer && !transaction.internalTransferId && (
+          {!isBalancingTransfer && !transaction.internalTransferId && !transaction.isGeneratedMirror && (
             <CashFlowPurpose
               key={`${transaction.id}:${JSON.stringify(transaction.cashFlowParts)}`}
               transactionId={transaction.id} amount={transaction.amount} currency={transaction.currency || "EUR"}

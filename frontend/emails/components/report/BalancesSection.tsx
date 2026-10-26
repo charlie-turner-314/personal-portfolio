@@ -4,7 +4,8 @@ import { fmtMoney, light } from "./tokens";
 export type BalanceItem = {
   name: string;
   institution: string | null;
-  balance: string;
+  balance: string | null;
+  balanceLabel?:string;
   currency: string;
   logoUrl: string | null;
 };
@@ -44,6 +45,7 @@ export function BalancesSection({ accounts }: { accounts: BalanceItem[] }) {
             <Text className="sy-fg" style={{ fontSize: "13px", fontWeight: 500, color: light.foreground, margin: 0 }}>
               {a.name}
             </Text>
+            {a.balanceLabel&&<Text className="sy-muted" style={{fontSize:"11px",color:light.mutedForeground,margin:"2px 0 0"}}>{a.balanceLabel}</Text>}
             {a.institution && (
               <Text className="sy-muted" style={{ fontSize: "11px", color: light.mutedForeground, margin: "2px 0 0" }}>
                 {a.institution}

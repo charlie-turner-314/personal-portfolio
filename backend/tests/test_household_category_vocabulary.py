@@ -70,7 +70,8 @@ def test_shared_edit_accepts_partners_category_and_revocation_denies_current_acc
     from app import db_helpers
     monkeypatch.setattr(db_helpers, "_get_authenticated_user_id", lambda _: member)
     result = assign_category(transaction.id, CategoryAssign(category_id=categories[0].id), user_id=member, db=db)
-    assert result.category_id == categories[0].id and result.user_id == admin
+    assert result.category_id == categories[0].id and transaction.user_id == admin
+    assert "user_id" not in result.model_dump()  # response is a safe public projection
     db.delete(membership); db.flush()
     with pytest.raises(HTTPException) as error:
         owned_transaction(db, member, transaction.id)

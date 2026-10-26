@@ -14,7 +14,7 @@ from celery_app import celery_app
 from app.database import SessionLocal
 from app.integrations.mail_adapter import get_mail_adapter
 from app.models import Report, ReportRun
-from app.services.report_data_service import build_report_payload
+from app.services.report_data_service import build_report_payload,assert_report_snapshot_current
 from app.services.report_schedule_service import compute_next_run_at
 
 # In a local checkout, backend/ and frontend/ are siblings, so this resolves
@@ -144,6 +144,17 @@ def send_report_run(report_run_id: str) -> None:
                 raise RuntimeError(f"Report renderer failed: {result.stderr}")
             rendered = json.loads(result.stdout)
 
+            # Rendering can take a minute. Re-read configuration and financial
+            # permissions immediately before delivery; a queued/rendered copy is
+            # never authority to send after a withdrawal or household exit.
+            db.expire_all()
+            db.refresh(report)
+            if not report.is_active and not run.is_test:
+                raise RuntimeError("The report was disabled before delivery")
+            assert_report_snapshot_current(db,report,payload)
+            run.recipient_emails=list(report.recipient_emails or [])
+            if not run.recipient_emails:
+                raise RuntimeError("The report has no current recipients")
             adapter = get_mail_adapter()
             adapter.send(
                 to=run.recipient_emails,

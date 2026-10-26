@@ -5,10 +5,14 @@ export function ReportHeader({
   reportName,
   periodLabel,
   generatedAt,
+  scopeLabel="My view · your economic share of permitted records",
+  coverageNote,
 }: {
   reportName: string;
   periodLabel: string;
   generatedAt: string;
+  scopeLabel?:string;
+  coverageNote?:string;
 }) {
   const formatted = new Date(generatedAt).toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -26,6 +30,8 @@ export function ReportHeader({
       <Text className="sy-muted" style={{ fontSize: "12px", color: light.mutedForeground, margin: "6px 0 0" }}>
         {periodLabel} · {formatted}
       </Text>
+      <Text className="sy-muted" style={{fontSize:"11px",color:light.mutedForeground,margin:"6px 0 0"}}>{scopeLabel}</Text>
+      {coverageNote&&<Text className="sy-muted" style={{fontSize:"11px",color:light.mutedForeground,margin:"6px 0 0"}}>{coverageNote}</Text>}
     </Section>
   );
 }

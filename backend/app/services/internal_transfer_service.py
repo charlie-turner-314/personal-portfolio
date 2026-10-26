@@ -14,7 +14,7 @@ import logging
 from typing import Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.models import Account, Category, InternalTransfer, Transaction
 
@@ -113,11 +113,9 @@ class InternalTransferService:
         if not pocket_map:
             return empty_result
 
-        # Eager-load the source account so we can build a descriptive mirror
-        # description without extra queries per-source.
+        # Generated mirror text is independent of the private source account.
         sources = (
             self.db.query(Transaction)
-            .options(joinedload(Transaction.account))
             .filter(
                 Transaction.id.in_(transaction_ids),
                 Transaction.user_id == self.user_id,
@@ -160,13 +158,6 @@ class InternalTransferService:
                     -src.functional_amount if src.functional_amount is not None else None
                 )
 
-                src_account_name = getattr(src.account, "name", None) or "account"
-                description = (
-                    f"Transfer from {src_account_name}"
-                    if mirror_amount > 0
-                    else f"Transfer to {src_account_name}"
-                )
-
                 mirror = Transaction(
                     user_id=self.user_id,
                     account_id=pocket.id,
@@ -174,8 +165,8 @@ class InternalTransferService:
                     amount=mirror_amount,
                     currency=src.currency,
                     functional_amount=mirror_functional,
-                    description=description,
-                    merchant=src_account_name,
+                    description="Transfer",
+                    merchant=None,
                     booked_at=src.booked_at,
                     transaction_type="credit" if mirror_amount > 0 else "debit",
                     category_system_id=transfer_category_id,

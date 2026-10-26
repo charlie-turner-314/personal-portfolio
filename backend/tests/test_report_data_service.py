@@ -171,7 +171,7 @@ def test_build_report_payload_top_n_expenses():
         db.flush()
 
         payload = build_report_payload(db, report)
-        assert payload["transactions"]["mode_label"] == "Top 1 expenses"
+        assert payload["transactions"]["mode_label"] == "Top 1 consumption allocations"
         items = payload["transactions"]["items"]
         assert len(items) == 1
         assert items[0]["description"] == "Groceries"  # largest debit amount
@@ -334,3 +334,179 @@ def test_total_is_omitted_when_a_balance_is_not_convertible():
     finally:
         db.rollback()
         db.close()
+
+
+def test_shared_newsletter_uses_economic_currency_portions_and_preserves_bank_amount(
+    db_session,
+):
+    from app.models import (
+        AccountOwnershipAllocation,
+        Category,
+        ExchangeRate,
+        HouseholdAccountShare,
+        HouseholdMembership,
+        Person,
+    )
+    from app.services.report_data_service import assert_report_snapshot_current
+    from fastapi import HTTPException
+    import pytest
+
+    db = db_session
+    owner = User(
+        id=f"report-owner-{uuid.uuid4()}",
+        email=f"{uuid.uuid4()}@example.test",
+        functional_currency="AUD",
+    )
+    actor = User(
+        id=f"report-reader-{uuid.uuid4()}",
+        email=f"{uuid.uuid4()}@example.test",
+        functional_currency="USD",
+    )
+    db.add_all([owner, actor])
+    db.flush()
+    own_person = Person(user_id=owner.id, name="Owner", kind="self")
+    reader_person = Person(
+        user_id=owner.id, name="Reader", kind="member", linked_user_id=actor.id
+    )
+    db.add_all([own_person, reader_person])
+    db.flush()
+    db.add(
+        HouseholdMembership(
+            member_user_id=actor.id, owner_user_id=owner.id, person_id=reader_person.id
+        )
+    )
+    joint = Account(
+        user_id=owner.id,
+        name="Joint",
+        account_type="checking",
+        currency="AUD",
+        functional_balance=Decimal(300),
+    )
+    private = Account(
+        user_id=owner.id,
+        name="PRIVATE EXCLUDED",
+        account_type="checking",
+        currency="AUD",
+        functional_balance=Decimal(999999),
+    )
+    db.add_all([joint, private])
+    db.flush()
+    db.add(
+        HouseholdAccountShare(
+            account_id=joint.id, member_user_id=actor.id, granted_by_user_id=owner.id
+        )
+    )
+    db.add_all(
+        [
+            AccountOwnershipAllocation(
+                account_id=joint.id,
+                person_id=own_person.id,
+                effective_from=datetime(2000, 1, 1).date(),
+                share=Decimal("0.5"),
+            ),
+            AccountOwnershipAllocation(
+                account_id=joint.id,
+                person_id=reader_person.id,
+                effective_from=datetime(2000, 1, 1).date(),
+                share=Decimal("0.5"),
+            ),
+        ]
+    )
+    category = Category(user_id=owner.id, name="Housing", category_type="expense")
+    db.add(category)
+    db.flush()
+    now = datetime.utcnow()
+    db.add(
+        ExchangeRate(
+            base_currency="AUD",
+            target_currency="USD",
+            rate=Decimal(2),
+            date=now - timedelta(days=10),
+        )
+    )
+    bank = Transaction(
+        user_id=owner.id,
+        account_id=joint.id,
+        amount=Decimal(-1000),
+        functional_amount=Decimal(-1000),
+        currency="AUD",
+        booked_at=now - timedelta(days=1),
+        category_id=category.id,
+        cash_flow_parts=[
+            {"kind": "capital", "detail": "loan_principal", "amount": 600},
+            {"kind": "consumption", "amount": 400},
+        ],
+    )
+    db.add(bank)
+    db.flush()
+    report = Report(
+        user_id=actor.id,
+        name="Shared",
+        account_ids=[str(joint.id)],
+        transaction_mode="TOP_N",
+        transaction_count=10,
+        transaction_direction="EXPENSE",
+        frequency="WEEKLY",
+    )
+    db.add(report)
+    db.flush()
+    payload = build_report_payload(db, report)
+    assert payload["total_balance"] == "300.00"
+    assert "My view" in payload["scope_label"]
+    assert "PRIVATE EXCLUDED" not in str(payload)
+    item = payload["transactions"]["items"][0]
+    assert item["amount"] == "400.00" and item["currency"] == "USD"
+    assert item["original_amount"] == "-1000.00" and item["original_currency"] == "AUD"
+    assert item["amount_label"] == "Consumption allocation"
+    report.transaction_direction = "INCOME"
+    db.flush()
+    assert build_report_payload(db, report)["transactions"]["items"] == []
+    report.transaction_direction = "EXPENSE"
+    db.flush()
+    db.query(HouseholdAccountShare).filter_by(account_id=joint.id).delete()
+    db.flush()
+    with pytest.raises(HTTPException):
+        assert_report_snapshot_current(db, report, payload)
+
+
+def test_newsletter_unknown_conversion_is_visible_and_never_zero(db_session):
+    db = db_session
+    user = User(
+        id=f"report-fx-{uuid.uuid4()}",
+        email=f"{uuid.uuid4()}@example.test",
+        functional_currency="AUD",
+    )
+    db.add(user)
+    db.flush()
+    account = Account(
+        user_id=user.id, name="Unknown", account_type="checking", currency="ZZZ"
+    )
+    db.add(account)
+    db.flush()
+    db.add(
+        Transaction(
+            user_id=user.id,
+            account_id=account.id,
+            amount=Decimal(-10),
+            functional_amount=None,
+            currency="ZZZ",
+            booked_at=datetime.utcnow() - timedelta(hours=1),
+        )
+    )
+    report = Report(
+        user_id=user.id,
+        name="FX",
+        account_ids=[str(account.id)],
+        transaction_mode="TOP_N",
+        transaction_count=10,
+        transaction_direction="ALL",
+        frequency="WEEKLY",
+    )
+    db.add(report)
+    db.flush()
+    payload = build_report_payload(db, report)
+    assert (
+        payload["accounts"][0]["balance"] is None and payload["total_balance"] is None
+    )
+    assert payload["transactions"]["items"][0]["amount"] is None
+    assert "await currency conversion" in payload["coverage_note"]

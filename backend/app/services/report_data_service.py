@@ -1,166 +1,227 @@
-"""Builds the JSON payload consumed by the report newsletter email template.
+"""Newsletter projections from the same permitted financial facts as reports."""
 
-Reuses the same Account/Transaction ORM models the dashboard reads from,
-so report numbers match what the user sees in-app.
-"""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
-from uuid import UUID
 
-from sqlalchemy import and_, func
-from sqlalchemy.orm import Session, joinedload
-
-from app.services.financial_access import account_access, value_in_actor_currency
-from app.models import Account, Report, Transaction
+from sqlalchemy.orm import Session
+from app.models import Report
+from app.services.financial_activity import FinancialActivity, ZERO, summarize_activity
+from app.services.financial_values import (
+    CASH_TYPES,
+    account_net_worth_value,
+    recorded_account_balance,
+)
+from app.services.net_worth_service import is_liability_account_type
 from app.services.report_horizon import horizon_start, period_label
 
-_DIRECTION_LABELS = {
-    "ALL": "transactions",
-    "EXPENSE": "expenses",
-    "INCOME": "income",
-    "INFLOW": "inflows",
-    "OUTFLOW": "outflows",
-}
 
-# transaction_type on Transaction is "debit" or "credit".
-# EXPENSE/OUTFLOW == debit, INCOME/INFLOW == credit, ALL == both.
-_DIRECTION_TYPES = {
-    "ALL": ("debit", "credit"),
-    "EXPENSE": ("debit",),
-    "OUTFLOW": ("debit",),
-    "INCOME": ("credit",),
-    "INFLOW": ("credit",),
-}
+def money(value):
+    return None if value is None else format(value.quantize(Decimal("0.01")), "f")
 
 
 def build_report_payload(db: Session, report: Report) -> dict:
-    accounts = _fetch_accounts(db, report)
-    transactions = _fetch_transactions(db, report)
-    functional_currency = (report.user.functional_currency if report.user else None) or "EUR"
-
+    activity = FinancialActivity(db, report.user_id)
+    covered = activity.coverage(report.account_ids)
+    now = datetime.utcnow()
+    rows, coverage = activity.rows(
+        from_date=horizon_start(report.frequency, now),
+        to_date=now,
+        account_ids=report.account_ids,
+    )
+    summary = summarize_activity(rows)
+    base_url = (
+        os.environ.get("FRONTEND_URL")
+        or os.environ.get("APP_URL", "http://localhost:3000")
+    ).rstrip("/")
+    accounts = []
+    cash = ZERO
+    missing_cash = False
+    for account in covered:
+        if not account.is_active:
+            continue
+        value = (
+            recorded_account_balance(activity, account)
+            if account.account_type in CASH_TYPES
+            else account_net_worth_value(activity, account)
+        )
+        owed = (
+            is_liability_account_type(account.account_type)
+            or value is not None
+            and value < ZERO
+        )
+        if account.account_type in CASH_TYPES:
+            if value is None:
+                missing_cash = True
+            else:
+                cash += value
+        logo = account.logo
+        accounts.append(
+            {
+                "id": str(account.id),
+                "name": account.name,
+                "institution": account.institution,
+                "balance": money(abs(value) if owed and value is not None else value),
+                "currency": activity.currency,
+                "balance_label": (
+                    "Balance owed"
+                    if owed
+                    else (
+                        "Recorded balance"
+                        if account.account_type in CASH_TYPES
+                        else "Account value"
+                    )
+                ),
+                "logo_url": (
+                    f"{base_url}{logo.logo_url}"
+                    if logo and logo.logo_url and logo.status == "found"
+                    else None
+                ),
+            }
+        )
+    transactions = _transactions(report, rows, summary, activity.currency)
+    coverage_note = (
+        "Activity account coverage: "
+        + (
+            ", ".join(
+                account["name"] + (" (closed)" if not account["active"] else "")
+                for account in coverage
+            )
+            or "No permitted accounts"
+        )
+        + ". Other private accounts are excluded."
+    )
+    if missing_cash:
+        coverage_note += " Some recorded cash balances are unavailable; the complete cash total is withheld."
+    if summary["missing_conversions"]:
+        coverage_note += " Some movement amounts await currency conversion. Unavailable amounts remain visible and cannot be ranked by value."
     return {
         "report_name": report.name,
-        # Trailing "Z" so the frontend's `new Date(generatedAt)` parses this
-        # as UTC rather than the worker container's local timezone (which
-        # would silently shift the displayed date/time otherwise).
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": now.isoformat() + "Z",
         "period_label": period_label(report.frequency),
-        "total_balance": _total_balance(db, report),
-        "total_currency": functional_currency,
+        "scope_label": f"My view for {(report.user.name if report.user else None) or 'the report owner'} · economic share at each transaction date. Current cash balances use active cash accounts.",
+        "coverage_note": coverage_note,
+        "activity_accounts": coverage,
+        "total_balance": None if missing_cash else money(cash),
+        "total_currency": activity.currency,
         "accounts": accounts,
         "transactions": transactions,
     }
 
 
-def _fetch_accounts(db: Session, report: Report) -> list[dict]:
-    if not report.account_ids:
-        return []
-    account_uuids = [UUID(a) for a in report.account_ids]
-    rows = (
-        db.query(Account)
-        # Eager-load so rendering N accounts does not fire N logo queries.
-        .options(joinedload(Account.logo))
-        .filter(account_access(Account.id, report.user_id), Account.id.in_(account_uuids))
-        .all()
+def _transactions(report, rows, summary, currency):
+    by_id = {row["id"]: row for row in rows}
+    amounts = {}
+    purpose = {"EXPENSE": "consumption", "INCOME": "income"}.get(
+        report.transaction_direction
     )
-    functional_currency = (report.user.functional_currency if report.user else None) or "EUR"
-    # logo_url on CompanyLogo is a relative path ("/uploads/logos/x.png"); mail
-    # clients need it absolute.
-    base_url = (os.environ.get("FRONTEND_URL") or os.environ.get("APP_URL", "http://localhost:3000")).rstrip("/")
-
-    def _logo_url(a: Account) -> str | None:
-        logo = a.logo
-        if not logo or not logo.logo_url or logo.status != "found":
-            return None
-        return f"{base_url}{logo.logo_url}"
-
-    def _balance_and_currency(a: Account) -> tuple[str, str]:
-        if a.functional_balance is not None:
-            # functional_balance is already converted to the user's
-            # functional currency, so it must be labeled with that
-            # currency, not the account's native currency.
-            return str(value_in_actor_currency(db, a.functional_balance, a.user_id, report.user_id, datetime.utcnow().date())), functional_currency
-        return str(a.balance_available or 0), a.currency or "EUR"
-
-    accounts = []
-    for a in rows:
-        balance, currency = _balance_and_currency(a)
-        accounts.append({
-            "name": a.name,
-            "institution": a.institution,
-            "balance": balance,
-            "currency": currency,
-            "logo_url": _logo_url(a),
-        })
-    return accounts
-
-
-def _total_balance(db: Session, report: Report) -> Optional[str]:
-    """Sum of the selected accounts, or None if they are not all convertible.
-
-    Only functional_balance is expressed in a single currency. Summing an
-    account that only has a native balance would produce a confidently wrong
-    number, so the total is withheld instead.
-    """
-    if not report.account_ids:
-        return None
-    account_uuids = [UUID(a) for a in report.account_ids]
-    rows = (
-        db.query(Account)
-        .filter(account_access(Account.id, report.user_id), Account.id.in_(account_uuids))
-        .all()
-    )
-    if len(rows) != len(set(account_uuids)) or any(a.functional_balance is None for a in rows):
-        return None
-    return str(sum((value_in_actor_currency(db, a.functional_balance, a.user_id, report.user_id, datetime.utcnow().date()) for a in rows), Decimal("0")).quantize(Decimal("0.01")))
-
-
-def _fetch_transactions(db: Session, report: Report) -> dict:
-    types = _DIRECTION_TYPES.get(report.transaction_direction, ("debit", "credit"))
-    # Both TOP_N and RECENT are scoped to the report's own cadence, so a weekly
-    # digest reports on the last seven days rather than on all of history.
-    window_start = horizon_start(report.frequency, datetime.utcnow())
-    query = db.query(Transaction).filter(
-        account_access(Transaction.account_id, report.user_id),
-        Transaction.transaction_type.in_(types),
-        Transaction.booked_at >= window_start,
-    )
-    if report.account_ids:
-        account_uuids = [UUID(a) for a in report.account_ids]
-        query = query.filter(Transaction.account_id.in_(account_uuids))
-
+    if purpose:
+        for entry in summary["entries"] + summary["unknown_entries"]:
+            if entry["kind"] != purpose:
+                continue
+            value = entry["amount"]
+            if value is not None and purpose == "consumption":
+                value = -value
+            if entry["id"] not in amounts:
+                amounts[entry["id"]] = ZERO
+            if value is None:
+                amounts[entry["id"]] = None
+            elif amounts[entry["id"]] is not None:
+                amounts[entry["id"]] += value
+    else:
+        # ALL/INFLOW/OUTFLOW list attributed bank movements, not a second
+        # income or consumption query. Both permitted transfer legs may appear.
+        amounts = {row["id"]: row["transfer_amount"] for row in rows}
+    items = []
+    for identifier, amount in amounts.items():
+        row = by_id[identifier]
+        if amount == ZERO:
+            continue
+        direction = (
+            "out"
+            if (amount if amount is not None else row["native_amount"]) < ZERO
+            else "in"
+        )
+        if report.transaction_direction == "INFLOW" and direction != "in":
+            continue
+        if report.transaction_direction == "OUTFLOW" and direction != "out":
+            continue
+        items.append(
+            {
+                "id": identifier,
+                "description": row["merchant"] or row["description"] or "Transaction",
+                "date": row["date"],
+                "amount": money(abs(amount)) if amount is not None else None,
+                "currency": currency,
+                "direction": direction,
+                "original_amount": money(row["native_amount"]),
+                "original_currency": row["native_currency"],
+                "amount_label": (
+                    "Consumption allocation"
+                    if purpose == "consumption"
+                    else (
+                        "Income allocation"
+                        if purpose == "income"
+                        else "Attributed bank movement"
+                    )
+                ),
+                "_signed": amount,
+                "_booked_at": row["booked_at"],
+            }
+        )
     if report.transaction_mode == "RECENT":
-        query = query.order_by(Transaction.booked_at.desc())
-    elif types == ("debit", "credit"):
-        # direction == ALL: debits are negative, credits are positive, so
-        # neither .asc() nor .desc() alone gives "biggest transactions
-        # first" — order by absolute magnitude instead.
-        query = query.order_by(func.abs(Transaction.amount).desc())
-    else:  # TOP_N — order by absolute amount descending
-        query = query.order_by(Transaction.amount.desc() if types == ("credit",) else Transaction.amount.asc())
-
-    rows = query.limit(report.transaction_count).all()
-
-    direction_word = _DIRECTION_LABELS.get(report.transaction_direction, "transactions")
+        items.sort(key=lambda row: (row["_booked_at"], row["id"]), reverse=True)
+    else:
+        items.sort(
+            key=lambda row: (
+                row["_signed"] is not None,
+                -abs(row["_signed"] or ZERO),
+                row["id"],
+            )
+        )
+    direction_word = {
+        "ALL": "transactions",
+        "EXPENSE": "consumption allocations",
+        "INCOME": "income allocations",
+        "INFLOW": "inflows",
+        "OUTFLOW": "outflows",
+    }.get(report.transaction_direction, "transactions")
     mode_label = (
         f"Last {report.transaction_count} transactions"
         if report.transaction_mode == "RECENT"
         else f"Top {report.transaction_count} {direction_word}"
     )
+    return {
+        "mode_label": mode_label,
+        "items": [
+            {key: value for key, value in row.items() if not key.startswith("_")}
+            for row in items[: report.transaction_count]
+        ],
+    }
 
-    items = [
-        {
-            "description": t.merchant or t.description or "Transaction",
-            "date": t.booked_at.date().isoformat(),
-            "amount": str(abs(t.amount)),
-            "currency": t.currency or "EUR",
-            "direction": "out" if t.transaction_type == "debit" else "in",
-        }
-        for t in rows
-    ]
 
-    return {"mode_label": mode_label, "items": items}
+def report_snapshot_fingerprint(payload):
+    # Generation time is informational. Every financial value, included record,
+    # permission boundary and display projection participates in the comparison.
+    relevant = {
+        key: value
+        for key, value in payload.items()
+        if key not in ("generated_at", "manage_url")
+    }
+    return hashlib.sha256(
+        json.dumps(
+            relevant, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    ).hexdigest()
+
+
+def assert_report_snapshot_current(db, report, payload):
+    fresh = build_report_payload(db, report)
+    if report_snapshot_fingerprint(fresh) != report_snapshot_fingerprint(payload):
+        raise RuntimeError(
+            "Report data or access changed during rendering. Refresh and retry the report."
+        )

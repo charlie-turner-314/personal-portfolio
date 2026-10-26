@@ -239,6 +239,7 @@ def test_detect_creates_mirror_and_marks_source_not_in_analytics() -> None:
         assert mirror.account_id == pocket.id
         assert Decimal(str(mirror.amount)) == Decimal("200.00")
         assert mirror.currency == "EUR"
+        assert mirror.description=="Transfer" and mirror.merchant is None
         assert mirror.include_in_analytics is False
         assert mirror.category_system_id == transfer_cat.id
         assert mirror.external_id == f"mirror-{src.id}"

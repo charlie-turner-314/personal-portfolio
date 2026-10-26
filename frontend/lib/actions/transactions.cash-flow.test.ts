@@ -39,6 +39,8 @@ describe("cash-flow purpose authorization and validation", () => {
     expect((await updateTransactionCashFlowPurpose("id", [{ kind: "capital", detail: "investment", amount: 2000 }])).success).toBe(false);
     mocks.find.mockResolvedValue({ amount: "-1000", internalTransferId: "mirror" });
     expect((await updateTransactionCashFlowPurpose("id", [{ kind: "capital", detail: "loan_principal", amount: 1000 }])).success).toBe(false);
+    mocks.find.mockResolvedValue({ amount: "-1000", externalId:"mirror-private-source", internalTransferId:null });
+    expect((await updateTransactionCashFlowPurpose("id", [{ kind: "capital", detail: "loan_principal", amount: 1000 }])).success).toBe(false);
     mocks.find.mockResolvedValue({ amount: "-1000", categoryId: "balance", internalTransferId: null });
     mocks.category.mockResolvedValue({ name: "Balancing Transfer" });
     expect((await updateTransactionCashFlowPurpose("id", [{ kind: "capital", detail: "loan_principal", amount: 1000 }])).success).toBe(false);

@@ -86,7 +86,7 @@ describe.skipIf(!url)("transaction scope over real migrated PostgreSQL",()=>{
     await db.update(schema.transactions).set({externalId:`mirror-${privateTx}`,description:"PRIVATE SOURCE NAME",merchant:"PRIVATE SOURCE NAME"}).where(eq(schema.transactions.id,second));
     try {
       const data=await page(params());
-      expect(data.rows.find(row=>row.id===second)).toMatchObject({description:"Transfer",merchant:null});
+      expect(data.rows.find(row=>row.id===second)).toMatchObject({description:"Transfer",merchant:null,isGeneratedMirror:true});
       expect((await page(params({search:"PRIVATE SOURCE NAME"}))).rows).toEqual([]);
       expect((await exportRows([second]))[0]).toMatchObject({description:"Transfer",merchant:null,attributedAmount:-50});
       await expect(exportRows([privateTx])).rejects.toThrow("no longer available");

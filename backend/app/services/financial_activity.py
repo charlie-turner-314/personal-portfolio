@@ -325,6 +325,8 @@ class FinancialActivity:
                 "account_id": str(txn.account_id),
                 "date": txn.booked_at.date().isoformat(),
                 "native_amount": decimal(txn.amount),
+                "native_currency": txn.currency,
+                "booked_at": txn.booked_at.isoformat(),
                 "amount": weighted,
                 "transfer_amount": weighted,
                 "transfer_full_amount": full,
