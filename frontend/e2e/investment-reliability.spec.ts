@@ -28,6 +28,7 @@ test("Australian investment import, fractional NAV, ownership, FY and mixed curr
   const userId = (await registered.json()).user.id as string;
   const u = quote(userId);
   const symbol = `UAT${randomUUID().slice(0, 8).toUpperCase()}.AX`;
+  const cryptoSymbol = `CRYPTO${randomUUID().slice(0, 8).toUpperCase()}`;
   const fundSymbol = `FUND${randomUUID().slice(0, 8).toUpperCase()}`;
   const self = randomUUID(), partner = randomUUID();
   // Only a new synthetic user's data is written. Cached synthetic prices avoid
@@ -104,7 +105,7 @@ test("Australian investment import, fractional NAV, ownership, FY and mixed curr
   await page.getByRole("option", { name: `FY${currentYear - 1}-${String(currentYear).slice(-2)}`, exact: true }).click();
   await expect(income.getByText("A$ 40.00", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Investment Partner", exact: true }).click();
+  await page.getByRole("button", { name: /Investment Partner/ }).click();
   await expect(card(page, "Portfolio value")).toContainText("440.00");
   await expect(page.getByRole("row", { name: `View details for ${fundSymbol}` })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("investment-ownership-desktop.png"), fullPage: true });
@@ -117,10 +118,25 @@ test("Australian investment import, fractional NAV, ownership, FY and mixed curr
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/investments/connect");
   await page.getByRole("button", { name: "Add manually", exact: true }).click();
+  await page.getByRole("combobox", { name: "Account", exact: true }).click();
+  await page.getByRole("option", { name: "+ Create new account…", exact: true }).click();
+  await page.getByLabel("New account name", { exact: true }).fill("AU manual crypto");
+  await page.getByPlaceholder("Search symbol or name…").fill(cryptoSymbol);
   await page.getByRole("button", { name: "Crypto", exact: true }).click();
   await page.getByLabel("Quantity", { exact: true }).fill("0.125");
   await fits(page);
   await page.screenshot({ path: testInfo.outputPath("investment-entry-mobile.png"), fullPage: true });
+  await page.getByRole("button", { name: "Add 1 holding", exact: true }).click();
+  await expect(page).toHaveURL(/\/investments$/);
+  const cryptoHolding = sql(`SELECT id FROM holdings WHERE user_id=${u} AND symbol=${quote(cryptoSymbol)} AND instrument_type='crypto'`);
+  expect(cryptoHolding).toMatch(/^[a-f0-9-]{36}$/);
+  await page.goto(`/investments/${cryptoHolding}`);
+  await page.getByRole("tab", { name: "About", exact: true }).click();
+  await page.getByLabel("Price per unit", { exact: true }).fill("8");
+  await page.getByLabel("Source", { exact: true }).fill("Synthetic statement");
+  await page.getByRole("button", { name: "Save unit price" }).click();
+  await expect.poll(() => sql(`SELECT value_user_currency FROM holding_valuations WHERE holding_id='${cryptoHolding}' ORDER BY date DESC LIMIT 1`)).toBe("1.00");
+  await fits(page);
   expect(errors).toEqual([]);
   writeFileSync(path.resolve(process.cwd(), "../.release-lab/investment-browser-fixture.json"), JSON.stringify({ user_id: userId, email, account_id: account, holding_id: holding, fund_holding_id: fundHolding }), { mode: 0o600 });
 });

@@ -413,3 +413,27 @@ def test_old_refresh_does_not_replace_newer_queued_status(client, db, fails):
             service.sync_account(account.id)
     db.refresh(account)
     assert account.investment_sync_state == {"status": "queued", "request_id": newer_id}
+
+
+def test_linked_household_scope_never_bypasses_account_grants(client, db):
+    from app.models import User, Person, HouseholdMembership, HouseholdAccountShare, AccountOwnershipAllocation
+    from app.services.investment_scope import InvestmentScope
+    account, _ = position(db)
+    private, _ = position(db, symbol="PRIVATE")
+    db.add(User(id="investment-member", email="investment-member@example.test", functional_currency="AUD"))
+    db.flush()
+    alias = Person(user_id="u1", linked_user_id="investment-member", kind="member", name="Partner")
+    login_self = Person(user_id="investment-member", kind="self", name="Partner login")
+    db.add_all([alias, login_self]); db.flush()
+    db.add(HouseholdMembership(owner_user_id="u1", member_user_id="investment-member", person_id=alias.id))
+    db.add(HouseholdAccountShare(account_id=account.id, member_user_id="investment-member", granted_by_user_id="u1"))
+    for row in [account, private]:
+        db.add(AccountOwnershipAllocation(account_id=row.id, person_id=alias.id, effective_from=date(2026, 1, 1), share=Decimal("0.4")))
+    db.commit()
+    for selection in ["self", str(alias.id), str(login_self.id)]:
+        scope = InvestmentScope(db, "investment-member", selection)
+        assert scope.share(account.id, date(2026, 10, 26)) == Decimal("0.4")
+        assert scope.share(private.id, date(2026, 10, 26)) == 0
+    db.query(HouseholdAccountShare).filter_by(account_id=account.id).delete(); db.commit()
+    scope = InvestmentScope(db, "investment-member", "self")
+    assert scope.share(account.id, date(2026, 10, 26)) == 0

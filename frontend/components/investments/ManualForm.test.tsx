@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ create: vi.fn(), add: vi.fn(), push: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
+const mocks = vi.hoisted(() => ({ create: vi.fn(), add: vi.fn(), push: vi.fn(), refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push, refresh: mocks.refresh }) }));
 vi.mock("@/lib/api/investments", () => ({ createManualAccount: mocks.create, addManualHolding: mocks.add }));
 vi.mock("./SymbolSearchInput", () => ({ SymbolSearchInput: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => <input aria-label="Symbol" value={value} onChange={(e) => onChange(e.target.value)} /> }));
 import { ManualForm } from "./ManualForm";
@@ -24,6 +24,7 @@ describe("Manual investment entry", () => {
     expect(mocks.add).toHaveBeenNthCalledWith(1, "new-account", expect.objectContaining({ symbol: "VAS.AX", currency: "AUD" }));
     fireEvent.click(screen.getByRole("button", { name: "Add 1 holding" }));
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/investments"));
+    expect(mocks.refresh).toHaveBeenCalledOnce();
     expect(mocks.create).toHaveBeenCalledOnce();
     expect(mocks.add).toHaveBeenCalledTimes(3);
     expect(mocks.add).toHaveBeenLastCalledWith("new-account", expect.objectContaining({ symbol: "BHP.AX" }));

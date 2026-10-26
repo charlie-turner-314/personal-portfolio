@@ -126,6 +126,7 @@ export function ManualForm({
 
       if (failures.length === 0) {
         router.push("/investments");
+        router.refresh();
         return;
       }
 
